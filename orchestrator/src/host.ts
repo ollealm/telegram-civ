@@ -63,6 +63,7 @@ export const host = {
   briefing: (civ: string, logSince?: number) =>
     call<Record<string, unknown>>("GET", "/briefing" + civQuery(civ) + (logSince === undefined ? "" : `&since=${logSince}`)),
   options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
+  nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
   map: async (civ: string, style: "atlas" | "reference" = "atlas") =>
     Buffer.from(await (await fetch(`${HOST}/map.png${civQuery(civ)}&style=${style}`)).arrayBuffer()),

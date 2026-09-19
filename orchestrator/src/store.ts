@@ -54,13 +54,15 @@ export type State = {
   /** A round interrupted by urgent news: what is left of it is played after the urgent audience */
   pendingRound?: { fromTurn: number; fromYear: string; remaining: number; publicEvents: { turn: number; year: string; text: string }[] };
   /** audience: rulers talk with their advisors; passing: a round is being played */
-  phase: "audience" | "passing";
+  phase: "setup" | "audience" | "passing";
+  /** Chosen with /newgame; the world is made once every ruler has picked a people */
+  mapSize?: string;
 };
 
 const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "audience" });
 
 export const state: State = existsSync(FILE) ? { ...empty(), ...JSON.parse(readFileSync(FILE, "utf8")) } : empty();
-state.phase = "audience"; // a round cut short by a restart is simply played again
+if (state.phase === "passing") state.phase = "audience"; // a round cut short by a restart is simply played again
 
 export function persist() {
   mkdirSync(dirname(FILE), { recursive: true });

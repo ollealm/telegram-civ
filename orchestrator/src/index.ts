@@ -8,15 +8,17 @@ import { host } from "./host.ts";
 import { playRound as runRound, roundLength } from "./round.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
-const RULED_CIVS = (process.env.RULED_CIVS ?? "Rome,Greece").split(",").map((civ) => civ.trim());
-const OTHER_CIVS = (process.env.OTHER_CIVS ?? "Egypt,China").split(",").map((civ) => civ.trim());
+/** Rival realms played by the game itself, chosen at random; 0 for an all-human world */
+const AI_CIVS = Number(process.env.AI_CIVS ?? 2);
+const MAP_SIZES = ["Tiny", "Small", "Medium", "Large", "Huge"];
+const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
+const CITY_STATES: Record<string, number> = { Tiny: 2, Small: 4, Medium: 6, Large: 8, Huge: 10 };
 
 const advisorTokens = Object.keys(process.env)
   .filter((key) => /^ADVISOR_\d+_BOT_TOKEN$/.test(key))
   .sort()
   .map((key) => process.env[key]!);
 if (!process.env.HERALD_BOT_TOKEN || advisorTokens.length === 0) throw new Error("Bot tokens missing - see .env");
-if (advisorTokens.length > RULED_CIVS.length) throw new Error("More advisor bots than RULED_CIVS");
 
 const herald = new Bot(process.env.HERALD_BOT_TOKEN);
 const advisors = advisorTokens.map((token) => new Bot(token));
@@ -35,18 +37,32 @@ async function whileTyping<T>(bot: Bot, chatId: number, work: Promise<T>): Promi
   }
 }
 
+const blankSeat = (): Seat => ({ civ: "", will: "", journal: [], chat: [], ready: false });
+
+/** One seat per advisor bot. With no world yet, the rulers first choose their peoples (the setup phase). */
 async function ensureGame() {
   const game = await host.state();
-  const civs = RULED_CIVS.slice(0, advisors.length);
-  if (!game.running) {
-    await host.newGame({ ruled: civs, others: [...RULED_CIVS.slice(advisors.length), ...OTHER_CIVS] });
-    log("Started a new game; ruled:", civs.join(", "));
-  }
-  civs.forEach((civ, index) => {
-    const seat = state.seats[index];
-    if (!seat || seat.civ !== civ) state.seats[index] = { civ, will: "", journal: [], chat: [], ready: false };
-  });
+  advisors.forEach((_, index) => (state.seats[index] ??= game.running && game.ruled[index] ? { ...blankSeat(), civ: game.ruled[index] } : blankSeat()));
+  if (!game.running || state.seats.some((seat) => !seat.civ)) state.phase = "setup";
   persist();
+}
+
+const shuffled = <T,>(items: T[]) => items.map((item) => [Math.random(), item] as const).sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+
+/** Every ruler has chosen a people: make the world */
+async function createWorld() {
+  const ruled = state.seats.map((seat) => seat.civ);
+  const free = shuffled((await host.nations()).map((nation) => nation.name).filter((name) => !ruled.includes(name)));
+  const others = free.slice(0, AI_CIVS);
+  const mapSize = state.mapSize ?? DEFAULT_MAP_SIZE;
+  await host.newGame({ ruled, others, mapSize, cityStates: CITY_STATES[mapSize] ?? 6 });
+  state.phase = "audience";
+  persist();
+  log(`New world: ${mapSize}; ruled ${ruled.join(", ")}; AI ${others.join(", ") || "none"}`);
+  const overview = `A new world has been made: a ${mapSize.toLowerCase()} one, home to ${ruled.length + others.length} great peoples and ${CITY_STATES[mapSize] ?? 6} lesser cities. ${ruled.join(" and ")} answer to rulers at this table${others.length ? `; ${others.length} more peoples keep their own counsel, somewhere beyond the horizon` : ""}. History begins in 4000 BC.`;
+  await broadcastHerald(overview);
+  for (const seat of state.seats)
+    if (seat.chatId) await advisors[state.seats.indexOf(seat)].api.sendMessage(seat.chatId, `The world is made, Majesty, and ${seat.civ} stands at its beginning. Tell me what you want this realm to become - and when we are done, /go.`).catch(() => {});
 }
 
 onImageLog((message) => log(message));
@@ -144,6 +160,29 @@ function setUpAdvisor(bot: Bot, index: number) {
   const seat = (): Seat => state.seats[index];
   let queue: Promise<unknown> = Promise.resolve();
 
+  /** First of all: which people? Four drawn at random, fate, or any people named in the ruler's own words */
+  const askForPeople = async (ctx: Context) => {
+    const taken = state.seats.map((other) => other.civ).filter(Boolean);
+    const drawn = shuffled((await host.nations()).filter((nation) => !taken.includes(nation.name))).slice(0, 4);
+    const keyboard = new InlineKeyboard();
+    drawn.forEach((nation) => keyboard.text(`${nation.name} (${nation.leader})`, `people:${nation.name}`).row());
+    keyboard.text("Let fate decide", "people:?");
+    await ctx.reply("Which people will you lead?\n\n(Pick one, or name any people you like - Persia, the Aztecs, Sweden...)", { reply_markup: keyboard });
+  };
+
+  const choosePeople = async (ctx: Context, wish: string) => {
+    const taken = state.seats.map((other) => other.civ).filter(Boolean);
+    const nations = (await host.nations()).filter((nation) => !taken.includes(nation.name));
+    const clean = wish.trim().toLowerCase().replace(/^the\s+/, "");
+    const chosen = wish === "?" ? shuffled(nations)[0]
+      : nations.find((nation) => nation.name.toLowerCase() === clean) ?? nations.find((nation) => nation.name.toLowerCase().startsWith(clean.slice(0, 4)) || nation.leader.toLowerCase().includes(clean));
+    if (!chosen) return ctx.reply(`I know of no free people by that name. Try one of: ${shuffled(nations).slice(0, 8).map((nation) => nation.name).join(", ")}...`);
+    seat().civ = chosen.name;
+    persist();
+    await ctx.reply(`${chosen.name} it is - the people of ${chosen.leader}.`);
+    await askSetupQuestion(ctx);
+  };
+
   const askSetupQuestion = async (ctx: Context) => {
     const step = SETUP[seat().setup!.length];
     const keyboard = new InlineKeyboard();
@@ -164,6 +203,11 @@ function setUpAdvisor(bot: Bot, index: number) {
       remember(seat(), { from: "advisor", text: greeting });
       await ctx.reply(`${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely; time only passes when you say so or send /go.  /status  /map  /usage`);
       await flushDevFeed(herald, `Character for ${seat().civ}: ${seat().character!.name}`, [`autonomy: ${seat().character!.autonomy}`]);
+      if (state.phase === "setup") {
+        const missing = state.seats.filter((other) => !other.civ || !other.character).length;
+        if (missing === 0) await createWorld();
+        else await ctx.reply(`The world will be made once every ruler has assembled a court - ${missing} still to come.`);
+      }
       const era = String((await host.briefing(seat().civ).catch(() => ({ era: "Ancient era" }))).era);
       void advisorPortrait(seat().civ, seat().character!.sheet, era).then((png) => png && ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name })).catch(() => {});
     } catch (error) {
@@ -193,6 +237,10 @@ function setUpAdvisor(bot: Bot, index: number) {
   const beginSetup = async (ctx: Context) => {
     seat().setup = [];
     persist();
+    if (!seat().civ) {
+      await ctx.reply("A new history is about to begin. Before your court assembles, a few questions.");
+      return askForPeople(ctx);
+    }
     await ctx.reply(`${seat().civ} is yours to rule. Before your court assembles, three questions.`);
     await askSetupQuestion(ctx);
   };
@@ -205,6 +253,11 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.command("character", (ctx) => (state.phase === "passing" ? ctx.reply("Wait until time stops passing.") : beginSetup(ctx)));
 
+  bot.callbackQuery(/^people:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    if (seat().setup && !seat().civ) await choosePeople(ctx, ctx.match[1]);
+  });
+
   bot.callbackQuery(/^setup:(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {}); // a press from before a restart is too old to acknowledge, but still counts
     if (!seat().setup) return;
@@ -214,6 +267,7 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   const dismiss = async (reply: (text: string) => Promise<unknown>, silently = false) => {
     if (seat().fallen) return reply(`${seat().civ} is no more, Majesty.`);
+    if (state.phase === "setup") return reply("The world is not made yet - it begins once every ruler has assembled a court (/start).");
     if (state.phase === "passing") return reply("Time is already passing, Majesty.");
     // Dismissed without answering the advisor's last question: silence is assent to what it recommended
     const last = seat().chat.at(-1);
@@ -292,21 +346,25 @@ function setUpAdvisor(bot: Bot, index: number) {
   bot.command("newgame", async (ctx) => {
     if (index !== 0) return ctx.reply("Only the ruler of the first seat may start a new game.");
     if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
-    if (!/confirm/i.test(ctx.match)) return ctx.reply("This ends the current game for everyone. Send /newgame confirm to do it.");
-    await host.newGame({ ruled: RULED_CIVS.slice(0, advisors.length), others: [...RULED_CIVS.slice(advisors.length), ...OTHER_CIVS] });
-    for (const other of state.seats) Object.assign(other, { will: "", plan: "", journal: [], chat: [], ready: false, character: undefined, setup: undefined, choices: undefined, fallen: false, proclamations: undefined, dismissed: false });
+    const size = MAP_SIZES.find((name) => new RegExp(name, "i").test(ctx.match)) ?? DEFAULT_MAP_SIZE;
+    if (!/confirm/i.test(ctx.match)) return ctx.reply(`This ends the current game for everyone. Send "/newgame confirm" for a ${DEFAULT_MAP_SIZE.toLowerCase()} world, or add a size: /newgame confirm large (${MAP_SIZES.join(", ").toLowerCase()}). Each ruler then chooses a people; ${AI_CIVS} rival peoples are drawn at random.`);
+    state.seats.forEach((other, seatIndex) => (state.seats[seatIndex] = { ...blankSeat(), chatId: other.chatId, rulerName: other.rulerName }));
     state.proclaimed = [];
     state.pendingRound = undefined;
+    state.mapSize = size;
+    state.phase = "setup";
     persist();
     for (const other of state.seats)
-      if (other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, `A new age begins, and ${other.civ} is yours. Send /start to assemble your court.`).catch(() => {});
-    await broadcastHerald("A new world has been created. The Herald will report from turn one.");
+      if (other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, `A new history is about to begin on a ${size.toLowerCase()} world. Send /start to choose your people and assemble your court.`).catch(() => {});
+
   });
 
   bot.on("message:text", async (ctx) => {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
+    if (seat().setup && !seat().civ) return choosePeople(ctx, ctx.message.text);
     if (seat().setup) return answerSetup(ctx, ctx.message.text);
+    if (state.phase === "setup") return seat().character ? ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.") : beginSetup(ctx);
     if (!seat().character && seat().chat.length === 0) return beginSetup(ctx);
     audience(ctx, ctx.message.text);
   });

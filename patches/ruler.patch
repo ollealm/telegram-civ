@@ -616,10 +616,10 @@ index 0000000..08b195f
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..ce38d80
+index 0000000..26eb4ef
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,748 @@
+@@ -0,0 +1,750 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -759,6 +759,8 @@ index 0000000..ce38d80
 +        val since = query["since"]?.toIntOrNull() ?: -1
 +        return when ("$method $path") {
 +            "GET /state" -> state()
++            "GET /nations" -> RulesetCache[com.unciv.models.metadata.BaseRuleset.Civ_V_GnK.fullName]!!.nations.values
++                .filter { it.isMajorCiv }.map { mapOf("name" to it.name, "leader" to it.leaderName) }
 +            "POST /new" -> newGame(json)
 +            "POST /advance" -> advance(json.getInt("turns", 10))
 +            "GET /briefing" -> briefing(civ(), query["since"]?.toIntOrNull())
