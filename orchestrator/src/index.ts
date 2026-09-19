@@ -42,7 +42,8 @@ const blankSeat = (): Seat => ({ civ: "", will: "", journal: [], chat: [], ready
 /** One seat per advisor bot. With no world yet, the rulers first choose their peoples (the setup phase). */
 async function ensureGame() {
   const game = await host.state();
-  advisors.forEach((_, index) => (state.seats[index] ??= game.running && game.ruled[index] ? { ...blankSeat(), civ: game.ruled[index] } : blankSeat()));
+  // Seats are dealt by /newgame (one per human ruler); only a first-ever run deals one to every advisor bot
+  if (state.seats.length === 0) advisors.forEach((_, index) => (state.seats[index] = game.running && game.ruled[index] ? { ...blankSeat(), civ: game.ruled[index] } : blankSeat()));
   if (!game.running || state.seats.some((seat) => !seat.civ)) state.phase = "setup";
   persist();
 }
@@ -53,7 +54,7 @@ const shuffled = <T,>(items: T[]) => items.map((item) => [Math.random(), item] a
 async function createWorld() {
   const ruled = state.seats.map((seat) => seat.civ);
   const free = shuffled((await host.nations()).map((nation) => nation.name).filter((name) => !ruled.includes(name)));
-  const others = free.slice(0, AI_CIVS);
+  const others = free.slice(0, state.aiCivs ?? AI_CIVS);
   const mapSize = state.mapSize ?? DEFAULT_MAP_SIZE;
   await host.newGame({ ruled, others, mapSize, cityStates: CITY_STATES[mapSize] ?? 6 });
   state.phase = "audience";
@@ -230,6 +231,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   };
 
   bot.use(async (ctx, next) => {
+    if (!seat()) return void (await ctx.reply("This advisor has no seat in the current game."));
     if (isRuler(ctx)) await next();
     else await ctx.reply(`${seat().civ} already has a ruler.`);
   });
@@ -342,22 +344,54 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.command("map", (ctx) => sendMap(bot, seat()).catch(() => ctx.reply("No map to show yet.")));
 
-  // The first seat's ruler may start over: /newgame, then /newgame confirm
-  bot.command("newgame", async (ctx) => {
-    if (index !== 0) return ctx.reply("Only the ruler of the first seat may start a new game.");
-    if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
-    const size = MAP_SIZES.find((name) => new RegExp(name, "i").test(ctx.match)) ?? DEFAULT_MAP_SIZE;
-    if (!/confirm/i.test(ctx.match)) return ctx.reply(`This ends the current game for everyone. Send "/newgame confirm" for a ${DEFAULT_MAP_SIZE.toLowerCase()} world, or add a size: /newgame confirm large (${MAP_SIZES.join(", ").toLowerCase()}). Each ruler then chooses a people; ${AI_CIVS} rival peoples are drawn at random.`);
-    state.seats.forEach((other, seatIndex) => (state.seats[seatIndex] = { ...blankSeat(), chatId: other.chatId, rulerName: other.rulerName }));
-    state.proclaimed = [];
-    state.pendingRound = undefined;
-    state.mapSize = size;
-    state.phase = "setup";
-    persist();
-    for (const other of state.seats)
-      if (other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, `A new history is about to begin on a ${size.toLowerCase()} world. Send /start to choose your people and assemble your court.`).catch(() => {});
+  // The first seat's ruler may start over: /newgame asks how many rulers, how many rival peoples, how large a world
+  if (index === 0) {
+    const draft: { humans?: number; ai?: number; size?: string } = {};
+    const row = (keyboard: InlineKeyboard, prefix: string, values: (string | number)[]) => values.forEach((value) => keyboard.text(String(value), `ng:${prefix}:${value}`));
 
-  });
+    bot.command("newgame", async (ctx) => {
+      if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
+      const keyboard = new InlineKeyboard();
+      row(keyboard, "humans", advisors.map((_, seatIndex) => seatIndex + 1));
+      await ctx.reply(`A new world, then. This ends the current game for everyone - nothing changes until you confirm at the end.\n\nHow many rulers will sit at the table? (There are ${advisors.length} advisor bots.)`, { reply_markup: keyboard });
+    });
+
+    bot.callbackQuery(/^ng:(humans|ai|size|confirm|cancel):?(.*)$/, async (ctx) => {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const [, step, value] = ctx.match;
+      if (step === "cancel") return void ctx.editMessageText("The old world carries on.");
+      if (step === "humans") {
+        draft.humans = Number(value);
+        const keyboard = new InlineKeyboard();
+        row(keyboard, "ai", [0, 1, 2, 3, 4, 5, 6]);
+        return void ctx.editMessageText(`${draft.humans} ruler${draft.humans === 1 ? "" : "s"}. How many rival peoples should the game itself play? (0 for a world of rulers only)`, { reply_markup: keyboard });
+      }
+      if (step === "ai") {
+        draft.ai = Number(value);
+        const keyboard = new InlineKeyboard();
+        row(keyboard, "size", MAP_SIZES);
+        const crowd = draft.humans! + draft.ai;
+        return void ctx.editMessageText(`${draft.ai} rival people${draft.ai === 1 ? "" : "s"}. How large a world for ${crowd}? (Small suits up to 4, Medium 6, Large 8.)`, { reply_markup: keyboard });
+      }
+      if (step === "size") {
+        draft.size = value;
+        const keyboard = new InlineKeyboard().text("Make it so", "ng:confirm").text("Keep the old world", "ng:cancel");
+        return void ctx.editMessageText(`A ${value.toLowerCase()} world with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.ai} rival people${draft.ai === 1 ? "" : "s"} and ${CITY_STATES[value] ?? 6} lesser cities. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
+      }
+      if (state.phase === "passing" || !draft.humans || !draft.size) return void ctx.editMessageText("Send /newgame to begin again.");
+      const before = state.seats;
+      state.seats = Array.from({ length: draft.humans }, (_, seatIndex) => ({ ...blankSeat(), chatId: before[seatIndex]?.chatId, rulerName: before[seatIndex]?.rulerName }));
+      state.proclaimed = [];
+      state.pendingRound = undefined;
+      state.mapSize = draft.size;
+      state.aiCivs = draft.ai ?? AI_CIVS;
+      state.phase = "setup";
+      persist();
+      await ctx.editMessageText(`So be it: a ${draft.size.toLowerCase()} world, ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${state.aiCivs} rival peoples.`);
+      for (const [seatIndex, other] of state.seats.entries())
+        if (other.chatId) await advisors[seatIndex].api.sendMessage(other.chatId, "A new history is about to begin. Send /start to choose your people and assemble your court.").catch(() => {});
+    });
+  } else bot.command("newgame", (ctx) => ctx.reply("Only the ruler of the first seat may start a new game."));
 
   bot.on("message:text", async (ctx) => {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);

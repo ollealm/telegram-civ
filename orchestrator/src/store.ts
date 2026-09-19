@@ -57,6 +57,7 @@ export type State = {
   phase: "setup" | "audience" | "passing";
   /** Chosen with /newgame; the world is made once every ruler has picked a people */
   mapSize?: string;
+  aiCivs?: number;
 };
 
 const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "audience" });
