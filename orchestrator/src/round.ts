@@ -22,7 +22,10 @@ export type RoundIO = {
   log: (...args: unknown[]) => void;
 };
 
-export async function playRound(seats: Seat[], io: RoundIO): Promise<RoundResult> {
+export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundResult> {
+  // A fallen realm has no advisor left to govern or report
+  const alive = new Set((await host.state()).majorCivs.filter((civ) => civ.alive).map((civ) => civ.civ));
+  const seats = allSeats.filter((seat) => alive.has(seat.civ));
   state.phase = "passing";
   persist();
   const notes = new Map(seats.map((seat) => [seat.civ, [] as string[]]));
@@ -30,7 +33,9 @@ export async function playRound(seats: Seat[], io: RoundIO): Promise<RoundResult
   const proclaimed = seats.flatMap((seat) => seat.proclamations ?? []);
   for (const seat of seats) seat.proclamations = undefined;
   try {
-    const fromTurn = (await host.state()).turn;
+    const opening = await host.state();
+    const fromTurn = opening.turn;
+    (state.proclaimed ??= []).push(...proclaimed.map((text) => ({ turn: fromTurn, year: opening.year, text })));
     const length = roundLength(fromTurn);
     io.log(`Round starting at turn ${fromTurn}, ${length} turns`);
     let round: RoundResult | undefined;

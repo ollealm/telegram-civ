@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, createCharacter } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, createCharacter } from "./agents.ts";
 import { flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, generateImage, onImageLog, paintedMap } from "./images.ts";
 import { host } from "./host.ts";
@@ -61,6 +61,20 @@ async function broadcastHerald(text: string) {
   for (const chatId of state.heraldChats) await herald.api.sendMessage(chatId, text).catch((error) => log("herald send failed", error.message));
 }
 
+/** Seats whose realm still stands - only these hold audiences and are waited for */
+async function standing() {
+  const alive = new Set((await host.state()).majorCivs.filter((civ) => civ.alive).map((civ) => civ.civ));
+  return state.seats.filter((seat) => seat.chatId && alive.has(seat.civ));
+}
+
+async function sendEpic(occasion: string) {
+  const [events, game] = await Promise.all([host.events(), host.state()]);
+  const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
+  const spoken = (state.proclaimed ?? []).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
+  const history = [...events, ...spoken].sort((a, b) => a.turn - b.turn);
+  await broadcastHerald(await chroniclerEpic(history, standings, occasion));
+}
+
 async function playRound() {
   const seated = state.seats.filter((seat) => seat.chatId);
   const botOf = (seat: Seat) => advisors[state.seats.indexOf(seat)];
@@ -88,6 +102,16 @@ async function playRound() {
       log,
     });
     const game = await host.state();
+    // A realm that fell this round: its ruler is told once, and the world gets the epic so far
+    for (const seat of seated) {
+      const fell = !game.majorCivs.find((civ) => civ.civ === seat.civ)?.alive;
+      if (fell && !seat.fallen) {
+        seat.fallen = true;
+        await botOf(seat).api.sendMessage(seat.chatId!, `${seat.civ} is no more, Majesty. Its cities belong to others now, and I have no realm left to counsel. History will remember what you said and did - the Chronicler's pages are in the other chat. It was an honour.`).catch(() => {});
+        void sendEpic(`${seat.civ} has just fallen, and an age ends with it.`).catch((error) => log("epic failed:", error.message));
+      }
+    }
+    persist();
     await flushDevFeed(herald, `Round to ${game.year} (turn ${game.turn})`);
     if (game.winner) await broadcastHerald(`The game is over: ${game.winner} has won a ${game.victoryType} victory.`);
   } catch (error) {
@@ -186,6 +210,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   });
 
   const dismiss = async (reply: (text: string) => Promise<unknown>, silently = false) => {
+    if (seat().fallen) return reply(`${seat().civ} is no more, Majesty.`);
     if (state.phase === "passing") return reply("Time is already passing, Majesty.");
     // Dismissed without answering the advisor's last question: silence is assent to what it recommended
     const last = seat().chat.at(-1);
@@ -203,7 +228,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().ready = true;
     seat().dismissed = false;
     persist();
-    const waiting = state.seats.filter((other) => other.chatId && !other.ready).map((other) => other.civ);
+    const waiting = (await standing()).filter((other) => !other.ready).map((other) => other.civ);
     if (waiting.length) return reply(`The court is dismissed. Waiting for the ruler of ${waiting.join(", ")}.`);
     await reply("The court is dismissed. Time passes…");
     for (const other of state.seats)
@@ -274,6 +299,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   });
 
   bot.on("message:text", async (ctx) => {
+    if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
     if (seat().setup) return answerSetup(ctx, ctx.message.text);
     if (!seat().character && seat().chat.length === 0) return beginSetup(ctx);
@@ -291,6 +317,11 @@ function setUpHerald() {
     log("Herald now publishes to chat", ctx.chat.id);
     await ctx.reply("The Herald will deliver every edition of the world's news here.");
   };
+  herald.command("epic", async (ctx) => {
+    await subscribe(ctx);
+    await ctx.replyWithChatAction("typing").catch(() => {});
+    await sendEpic("A reader has asked for the story so far.").catch((error) => log("epic failed:", error.message));
+  });
   herald.on("my_chat_member", subscribe);
   herald.on("message", subscribe);
   herald.catch((error) => log("herald error:", error.message));

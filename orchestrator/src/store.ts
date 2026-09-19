@@ -30,6 +30,8 @@ export type Seat = {
   setup?: string[];
   /** The ways forward offered in the last dispatch; buttons refer to these by index */
   choices?: string[];
+  /** The realm has been destroyed; its ruler has been told */
+  fallen?: boolean;
   /** The ruler's own words made public this round, for the Chronicler */
   proclamations?: string[];
   /** Rolling campaign memory, one short entry per round */
@@ -47,6 +49,8 @@ export type State = {
   seats: Seat[];
   heraldChats: number[];
   usage: Record<string, Usage>;
+  /** Every ruler's proclamation so far, for the Chronicler's epic */
+  proclaimed?: { turn: number; year: string; text: string }[];
   /** audience: rulers talk with their advisors; passing: a round is being played */
   phase: "audience" | "passing";
 };

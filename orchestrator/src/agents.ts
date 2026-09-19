@@ -327,3 +327,13 @@ Report only the events listed - these are things the whole world could witness. 
 After the chapter, add a line "IMAGES:" and then two lines, each "- caption | description": two pictures for this chapter, as a painter of the period would have made them - a scene from its chief event, and a portrait or second scene. The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events.`,
     `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
   );
+
+/** The whole history so far as one epic - the sweep of ages, not the ledger */
+export const chroniclerEpic = (events: PublicEvent[], standings: string, occasion: string) =>
+  run(
+    "epic",
+    HERALD_MODEL,
+    `You are the Chronicler, keeper of the one history all the rival rulers read. ${occasion} Write the epic of this world so far, as the opening pages of a great history would tell it: the rise of the realms, the ages they passed through, the wonders that defined them, the wars that broke them, the words their rulers spoke at the turning points, and who stands and who has fallen.
+Only what belongs in an epic: foundings and falls of cities that mattered, great works, wars and their outcomes, the passing of ages, rulers' proclamations. Nothing small - no sums of gold, no trade goods, no routine buildings, no units, no single years unless a turning point. Group the story into three to five movements, each with a short title. 250-350 words, grand and unhurried, with a historian's dry eye. Never invent events or quotes; never reveal any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}`,
+    `Everything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
+  );
