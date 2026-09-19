@@ -217,9 +217,10 @@ export const advisorReply = async (seat: Seat, message: string, turnsPerRound: n
     ADVISOR_MODEL,
     `${persona(seat)}
 
-This is an audience - a conversation, not a report. Your dispatch already laid out the situation, so now keep every reply short: two to four sentences, one thought at a time, the way people talk across a table. Answer what was asked; give your opinion; push back on an unwise wish, then obey. Ask a question back when the ruler's wish leaves a real choice open (one question, not a list). The ways forward you offered are not exclusive - the ruler may combine them or want something else entirely; say plainly if two of them pull against each other.
-When the ruler decides something, act on it now with set_orders, keep your plan current, and if their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Say in one sentence what you set in motion. Declare war only on an explicit command.
-When nothing is left open - their wishes are clear and the orders are given - say so in a few words and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. Do not offer /go while a question of yours is still unanswered.
+This is an audience - a conversation between two people, not a report. Your dispatch already told the story and asked the broad question, so now talk the way a trusted advisor or a good friend would across a table: short replies, one thing at a time. Hold yourself to about 50 words a reply (the closing may run to 80): do not list what you ordered, do not explain mechanics, do not answer questions nobody asked. If you have two things to say, say the more important one and let the other wait for the next turn.
+The shape of a good audience: the ruler answers your broad question; you then bring up the specific decisions that follow from it, ONE at a time - each with a sentence or two on why it matters and what it costs either way, and your own lean - and wait for their word on each. Two or three such decisions is plenty; decide the small things yourself. Follow their lead if they want to talk about something else.
+Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey. Declare war only on an explicit command.
+When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. That closing is the only place you sum up. Do not offer /go while a question of yours is still unanswered.
 Time passes only when the ruler dismisses the court - with /go, or by telling you to proceed, in which case you call dismiss_court after setting the orders. A "yes" to a question of yours is an order, not a dismissal. Then about ${turnsPerRound} turns pass (a few decades early on, years later), during which you govern by the recorded will and check on the realm every few turns. Speak of time in years and seasons, as people of the age would; turn numbers are for the chancery.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
     `${memory(seat)}\n\nBriefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
@@ -240,10 +241,9 @@ Reply with only a 1-3 sentence log entry of what you found and ordered (it goes 
     seat,
   );
 
-export type Choice = { title: string; detail: string };
-export type Dispatch = { text: string; strategy: string; choices: Choice[]; journal: string };
+export type Dispatch = { text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
 
-/** The dispatch after a round: the letter, where things are heading, ways forward, and the advisor's own journal line */
+/** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
 export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown): Promise<Dispatch> => {
   const raw = await run(
     "report",
@@ -258,19 +258,25 @@ Around 120-160 words, in your voice: what happened in these years, how the realm
 STRATEGY:
 Two to four sentences on the longer game: where this realm is heading over the next century if it stays its course, what it is becoming good at, and the one thing most likely to undo it.
 
-CHOICES:
-Two to four ways forward, one per line, in this form:
-- Short title (2-5 words) | Two or three sentences: what it means in practice, what it wins us, what it costs or risks, and how it serves the longer game.
-They need not exclude each other; if two combine well or pull against each other, say so in their text. No unit numbers, coordinates, turn counts or game jargon.
+QUESTION:
+Open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself.
+
+IMAGE:
+caption | description - one picture of a moment from OUR realm in these years (a festival, a founding, a siege, a scholar at work), as a painter of the age would have made it. The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text".
 
 JOURNAL:
 One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
     `${memory(seat)}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Briefing now:\n${JSON.stringify(briefing)}`,
   );
-  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|CHOICES|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
-  const choices = section("CHOICES").split("\n").map((line) => line.replace(/^[-*\d.\s]+/, "").trim()).filter(Boolean).slice(0, 4)
-    .map((line) => ({ title: line.split("|")[0].trim(), detail: line.split("|").slice(1).join("|").trim() }));
-  return { text: section("DISPATCH") || raw, strategy: section("STRATEGY"), choices, journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, "") };
+  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
+  const [caption, ...description] = section("IMAGE").split("|");
+  return {
+    text: section("DISPATCH") || raw,
+    strategy: section("STRATEGY"),
+    question: section("QUESTION"),
+    image: description.length ? { caption: caption.trim(), description: description.join("|").trim() } : undefined,
+    journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, ""),
+  };
 };
 
 /** From the ruler's setup answers to a character: a little different every game */

@@ -69,12 +69,13 @@ async function playRound() {
       working: (seat, work) => whileTyping(botOf(seat), seat.chatId!, work),
       dispatch: async (seat, dispatch) => {
         const bot = botOf(seat);
-        const ways = dispatch.choices.map((choice, index) => `${index + 1}. ${choice.title}\n${choice.detail}`).join("\n\n");
-        const keyboard = new InlineKeyboard();
-        dispatch.choices.forEach((choice, index) => keyboard.text(`${index + 1}. ${choice.title}`.slice(0, 40), `choice:${index}`).row());
-        const letter = [dispatch.text, dispatch.strategy && `Where this is heading: ${dispatch.strategy}`, ways && `Ways forward (they can be combined):\n\n${ways}`, ways && "Pick one, or tell me what you think."].filter(Boolean).join("\n\n");
-        await bot.api.sendMessage(seat.chatId!, letter, ways ? { reply_markup: keyboard } : {});
-        // The painted map takes a minute or two; it follows the letter instead of holding it up
+        const letter = [dispatch.text, dispatch.strategy && `Where this is heading: ${dispatch.strategy}`, dispatch.question].filter(Boolean).join("\n\n");
+        await bot.api.sendMessage(seat.chatId!, letter);
+        // Pictures follow the letter instead of holding it up: a scene from the realm, then the painted map
+        if (dispatch.image)
+          void generateImage(`${dispatch.image.description}\n\nRealistic oil painting of the period, no text or lettering.`)
+            .then((png) => png && bot.api.sendPhoto(seat.chatId!, new InputFile(png, "scene.png"), { caption: dispatch.image!.caption }))
+            .catch((error) => log("scene failed:", error.message));
         void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
       },
       chronicle: async (chapter, images, round) => {

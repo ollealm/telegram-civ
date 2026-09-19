@@ -58,8 +58,8 @@ export async function playRound(seats: Seat[], io: RoundIO): Promise<RoundResult
         const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
         const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
-        seat.choices = dispatch.choices.map((choice) => `${choice.title}: ${choice.detail}`);
-        remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, ...seat.choices.map((choice, index) => `(${index + 1}) ${choice}`)].join("\n") });
+        seat.choices = undefined;
+        remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n") });
         await io.dispatch(seat, dispatch);
       }),
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
