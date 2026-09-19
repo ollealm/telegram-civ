@@ -29,13 +29,14 @@ export type State = {
   seats: Seat[];
   heraldChats: number[];
   usage: Record<string, Usage>;
-  roundInProgress: boolean;
+  /** audience: rulers talk with their advisors; passing: a round is being played */
+  phase: "audience" | "passing";
 };
 
-const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, roundInProgress: false });
+const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "audience" });
 
 export const state: State = existsSync(FILE) ? { ...empty(), ...JSON.parse(readFileSync(FILE, "utf8")) } : empty();
-state.roundInProgress = false;
+state.phase = "audience"; // a round cut short by a restart is simply played again
 
 export function persist() {
   mkdirSync(dirname(FILE), { recursive: true });

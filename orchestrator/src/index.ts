@@ -1,16 +1,11 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InputFile, type Context } from "grammy";
-import { advisorReply, advisorReport, governPass, heraldNewspaper, journalEntry } from "./agents.ts";
-import { host, type RoundResult } from "./host.ts";
+import { advisorReply } from "./agents.ts";
+import { host } from "./host.ts";
+import { playRound as runRound, roundLength } from "./round.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
-const TURNS_PER_ROUND = Number(process.env.TURNS_PER_ROUND ?? 12);
-const EARLY_ROUND_TURNS = Number(process.env.EARLY_ROUND_TURNS ?? 24);
-const EARLY_GAME_UNTIL_TURN = Number(process.env.EARLY_GAME_UNTIL_TURN ?? 48);
-const GOVERN_EVERY = Number(process.env.GOVERN_EVERY_TURNS ?? 4);
-/** Turns in the round that starts at this turn - longer while the early game is slow */
-const roundLength = (turn: number) => (turn < EARLY_GAME_UNTIL_TURN ? EARLY_ROUND_TURNS : TURNS_PER_ROUND);
 const RULED_CIVS = (process.env.RULED_CIVS ?? "Rome,Greece").split(",").map((civ) => civ.trim());
 const OTHER_CIVS = (process.env.OTHER_CIVS ?? "Egypt,China").split(",").map((civ) => civ.trim());
 
@@ -62,58 +57,24 @@ async function broadcastHerald(text: string) {
 }
 
 async function playRound() {
-  state.roundInProgress = true;
-  const seated = state.seats.map((seat, index) => ({ seat, bot: advisors[index] })).filter(({ seat }) => seat.chatId);
-  const governLogs = new Map(seated.map(({ seat }) => [seat.civ, [] as string[]]));
+  const seated = state.seats.filter((seat) => seat.chatId);
+  const botOf = (seat: Seat) => advisors[state.seats.indexOf(seat)];
   try {
-    const fromTurn = (await host.state()).turn;
-    const length = roundLength(fromTurn);
-    log(`Round starting at turn ${fromTurn}, ${length} turns`);
-    let round: RoundResult | undefined;
-    // The advisors govern every few turns, then time passes; a council event ends the round early
-    for (let played = 0; played < length; ) {
-      const step = Math.min(GOVERN_EVERY, length - played);
-      const sinceTurn = fromTurn + played;
-      await Promise.all(
-        seated.map(({ seat, bot }) =>
-          whileTyping(bot, seat.chatId!, governPass(seat, sinceTurn, step))
-            .then((entry) => governLogs.get(seat.civ)!.push(`T${sinceTurn}: ${entry}`))
-            .catch((error) => log(`govern pass for ${seat.civ} failed:`, error.message)),
-        ),
-      );
-      const chunk = await host.advance(step);
-      played = chunk.turn - fromTurn;
-      round = { ...chunk, fromTurn, fromYear: round?.fromYear ?? chunk.fromYear, publicEvents: [...(round?.publicEvents ?? []), ...chunk.publicEvents] };
-      log(`Advanced to turn ${chunk.turn}`, chunk.stoppedEarly ?? "");
-      if (chunk.stoppedEarly || chunk.turn === sinceTurn) break;
-    }
-    if (!round) throw new Error("No turns were played");
-    const finished = round;
-
-    await Promise.all([
-      ...seated.map(async ({ seat, bot }) => {
-        const notes = governLogs.get(seat.civ)!;
-        const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
-        const report = await whileTyping(bot, seat.chatId!, advisorReport(seat, finished, notes, briefing));
-        seat.journal.push(journalEntry(finished, notes));
-        remember(seat, { from: "advisor", text: report });
-        await sendMap(bot, seat).catch((error) => log("map failed:", error.message));
-        await bot.api.sendMessage(seat.chatId!, report);
-      }),
-      // Earlier chapters come from the host, so a restart does not make the Chronicler forget
-      host.events().then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn))).then(broadcastHerald),
-    ]);
-
+    await runRound(seated, {
+      working: (seat, work) => whileTyping(botOf(seat), seat.chatId!, work),
+      dispatch: async (seat, report) => {
+        await sendMap(botOf(seat), seat).catch((error) => log("map failed:", error.message));
+        await botOf(seat).api.sendMessage(seat.chatId!, report);
+      },
+      chronicle: broadcastHerald,
+      log,
+    });
     const game = await host.state();
     if (game.winner) await broadcastHerald(`The game is over: ${game.winner} has won a ${game.victoryType} victory.`);
   } catch (error) {
     log("Round failed:", error);
-    for (const { seat, bot } of seated)
-      await bot.api.sendMessage(seat.chatId!, "Something went wrong while time was passing. Send /go to try again.").catch(() => {});
-  } finally {
-    for (const seat of state.seats) seat.ready = false;
-    state.roundInProgress = false;
-    persist();
+    for (const seat of seated)
+      await botOf(seat).api.sendMessage(seat.chatId!, "Something went wrong while time was passing. Send /go to try again.").catch(() => {});
   }
 }
 
@@ -154,7 +115,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   );
 
   const dismiss = async (reply: (text: string) => Promise<unknown>, silently = false) => {
-    if (state.roundInProgress) return reply("Time is already passing, Majesty.");
+    if (state.phase === "passing") return reply("Time is already passing, Majesty.");
     // Dismissed without answering the advisor's last question: silence is assent to what it recommended
     const last = seat().chat.at(-1);
     if (silently && last?.from === "advisor" && /\?/.test(last.text)) {
@@ -183,7 +144,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   bot.command("status", async (ctx) => {
     const game = await host.state();
     const ready = state.seats.filter((other) => other.chatId).map((other) => `${other.civ}: ${other.ready ? "ready" : "in audience"}`);
-    await ctx.reply(`${game.year} (turn ${game.turn}). ${state.roundInProgress ? "Time is passing." : ready.join(", ")}\n\nYour recorded will:\n${seat().will || "(none yet)"}`);
+    await ctx.reply(`${game.year} (turn ${game.turn}). ${state.phase === "passing" ? "Time is passing." : ready.join(", ")}\n\nYour recorded will:\n${seat().will || "(none yet)"}`);
   });
 
   bot.command("usage", (ctx) => ctx.reply(usageSummary()));
@@ -193,7 +154,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   // The first seat's ruler may start over: /newgame, then /newgame confirm
   bot.command("newgame", async (ctx) => {
     if (index !== 0) return ctx.reply("Only the ruler of the first seat may start a new game.");
-    if (state.roundInProgress) return ctx.reply("Wait until time stops passing.");
+    if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
     if (!/confirm/i.test(ctx.match)) return ctx.reply("This ends the current game for everyone. Send /newgame confirm to do it.");
     await host.newGame({ ruled: RULED_CIVS.slice(0, advisors.length), others: [...RULED_CIVS.slice(advisors.length), ...OTHER_CIVS] });
     for (const other of state.seats) Object.assign(other, { will: "", journal: [], chat: [], ready: false });
@@ -204,7 +165,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   });
 
   bot.on("message:text", async (ctx) => {
-    if (state.roundInProgress) return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
+    if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
     const message = ctx.message.text;
     const game = await host.state();
     // One audience at a time per seat, so replies stay in order

@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..9552fac
+index 0000000..31ee95a
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,26 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.map.mapunit.MapUnit
@@ -20,6 +20,9 @@ index 0000000..9552fac
 +
 +    /** civIDs of AI civs that have a ruler - these keep their notifications, as the advisor reports from them */
 +    val ruledCivs: MutableSet<String> = ConcurrentHashMap.newKeySet()
++
++    /** ids of cities whose build queue was set by the ruler - the automation must not overwrite its front item */
++    val lockedCities: MutableSet<String> = ConcurrentHashMap.newKeySet()
 +
 +    /**
 +     *  Asked before the automation moves each unit of a ruled civ. Returning true means the ruler's own order
@@ -63,6 +66,19 @@ index b997da7..74d759d 100644
          }
      }
  
+diff --git a/core/src/com/unciv/logic/city/CityConstructions.kt b/core/src/com/unciv/logic/city/CityConstructions.kt
+index ebb116c..f8234e7 100644
+--- a/core/src/com/unciv/logic/city/CityConstructions.kt
++++ b/core/src/com/unciv/logic/city/CityConstructions.kt
+@@ -72,6 +72,8 @@ class CityConstructions : IsPartOfGameInfoSerialization {
+ 
+     @Readonly fun currentConstructionName() = if (constructionQueue.isEmpty()) "" else constructionQueue.first()
+     fun setCurrentConstruction(value: String) {
++        // A queue ordered by the civ's ruler is binding: the automation may only fill it once it has run out
++        if (constructionQueue.isNotEmpty() && city.id in com.unciv.logic.automation.RulerOverrides.lockedCities) return
+         if (constructionQueue.isEmpty()) constructionQueue.add(value) else constructionQueue[0] = value
+     }
+ 
 diff --git a/core/src/com/unciv/logic/civilization/Civilization.kt b/core/src/com/unciv/logic/civilization/Civilization.kt
 index 049029c..1a6e731 100644
 --- a/core/src/com/unciv/logic/civilization/Civilization.kt
@@ -94,10 +110,10 @@ index 049029c..1a6e731 100644
      }
      // endregion
 diff --git a/desktop/build.gradle.kts b/desktop/build.gradle.kts
-index d1a6cb1..1301fd3 100644
+index d1a6cb1..8c78f54 100644
 --- a/desktop/build.gradle.kts
 +++ b/desktop/build.gradle.kts
-@@ -38,6 +38,13 @@ tasks.register<JavaExec>("run") {
+@@ -38,6 +38,19 @@ tasks.register<JavaExec>("run") {
      isIgnoreExitValue = true
  }
  
@@ -106,6 +122,12 @@ index d1a6cb1..1301fd3 100644
 +    mainClass.set("com.unciv.app.desktop.ruler.RulerHost")
 +    classpath = sourceSets.main.get().runtimeClasspath
 +    workingDir = assetsDir
++}
++
++// Prints the runtime classpath so RulerHost can be started with plain `java` (several instances, no Gradle lock)
++tasks.register("rulerClasspath") {
++    dependsOn(tasks.getByName("classes"))
++    doLast { println("CLASSPATH=" + sourceSets.main.get().runtimeClasspath.asPath) }
 +}
 +
  tasks.register<JavaExec>("debug") {
@@ -537,10 +559,10 @@ index 0000000..08b195f
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..fa161f6
+index 0000000..0d6c1f3
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,730 @@
+@@ -0,0 +1,737 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -719,6 +741,7 @@ index 0000000..fa161f6
 +        publicEvents.clear()
 +        chancery.clear()
 +        units.orders.clear()
++        RulerOverrides.lockedCities.clear()
 +        for (name in ruled) orders[name] = StandingOrders()
 +        registerRuledCivs()
 +        save()
@@ -746,7 +769,8 @@ index 0000000..fa161f6
 +            "orders" to orders.mapValues { it.value.toMap() },
 +            "publicEvents" to publicEvents,
 +            "chancery" to chancery,
-+            "unitOrders" to units.toMap()
++            "unitOrders" to units.toMap(),
++            "lockedCities" to RulerOverrides.lockedCities.toList()
 +        )))
 +    }
 +
@@ -765,6 +789,8 @@ index 0000000..fa161f6
 +            chancery[civLog.name] = ArrayList(civLog.map { mapOf("turn" to it.getInt("turn"), "text" to it.getString("text")) })
 +        }
 +        units.load(host.get("unitOrders"))
++        RulerOverrides.lockedCities.clear()
++        host.get("lockedCities")?.asStringArray()?.let { RulerOverrides.lockedCities += it }
 +        registerRuledCivs()
 +        println("Loaded game at turn ${loaded.turns}, ruled: ${orders.keys}")
 +    }
@@ -850,6 +876,7 @@ index 0000000..fa161f6
 +            city.cityConstructions.constructionQueue.clear()
 +            for (construction in constructions) city.cityConstructions.addToQueue(construction)
 +            city.cityConstructions.currentConstructionIsUserSet = true
++            RulerOverrides.lockedCities += city.id
 +            "${city.name} queue is now: ${city.cityConstructions.constructionQueue.joinToString()}"
 +        }
 +        // Put something at the front of a city's build queue
@@ -862,10 +889,11 @@ index 0000000..fa161f6
 +            city.cityConstructions.constructionQueue.remove(item)
 +            city.cityConstructions.addToQueue(construction, addToTop = true)
 +            city.cityConstructions.currentConstructionIsUserSet = true
++            RulerOverrides.lockedCities += city.id
 +            "${city.name} queue is now: ${city.cityConstructions.constructionQueue.joinToString()}"
 +        }
 +        // Buy outright with gold
-+        json.get("purchase")?.forEach { order ->
++        tryEach(json.get("purchase")) { order ->
 +            val city = civ.city(order.getString("city"))
 +            val item = order.getString("item")
 +            val construction = civ.construction(item)
@@ -877,12 +905,10 @@ index 0000000..fa161f6
 +                civ.gold < cost -> "$item costs $cost gold, treasury has ${civ.gold}"
 +                else -> null
 +            }
-+            if (problem != null) {
-+                failed += "Could not buy $item in ${city.name}: $problem"
-+            } else if (city.cityConstructions.purchaseConstruction(construction, -1, false)) {
-+                done += "Bought $item in ${city.name} for $cost gold (${civ.gold} left)"
-+                log(civ, "Bought $item in ${city.name} for $cost gold.")
-+            } else failed += "Could not buy $item in ${city.name}: no room to place it"
++            if (problem != null) throw ApiError(400, "Could not buy $item in ${city.name}: $problem")
++            if (!city.cityConstructions.purchaseConstruction(construction, -1, false)) throw ApiError(400, "Could not buy $item in ${city.name}: no room to place it")
++            log(civ, "Bought $item in ${city.name} for $cost gold.")
++            "Bought $item in ${city.name} for $cost gold (${civ.gold} left)"
 +        }
 +        // Unit orders, diplomacy
 +        tryEach(json.get("units")) { units.give(civ, it) }
@@ -978,6 +1004,9 @@ index 0000000..fa161f6
 +            if (noise.any { it in notification.text }) continue
 +            log(civ, notification.text.replace("[", "").replace("]", ""))
 +        }
++        // A ruler's queue binds until it has run out
++        for (city in civ.cities) if (city.cityConstructions.constructionQueue.isEmpty()
++            || city.cityConstructions.getCurrentConstruction() is com.unciv.models.ruleset.PerpetualConstruction) RulerOverrides.lockedCities -= city.id
 +        // Then what the officials changed on their own
 +        for (city in civ.cities) {
 +            val was = before.queues[city.name] ?: continue
