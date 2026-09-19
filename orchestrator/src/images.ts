@@ -52,7 +52,7 @@ async function viaGemini(prompt: string, references: Reference[]): Promise<Buffe
       response_format: { type: "image" },
     });
   } catch (error) {
-    if (![400, 404].includes((error as { status?: number }).status ?? 0)) throw error;
+    if (![404].includes((error as { status?: number }).status ?? 0)) throw error; // a 400 is about our request - say so, do not mask it
     // Older surface of the same API
     json = await post(`${GEMINI_API}/models/${GEMINI_MODEL}:generateContent`, {
       contents: [{ parts: [{ text: prompt }, ...images.map((data) => ({ inline_data: { mime_type: "image/png", data } }))] }],
@@ -129,7 +129,8 @@ export async function paintedMap(civ: string): Promise<Buffer> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
   const prompt = `The attached map.png is an accurate schematic of the world as the ${civ} know it in ${briefing.year ?? "this age"}. Make it into ${cartography(String(briefing.era ?? ""))} - something a ruler would hang in the throne room.
 Keep the geography faithful: the same landmasses, coasts, rivers, mountains and forests in the same places, and every city where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner). Show each realm's territory with a soft tinted border in its colour, and the little shields and discs as tiny armies and travellers. Unknown regions stay blank and mysterious, as unexplored as they are.
-Title it "The Known World of ${civ}, ${briefing.year ?? ""}". Leave out the schematic's footnote about shields and discs. No hexagons, cells or grid anywhere. Natural painted terrain, not game tiles.`;
+Title it "The Known World of ${civ}, ${briefing.year ?? ""}". Leave out the schematic's footnote about shields and discs.
+The schematic is built from six-sided cells; the finished map must show no trace of them. Redraw every coastline as a natural, irregular shore with bays and headlands, and every border as a soft flowing line that follows rivers and ridges - nothing angular, zigzag or honeycomb-shaped anywhere. Natural painted terrain, not game tiles.`;
   return (await generateImage(prompt, [{ name: "map.png", png: atlas }])) ?? atlas;
 }
 
