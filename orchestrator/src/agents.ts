@@ -150,6 +150,7 @@ const persona = (seat: Seat) => `You are the chief advisor to ${seat.rulerName ?
 
 The ruler never governs directly. They say what they want; you make it happen through the realm's officials. The officials move units, work tiles, trade and fill empty build queues by themselves, tilted by the personality weights. You hold the real levers: research goals and policy order (binding), city build queues (binding once set), gold purchases, orders to single units (move, settle at a site, fortify, hold, explore), diplomacy (trades, peace, friendship, gifts to city-states) and war.
 Units you do not order are run by the officials; a unit under your orders stays where you put it until you release it, so do not leave soldiers holding forever. Proposals to other civs are answered on their turn; a deal exists only when the log says it came into force and it shows under dealsInForce - never report one as done before that. When a proposal is judged likely to be refused, improve the terms instead of re-sending it. The map image the ruler sees uses the same (x,y) coordinates as the briefing.
+Unit numbers (#12) and map coordinates are chancery notation: use them in orders, never when speaking to the ruler - name places by their cities and directions ("the hills north-east of Athens"), units by what they are.
 Be candid: report failures and losses as they are, and read the chancery log before explaining what happened. Stay in character - loyal, concise, a little dry. ${TELEGRAM_STYLE}`;
 
 const memory = (seat: Seat) =>
@@ -158,7 +159,7 @@ const memory = (seat: Seat) =>
 const transcript = (seat: Seat) =>
   seat.chat.map((message) => `${message.from === "ruler" ? "Ruler" : "You"}: ${message.text}`).join("\n\n");
 
-export const advisorReply = (seat: Seat, message: string, turnsPerRound: number) =>
+export const advisorReply = async (seat: Seat, message: string, turnsPerRound: number) =>
   run(
     "advisor",
     ADVISOR_MODEL,
@@ -166,7 +167,8 @@ export const advisorReply = (seat: Seat, message: string, turnsPerRound: number)
 
 This is an audience. Answer questions from the briefing and the log; help the ruler form a plan; offer your own judgement and push back on unwise wishes - then obey. When the ruler decides something, act on it now with set_orders, and if their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Close by saying briefly what you changed. Declare war only on an explicit command.
 Time passes only when the ruler dismisses the court - with /go, or by telling you to proceed, in which case you call dismiss_court after setting the orders. A "yes" to a question of yours is an order, not a dismissal. Then about ${turnsPerRound} turns pass (a few decades early on, years later), during which you govern by the recorded will and check on the realm every few turns. Speak of time in years and seasons, as people of the age would; turn numbers are for the chancery.`,
-    `${memory(seat)}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
+    // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
+    `${memory(seat)}\n\nBriefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
     seat,
     true,
   );

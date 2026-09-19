@@ -2,7 +2,7 @@
 
 import { Bot, InputFile, type Context } from "grammy";
 import { advisorReply, advisorReport, governPass, heraldNewspaper, journalEntry } from "./agents.ts";
-import { host, type PublicEvent, type RoundResult } from "./host.ts";
+import { host, type RoundResult } from "./host.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
 const TURNS_PER_ROUND = Number(process.env.TURNS_PER_ROUND ?? 12);
@@ -23,7 +23,6 @@ if (advisorTokens.length > RULED_CIVS.length) throw new Error("More advisor bots
 
 const herald = new Bot(process.env.HERALD_BOT_TOKEN);
 const advisors = advisorTokens.map((token) => new Bot(token));
-const pastHeadlines: PublicEvent[] = [];
 
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args);
 
@@ -84,7 +83,7 @@ async function playRound() {
       );
       const chunk = await host.advance(step);
       played = chunk.turn - fromTurn;
-      round = { ...chunk, fromTurn, publicEvents: [...(round?.publicEvents ?? []), ...chunk.publicEvents] };
+      round = { ...chunk, fromTurn, fromYear: round?.fromYear ?? chunk.fromYear, publicEvents: [...(round?.publicEvents ?? []), ...chunk.publicEvents] };
       log(`Advanced to turn ${chunk.turn}`, chunk.stoppedEarly ?? "");
       if (chunk.stoppedEarly || chunk.turn === sinceTurn) break;
     }
@@ -101,9 +100,9 @@ async function playRound() {
         await sendMap(bot, seat).catch((error) => log("map failed:", error.message));
         await bot.api.sendMessage(seat.chatId!, report);
       }),
-      heraldNewspaper(finished, pastHeadlines).then(broadcastHerald),
+      // Earlier chapters come from the host, so a restart does not make the Chronicler forget
+      host.events().then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn))).then(broadcastHerald),
     ]);
-    pastHeadlines.push(...finished.publicEvents);
 
     const game = await host.state();
     if (game.winner) await broadcastHerald(`The game is over: ${game.winner} has won a ${game.victoryType} victory.`);
@@ -198,7 +197,6 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (!/confirm/i.test(ctx.match)) return ctx.reply("This ends the current game for everyone. Send /newgame confirm to do it.");
     await host.newGame({ ruled: RULED_CIVS.slice(0, advisors.length), others: [...RULED_CIVS.slice(advisors.length), ...OTHER_CIVS] });
     for (const other of state.seats) Object.assign(other, { will: "", journal: [], chat: [], ready: false });
-    pastHeadlines.length = 0;
     persist();
     for (const other of state.seats)
       if (other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, `A new age begins. ${other.civ} is yours, Majesty - tell me what you want for it.`).catch(() => {});
