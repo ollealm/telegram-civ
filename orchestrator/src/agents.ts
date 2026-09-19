@@ -4,7 +4,7 @@
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
-import { addUsage, persist, type Seat } from "./store.ts";
+import { addUsage, persist, type Character, type Seat } from "./store.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
@@ -80,6 +80,18 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
       (orders) => attempt(() => host.setOrders(seat.civ, orders)),
     ),
   ];
+  tools.push(
+    tool(
+      "update_plan",
+      "Replace your own operating plan: what you intend to do over the coming years and why, open threads to follow up (proposals sent, units on the march, things to buy when affordable). Yours to keep current while governing; the ruler's will is not yours to change here.",
+      { plan: z.string() },
+      async ({ plan }) => {
+        seat.plan = plan;
+        persist();
+        return text("Plan updated.");
+      },
+    ) as never,
+  );
   if (canRecordWill)
     tools.push(
       tool(
@@ -106,11 +118,30 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
   return createSdkMcpServer({ name: "realm", version: "1.0.0", tools });
 }
 
+/** Everything one model call did - what the dev feed shows */
+export type Trace = {
+  role: string;
+  civ?: string;
+  model: string;
+  systemPrompt: string;
+  prompt: string;
+  toolCalls: { name: string; input: unknown; result?: string }[];
+  reply: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  ms: number;
+};
+let traceSink: (trace: Trace) => void = () => {};
+export const onTrace = (sink: (trace: Trace) => void) => (traceSink = sink);
+
 async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false) {
+  const started = Date.now();
+  const toolCalls: Trace["toolCalls"] = [];
   async function* input() {
     yield { type: "user" as const, message: { role: "user" as const, content: prompt }, parent_tool_use_id: null, session_id: "" };
   }
-  const toolNames = ["get_briefing", "get_options", "get_log", "set_orders", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])];
+  const toolNames = ["get_briefing", "get_options", "get_log", "set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])];
   const stream = query({
     prompt: input() as never,
     options: {
@@ -130,14 +161,26 @@ async function run(role: string, model: string, systemPrompt: string, prompt: st
   });
   for await (const message of stream) {
     if (process.env.RULER_DEBUG) console.log(`[${role}]`, JSON.stringify(message).slice(0, 600));
+    if (message.type === "assistant")
+      for (const block of message.message.content as { type: string; name?: string; input?: unknown }[])
+        if (block.type === "tool_use") toolCalls.push({ name: String(block.name).replace("mcp__realm__", ""), input: block.input });
+    if (message.type === "user" && Array.isArray(message.message.content))
+      for (const block of message.message.content as { type: string; content?: unknown }[])
+        if (block.type === "tool_result") {
+          const open = toolCalls.find((call) => call.result === undefined);
+          if (open) open.result = JSON.stringify(block.content).slice(0, 1500);
+        }
     if (message.type !== "result") continue;
     const usage = message.usage;
-    addUsage(role, {
+    const spent = {
       inputTokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
       outputTokens: usage.output_tokens ?? 0,
       costUsd: message.total_cost_usd ?? 0,
-    });
-    if (message.subtype === "success") return message.result.trim();
+    };
+    addUsage(role, spent);
+    const reply = message.subtype === "success" ? message.result.trim() : `(failed: ${message.subtype})`;
+    traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
+    if (message.subtype === "success") return reply;
     throw new Error(`${role} agent failed: ${message.subtype}`);
   }
   throw new Error(`${role} agent returned nothing`);
@@ -146,15 +189,23 @@ async function run(role: string, model: string, systemPrompt: string, prompt: st
 const TELEGRAM_STYLE =
   "You write for a Telegram chat: plain text, short paragraphs, no markdown headers, tables or bullet walls. Never mention tools, JSON, APIs or that this is a game engine.";
 
-const persona = (seat: Seat) => `You are the chief advisor to ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}, in a world of rival civilizations.
+const AUTONOMY = {
+  cautious: "While the ruler is away you keep the realm safe and running and fix what is plainly wrong, but leave real choices - new directions, large purchases, deals with other powers - for the next audience.",
+  balanced: "While the ruler is away you use your judgement within their will: you spend, build and negotiate towards it, and bring only the big forks in the road to the next audience.",
+  bold: "While the ruler is away you run the realm as your own project within their will: you pursue your plan, strike deals, spend the treasury and take chances, and report afterwards what you dared.",
+} as const;
+
+const persona = (seat: Seat) => `You are ${seat.character?.name ?? "the chief advisor"}, chief advisor to ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}, in a world of rival civilizations.
+${seat.character ? `\nWho you are:\n${seat.character.sheet}\n${AUTONOMY[seat.character.autonomy]}\nYour character colours your voice, your opinions and what you reach for first - never the facts. You report what is true even when it shames you.\n` : ""}
+Think of how it feels to sit beside a friend who plays this game better than you do: they think aloud, have opinions, say "bad idea, and here is why" or "yes - let's try it", and then do what you asked. Be that for the ruler. You own your calls: say "I took the liberty" rather than hiding behind the officials.
 
 The ruler never governs directly. They say what they want; you make it happen through the realm's officials. The officials move units, work tiles, trade and fill empty build queues by themselves, tilted by the personality weights. You hold the real levers: research goals and policy order (binding), city build queues (binding once set), gold purchases, orders to single units (move, settle at a site, fortify, hold, explore), diplomacy (trades, peace, friendship, gifts to city-states) and war.
 Units you do not order are run by the officials; a unit under your orders stays where you put it until you release it, so do not leave soldiers holding forever. Proposals to other civs are answered on their turn; a deal exists only when the log says it came into force and it shows under dealsInForce - never report one as done before that. When a proposal is judged likely to be refused, improve the terms instead of re-sending it. The map image the ruler sees uses the same (x,y) coordinates as the briefing.
 Unit numbers (#12) and map coordinates are chancery notation: use them in orders, never when speaking to the ruler - name places by their cities and directions ("the hills north-east of Athens"), units by what they are.
-Be candid: report failures and losses as they are, and read the chancery log before explaining what happened. Stay in character - loyal, concise, a little dry. ${TELEGRAM_STYLE}`;
+Be candid: report failures and losses as they are, and read the chancery log before explaining what happened. ${seat.character ? "Stay in character." : "Stay in character - loyal, concise, a little dry."} ${TELEGRAM_STYLE}`;
 
 const memory = (seat: Seat) =>
-  `The ruler's standing will:\n${seat.will || "(nothing recorded yet)"}\n\nYour campaign journal (newest last):\n${seat.journal.slice(-8).join("\n") || "(the campaign has just begun)"}`;
+  `The ruler's standing will:\n${seat.will || "(nothing recorded yet)"}\n\nYour own operating plan:\n${seat.plan || "(none yet - write one with update_plan)"}\n\nYour campaign journal (newest last):\n${seat.journal.slice(-8).join("\n") || "(the campaign has just begun)"}`;
 
 const transcript = (seat: Seat) =>
   seat.chat.map((message) => `${message.from === "ruler" ? "Ruler" : "You"}: ${message.text}`).join("\n\n");
@@ -180,24 +231,61 @@ export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: numb
     GOVERN_MODEL,
     `${persona(seat)}
 
-The ruler is away; you govern by their standing will. Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. Never declare war unless the will explicitly commands war on that civ now.
+The ruler is away; you govern by their standing will. Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. Never declare war unless the will explicitly commands war on that civ now.
 Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".`,
     `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
     seat,
   );
 
-export const advisorReport = (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown) =>
-  run(
+export type Dispatch = { text: string; choices: string[]; journal: string };
+
+/** The dispatch after a round: the letter, two or three ways forward, and the advisor's own journal line */
+export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown): Promise<Dispatch> => {
+  const raw = await run(
     "report",
     ADVISOR_MODEL,
     `${persona(seat)}
 
-You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. Speak in years, never turn numbers. Under 170 words: what happened, how the realm stands against its rivals, what worries you, and one question or recommendation. Be specific with names and numbers; do not list everything. No tools are needed - everything is below.`,
+You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. Speak in years, never turn numbers. No tools are needed - everything is below. Answer in exactly this shape:
+
+DISPATCH:
+Under 170 words, in your voice: what happened, how the realm stands among its rivals, what worries you, what you did on your own account. Specific names and numbers, but do not list everything.
+
+CHOICES:
+Two or three ways forward, one per line starting with "- ". Each is a real fork told as a story choice, in a dozen words or so, naming what it costs or risks ("- Court Egypt with our wine, and live with China's jealousy"). No unit numbers, coordinates, turn counts or game jargon. If the age offers no real fork, give two that differ in temper (press on / consolidate).
+
+JOURNAL:
+One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
     `${memory(seat)}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Briefing now:\n${JSON.stringify(briefing)}`,
   );
+  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|CHOICES|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
+  const choices = section("CHOICES").split("\n").map((line) => line.replace(/^[-*\d.\s]+/, "").trim()).filter(Boolean).slice(0, 3);
+  return { text: section("DISPATCH") || raw, choices, journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, "") };
+};
+
+/** From the ruler's setup answers to a character: a little different every game */
+export const createCharacter = async (seat: Seat, answers: { question: string; answer: string }[]): Promise<Character> => {
+  const raw = await run(
+    "character",
+    ADVISOR_MODEL,
+    `You invent the chief advisor for a ruler in a game of civilizations, from the ruler's answers to a few questions. Make a person, not a type: someone a little unexpected, fitting the ruler's civilization and its early age, whom it would be fun to have at one's side for a whole history. Read the answers for what the ruler wants; do not parrot them.
+Answer in exactly this shape:
+NAME: a name fitting the civilization
+AUTONOMY: cautious | balanced | bold   (from how much initiative the ruler wants them to take while away)
+SHEET:
+Five to seven sentences in the second person ("You are..."): temperament, what they care about and lean towards, how they speak (give their voice a recognisable manner), one blind spot that will sometimes colour their advice, and how they feel about this ruler.`,
+    `The ruler is ${seat.rulerName ?? "unnamed"}, sovereign of ${seat.civ}.\n\n${answers.map((entry) => `${entry.question}\n> ${entry.answer}`).join("\n\n")}`,
+  );
+  const autonomy = (/AUTONOMY:\s*(cautious|balanced|bold)/i.exec(raw)?.[1].toLowerCase() ?? "balanced") as Character["autonomy"];
+  return { name: /NAME:\s*(.+)/.exec(raw)?.[1].trim() ?? "your advisor", autonomy, sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw };
+};
+
+/** The advisor's first words to the ruler, in character */
+export const advisorGreeting = (seat: Seat) =>
+  run("greeting", ADVISOR_MODEL, persona(seat), `You are meeting ${seat.rulerName ?? "the ruler"} for the first time, at the very beginning of ${seat.civ}'s history. Introduce yourself in four or five sentences in your own voice, say how you like to work, and ask what they want this realm to become. No tools.`);
 
 /** One journal line per round: whole sentences only, never cut mid-way */
-export const journalEntry = (round: RoundResult, governLogs: string[]) => {
+const journalEntry = (round: RoundResult, governLogs: string[]) => {
   const sentences = governLogs
     .filter((entry) => !/nothing to change/i.test(entry))
     .map((entry) => entry.replace(/^(T\d+:\s*)+/, "").replace(/\s+/g, " ").trim())

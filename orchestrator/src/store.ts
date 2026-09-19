@@ -7,6 +7,15 @@ const FILE = resolve(process.env.RULER_STATE_FILE ?? "../data/game/orchestrator.
 
 export type ChatMessage = { from: "ruler" | "advisor"; text: string };
 
+/** Who the advisor is this game - made from the ruler's answers in the setup round, stable until /newgame */
+export type Character = {
+  name: string;
+  /** The sheet as prose: temperament, leanings, manner of speech, a blind spot */
+  sheet: string;
+  /** How much the advisor does unasked while the ruler is away, and with unanswered choices */
+  autonomy: "cautious" | "balanced" | "bold";
+};
+
 export type Seat = {
   civ: string;
   /** Telegram chat bound to this seat - the first person to message the advisor bot */
@@ -14,6 +23,13 @@ export type Seat = {
   rulerName?: string;
   /** The ruler's wishes in the advisor's words; the steward plays each round by this */
   will: string;
+  /** The advisor's own operating plan: what it intends and why. Governing may update it; the will it may not. */
+  plan?: string;
+  character?: Character;
+  /** Setup round in progress: the answers given so far */
+  setup?: string[];
+  /** The ways forward offered in the last dispatch; buttons refer to these by index */
+  choices?: string[];
   /** Rolling campaign memory, one short entry per round */
   journal: string[];
   chat: ChatMessage[];

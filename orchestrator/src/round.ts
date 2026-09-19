@@ -1,7 +1,7 @@
 // One round of play, shared by the Telegram bots and the test harness:
 // the advisors govern every few turns, time passes, then dispatches and the Chronicler's chapter go out.
 
-import { advisorReport, governPass, heraldNewspaper, journalEntry } from "./agents.ts";
+import { advisorReport, governPass, heraldNewspaper, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
@@ -17,7 +17,7 @@ export const roundLength = (turn: number) => (turn < EARLY_GAME_UNTIL_TURN ? EAR
 export type RoundIO = {
   /** Wraps slow work for one seat, e.g. to show "typing…" */
   working: <T>(seat: Seat, work: Promise<T>) => Promise<T>;
-  dispatch: (seat: Seat, report: string) => Promise<void>;
+  dispatch: (seat: Seat, dispatch: Dispatch) => Promise<void>;
   chronicle: (chapter: string) => Promise<void>;
   log: (...args: unknown[]) => void;
 };
@@ -56,10 +56,11 @@ export async function playRound(seats: Seat[], io: RoundIO): Promise<RoundResult
       ...seats.map(async (seat) => {
         const governLogs = notes.get(seat.civ)!;
         const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
-        const report = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));
-        seat.journal.push(journalEntry(finished, governLogs));
-        remember(seat, { from: "advisor", text: report });
-        await io.dispatch(seat, report);
+        const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));
+        seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
+        seat.choices = dispatch.choices;
+        remember(seat, { from: "advisor", text: [dispatch.text, ...dispatch.choices.map((choice, index) => `(${index + 1}) ${choice}`)].join("\n") });
+        await io.dispatch(seat, dispatch);
       }),
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
       host
