@@ -48,21 +48,25 @@ export async function generateImage(prompt: string, references: { name: string; 
   }
 }
 
-const MAP_PROMPT = `Repaint the reference as a realistic hand-painted relief map seen from directly above, like a museum-quality physical atlas plate: natural terrain textures, forests as canopy, hills and mountains with shaded relief, soft shorelines with pale shallows deepening smoothly to open sea, rivers as thin natural lines, and the blank parchment areas left as aged blank parchment.
-STRICTLY preserve the layout: same framing and aspect ratio, every coastline, river, lake and landmass exactly where it is in the reference.
-No hexagons, cells or grid anywhere - least of all in the water. No text, labels, borders, icons or compass.`;
+/** How a mapmaker of the age would have drawn it */
+const cartography = (era: string) =>
+  /Ancient|Classical/.test(era) ? "an ancient map painted on papyrus or a wall fresco, with earth pigments, little drawn cities and stylised waves"
+  : /Medieval/.test(era) ? "an illuminated medieval map on vellum, with gold leaf, tiny castles for cities, sea monsters and ornate borders"
+  : /Renaissance/.test(era) ? "a hand-coloured copperplate map of the age of discovery, with engraved relief, sailing ships, a compass rose and a decorated cartouche"
+  : /Industrial/.test(era) ? "a finely engraved nineteenth-century atlas plate with hachured mountains, delicate tinted borders and elegant lettering"
+  : "a printed twentieth-century atlas plate with shaded relief and clean typography";
 
-/** The civ's known world: our accurate render repainted by the image model, with names and borders drawn back on by the host. Falls back to our own atlas drawing. */
+/**
+ *  The civ's known world as a mapmaker of its age would have made it. The image model paints the whole thing - land,
+ *  names, borders, armies - from our accurate drawing; a name slightly off matters less than a map worth looking at.
+ *  Falls back to our own atlas drawing.
+ */
 export async function paintedMap(civ: string): Promise<Buffer> {
-  const repaint = await generateImage(MAP_PROMPT, [{ name: "reference.png", png: await host.map(civ, "reference") }]);
-  if (repaint) {
-    try {
-      return await host.mapOverlay(civ, repaint);
-    } catch (error) {
-      log(`map overlay failed: ${(error as Error).message}`);
-    }
-  }
-  return host.map(civ);
+  const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
+  const prompt = `The attached map.png is an accurate schematic of the world as the ${civ} know it in ${briefing.year ?? "this age"}. Make it into ${cartography(String(briefing.era ?? ""))} - something a ruler would hang in the throne room.
+Keep the geography faithful: the same landmasses, coasts, rivers, mountains and forests in the same places, and every city where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner). Show each realm's territory with a soft tinted border in its colour, and the little shields and discs as tiny armies and travellers. Unknown regions stay blank and mysterious, as unexplored as they are.
+Title it "The Known World of ${civ}, ${briefing.year ?? ""}". Leave out the schematic's footnote about shields and discs. No hexagons, cells or grid anywhere. Natural painted terrain, not game tiles.`;
+  return (await generateImage(prompt, [{ name: "map.png", png: atlas }])) ?? atlas;
 }
 
 /** Portraits are kept so the advisor looks the same all game and can be a reference for later scenes */
