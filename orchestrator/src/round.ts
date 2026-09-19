@@ -1,7 +1,7 @@
 // One round of play, shared by the Telegram bots and the test harness:
 // the advisors govern every few turns, time passes, then dispatches and the Chronicler's chapter go out.
 
-import { advisorReport, governPass, heraldNewspaper, type Dispatch } from "./agents.ts";
+import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
@@ -18,6 +18,8 @@ export type RoundIO = {
   /** Wraps slow work for one seat, e.g. to show "typing…" */
   working: <T>(seat: Seat, work: Promise<T>) => Promise<T>;
   dispatch: (seat: Seat, dispatch: Dispatch) => Promise<void>;
+  /** A two-line note to a ruler whom the urgent news does not concern */
+  notice: (seat: Seat, text: string) => Promise<void>;
   chronicle: (chapter: string, images: { caption: string; description: string }[], round: RoundResult) => Promise<void>;
   log: (...args: unknown[]) => void;
 };
@@ -29,18 +31,23 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
   state.phase = "passing";
   persist();
   const notes = new Map(seats.map((seat) => [seat.civ, [] as string[]]));
+  let urgentFor: Seat[] | undefined;
   // What the rulers said aloud before this round began belongs to the chapter about it
   const proclaimed = seats.flatMap((seat) => seat.proclamations ?? []);
   for (const seat of seats) seat.proclamations = undefined;
   try {
     const opening = await host.state();
-    const fromTurn = opening.turn;
+    // Resuming after urgent news: play what is left of the interrupted round, and report on the whole of it
+    const pending = state.pendingRound;
+    state.pendingRound = undefined;
+    const fromTurn = pending?.fromTurn ?? opening.turn;
     (state.proclaimed ??= []).push(...proclaimed.map((text) => ({ turn: fromTurn, year: opening.year, text })));
-    const length = roundLength(fromTurn);
-    io.log(`Round starting at turn ${fromTurn}, ${length} turns`);
+    const length = pending ? opening.turn - pending.fromTurn + pending.remaining : roundLength(fromTurn);
+    io.log(pending ? `Round resuming at turn ${opening.turn}, ${pending.remaining} turns left` : `Round starting at turn ${fromTurn}, ${length} turns`);
     let round: RoundResult | undefined;
+    let carried = pending?.publicEvents ?? [];
     // A council event (war, a lost city, victory) ends the round early
-    for (let played = 0; played < length; ) {
+    for (let played = opening.turn - fromTurn; played < length; ) {
       const step = Math.min(GOVERN_EVERY, length - played);
       const sinceTurn = fromTurn + played;
       await Promise.all(
@@ -53,12 +60,34 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       );
       const chunk = await host.advance(step);
       played = chunk.turn - fromTurn;
-      round = { ...chunk, fromTurn, fromYear: round?.fromYear ?? chunk.fromYear, publicEvents: [...(round?.publicEvents ?? []), ...chunk.publicEvents] };
+      round = { ...chunk, fromTurn, fromYear: round?.fromYear ?? pending?.fromYear ?? chunk.fromYear, publicEvents: [...(round?.publicEvents ?? carried), ...chunk.publicEvents] };
+      carried = [];
       io.log(`Advanced to turn ${chunk.turn}`, chunk.stoppedEarly ?? "");
       if (chunk.stoppedEarly || chunk.turn === sinceTurn) break;
     }
     if (!round) throw new Error("No turns were played");
     const finished = round;
+
+    // Urgent news (not a victory): summon only the rulers it concerns, keep the rest of the round for afterwards
+    const news = finished.stoppedEarly;
+    const remaining = length - (finished.turn - fromTurn);
+    if (news && !/has won/.test(news) && remaining > 0) {
+      const concerned = seats.filter((seat) => news.startsWith(seat.civ));
+      state.pendingRound = { fromTurn, fromYear: finished.fromYear, remaining, publicEvents: finished.publicEvents };
+      await Promise.all([
+        ...concerned.map(async (seat) => {
+          const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
+          const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing));
+          notes.get(seat.civ)!.push(dispatch.journal);
+          remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
+          await io.dispatch(seat, dispatch);
+        }),
+        ...seats.filter((seat) => !concerned.includes(seat)).map((seat) => io.notice(seat, `News from abroad has stopped the clocks: ${news}. Our realm is untouched; I carry on as we agreed, and time resumes once the rulers concerned have held council.`)),
+        heraldBulletin(news, finished.publicEvents.slice(-8)).then((bulletin) => io.chronicle(bulletin, [], finished)),
+      ]);
+      urgentFor = concerned;
+      return finished;
+    }
 
     await Promise.all([
       ...seats.map(async (seat) => {
@@ -83,7 +112,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     ]);
     return finished;
   } finally {
-    for (const seat of state.seats) seat.ready = false;
+    // After urgent news only the rulers concerned are waited for; everyone else stays dismissed
+    for (const seat of state.seats) seat.ready = urgentFor !== undefined && !urgentFor.includes(seat);
     state.phase = "audience";
     persist();
   }

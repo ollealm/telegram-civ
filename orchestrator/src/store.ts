@@ -51,6 +51,8 @@ export type State = {
   usage: Record<string, Usage>;
   /** Every ruler's proclamation so far, for the Chronicler's epic */
   proclaimed?: { turn: number; year: string; text: string }[];
+  /** A round interrupted by urgent news: what is left of it is played after the urgent audience */
+  pendingRound?: { fromTurn: number; fromYear: string; remaining: number; publicEvents: { turn: number; year: string; text: string }[] };
   /** audience: rulers talk with their advisors; passing: a round is being played */
   phase: "audience" | "passing";
 };

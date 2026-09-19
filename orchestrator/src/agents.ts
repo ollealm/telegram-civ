@@ -337,3 +337,39 @@ export const chroniclerEpic = (events: PublicEvent[], standings: string, occasio
 Only what belongs in an epic: foundings and falls of cities that mattered, great works, wars and their outcomes, the passing of ages, rulers' proclamations. Nothing small - no sums of gold, no trade goods, no routine buildings, no units, no single years unless a turning point. Group the story into three to five movements, each with a short title. 250-350 words, grand and unhurried, with a historian's dry eye. Never invent events or quotes; never reveal any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}`,
     `Everything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
   );
+
+/** Urgent news cut the round short: a brief summons instead of a full dispatch */
+export const advisorUrgent = async (seat: Seat, news: string, briefing: unknown): Promise<Dispatch> => {
+  const raw = await run(
+    "urgent",
+    ADVISOR_MODEL,
+    `${persona(seat)}
+
+You have stopped the clocks and sent for the ruler: ${news}. This is not a regular dispatch - no review of the years, no long game. Answer in exactly this shape:
+
+DISPATCH:
+60-90 words. Open with the news itself, then what it means for us right now and what you have already done about it. Speak in years, never turn numbers.
+
+QUESTION:
+The one decision that cannot wait, in 40-70 words of plain talk: the ways to answer this, what each risks, and your own lean. End with the question.
+
+IMAGE:
+caption | the moment itself as a painter of the age would show it (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ} in this year. Realistic oil painting, no text.
+
+JOURNAL:
+One plain sentence: what happened and what you did.`,
+    `${memory(seat)}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+  );
+  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
+  const [caption, ...description] = section("IMAGE").split("|");
+  return { text: section("DISPATCH") || raw, strategy: "", question: section("QUESTION"), image: description.length ? { caption: caption.trim(), description: description.join("|").trim() } : undefined, journal: section("JOURNAL") || news };
+};
+
+/** Stop press: one paragraph for the world when urgent news interrupts an age */
+export const heraldBulletin = (news: string, events: PublicEvent[]) =>
+  run(
+    "bulletin",
+    HERALD_MODEL,
+    `You are the Chronicler. Urgent news has interrupted the age; the full chapter will follow when the age is done. Write a stop-press notice for all rulers: one paragraph, 40-70 words, in your historian's voice, on this news only. Only what the world can witness; no speculation about any realm's plans or strength. ${TELEGRAM_STYLE}`,
+    `The news: ${news}\n\nWhat the world has witnessed in these last years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing else)"}`,
+  );

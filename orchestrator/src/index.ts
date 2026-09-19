@@ -90,8 +90,9 @@ async function playRound() {
           void generateImage(`${dispatch.image.description}\n\nRealistic oil painting of the period, no text or lettering.`)
             .then((png) => png && bot.api.sendPhoto(seat.chatId!, new InputFile(png, "scene.png"), { caption: dispatch.image!.caption }))
             .catch((error) => log("scene failed:", error.message));
-        void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
+        if (dispatch.strategy) void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
       },
+      notice: async (seat, text) => void (await botOf(seat).api.sendMessage(seat.chatId!, text).catch(() => {})),
       chronicle: async (chapter, images, round) => {
         await broadcastHerald(chapter);
         for (const image of images)
@@ -112,7 +113,9 @@ async function playRound() {
       }
     }
     persist();
-    await flushDevFeed(herald, `Round to ${game.year} (turn ${game.turn})`);
+    await flushDevFeed(herald, `Round to ${game.year} (turn ${game.turn})${state.pendingRound ? " - interrupted by urgent news" : ""}`);
+    // Urgent news that concerns no ruler still at the table (a realm fell): nobody needs to hold council, so time moves on
+    if (state.pendingRound && !game.winner && (await standing()).every((seat) => seat.ready)) return void playRound();
     if (game.winner) await broadcastHerald(`The game is over: ${game.winner} has won a ${game.victoryType} victory.`);
   } catch (error) {
     log("Round failed:", error);
@@ -291,7 +294,9 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
     if (!/confirm/i.test(ctx.match)) return ctx.reply("This ends the current game for everyone. Send /newgame confirm to do it.");
     await host.newGame({ ruled: RULED_CIVS.slice(0, advisors.length), others: [...RULED_CIVS.slice(advisors.length), ...OTHER_CIVS] });
-    for (const other of state.seats) Object.assign(other, { will: "", plan: "", journal: [], chat: [], ready: false, character: undefined, setup: undefined, choices: undefined });
+    for (const other of state.seats) Object.assign(other, { will: "", plan: "", journal: [], chat: [], ready: false, character: undefined, setup: undefined, choices: undefined, fallen: false, proclamations: undefined, dismissed: false });
+    state.proclaimed = [];
+    state.pendingRound = undefined;
     persist();
     for (const other of state.seats)
       if (other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, `A new age begins, and ${other.civ} is yours. Send /start to assemble your court.`).catch(() => {});
