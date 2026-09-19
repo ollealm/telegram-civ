@@ -1,4 +1,5 @@
-// Image generation behind one seam. Today: the Codex CLI on the ruler's ChatGPT subscription (no API key).
+// Image generation behind one seam, with two providers: the Gemini API (GEMINI_API_KEY) and the Codex CLI on a
+// ChatGPT subscription (no key). IMAGE_PROVIDER picks one; by default Gemini when a key is set, and the other as fallback.
 // A picture is never worth waiting for: callers send their text first and the image when (and if) it arrives.
 
 import { spawn } from "node:child_process";
@@ -17,13 +18,83 @@ export type ImageLog = (message: string) => void;
 let log: ImageLog = () => {};
 export const onImageLog = (sink: ImageLog) => (log = sink);
 
-/** One image from a prompt, optionally guided by reference images. Null when it fails or takes too long. */
-export async function generateImage(prompt: string, references: { name: string; png: Buffer }[] = []): Promise<Buffer | null> {
+type Reference = { name: string; png: Buffer };
+const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image";
+const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta";
+
+/** The first base64 image anywhere in a Gemini response, whichever of its response shapes we got */
+function findImage(node: unknown): string | null {
+  if (!node || typeof node !== "object") return null;
+  const record = node as Record<string, unknown>;
+  const mime = String(record.mime_type ?? record.mimeType ?? "");
+  if (typeof record.data === "string" && record.data.length > 1000 && (mime.startsWith("image/") || !mime)) return record.data;
+  for (const value of Object.values(record)) {
+    const found = findImage(value);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function viaGemini(prompt: string, references: Reference[]): Promise<Buffer> {
+  const headers = { "x-goog-api-key": process.env.GEMINI_API_KEY!, "content-type": "application/json" };
+  const post = async (url: string, body: unknown) => {
+    const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw Object.assign(new Error(`${response.status} ${JSON.stringify((json as any).error?.message ?? json).slice(0, 200)}`), { status: response.status });
+    return json;
+  };
+  const images = references.map((reference) => reference.png.toString("base64"));
+  let json: unknown;
+  try {
+    json = await post(`${GEMINI_API}/interactions`, {
+      model: GEMINI_MODEL,
+      input: [{ type: "text", text: prompt }, ...images.map((data) => ({ type: "image", mime_type: "image/png", data }))],
+      response_format: { type: "image" },
+    });
+  } catch (error) {
+    if (![400, 404].includes((error as { status?: number }).status ?? 0)) throw error;
+    // Older surface of the same API
+    json = await post(`${GEMINI_API}/models/${GEMINI_MODEL}:generateContent`, {
+      contents: [{ parts: [{ text: prompt }, ...images.map((data) => ({ inline_data: { mime_type: "image/png", data } }))] }],
+      generationConfig: { responseModalities: ["IMAGE"] },
+    });
+  }
+  const data = findImage(json);
+  if (!data) throw new Error(`no image in response: ${JSON.stringify(json).slice(0, 200)}`);
+  return Buffer.from(data, "base64");
+}
+
+const providers = (): ("gemini" | "codex")[] => {
+  const chosen = process.env.IMAGE_PROVIDER ?? (process.env.GEMINI_API_KEY ? "gemini" : "codex");
+  const order: ("gemini" | "codex")[] = chosen === "gemini" ? ["gemini", "codex"] : ["codex", "gemini"];
+  return order.filter((provider) => provider === "codex" || process.env.GEMINI_API_KEY);
+};
+
+/** One image from a prompt, optionally guided by reference images. Null when every provider fails or takes too long. */
+export async function generateImage(prompt: string, references: Reference[] = []): Promise<Buffer | null> {
   if (!ENABLED) return null;
   if (running >= MAX_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve));
   running++;
-  const started = Date.now();
   try {
+    for (const provider of providers()) {
+      const started = Date.now();
+      try {
+        const png = provider === "gemini" ? await viaGemini(prompt, references) : await viaCodex(prompt, references);
+        log(`image ok via ${provider} in ${Math.round((Date.now() - started) / 1000)}s: ${prompt.slice(0, 70)}…`);
+        return png;
+      } catch (error) {
+        log(`image FAILED via ${provider} after ${Math.round((Date.now() - started) / 1000)}s (${(error as Error).message}): ${prompt.slice(0, 70)}…`);
+      }
+    }
+    return null;
+  } finally {
+    running--;
+    waiting.shift()?.();
+  }
+}
+
+async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer> {
+  {
     const dir = mkdtempSync(join(tmpdir(), "ruler-image-"));
     for (const reference of references) writeFileSync(join(dir, reference.name), reference.png);
     const instruction = `${references.length ? `Use your built-in image generation tool in image-to-image (edit) mode with the attached ${references.map((r) => r.name).join(", ")} as input.` : "Use your built-in image generation tool."}\n\n${prompt}\n\nSave the result as out.png in the current directory. Do nothing else. Reply only DONE or FAILED: reason.`;
@@ -37,14 +108,7 @@ export async function generateImage(prompt: string, references: { name: string; 
     });
     const out = join(dir, "out.png");
     if (!existsSync(out)) throw new Error("no image produced");
-    log(`image ok in ${Math.round((Date.now() - started) / 1000)}s: ${prompt.slice(0, 70)}…`);
     return readFileSync(out);
-  } catch (error) {
-    log(`image FAILED after ${Math.round((Date.now() - started) / 1000)}s (${(error as Error).message}): ${prompt.slice(0, 70)}…`);
-    return null;
-  } finally {
-    running--;
-    waiting.shift()?.();
   }
 }
 
