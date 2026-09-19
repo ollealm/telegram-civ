@@ -1,0 +1,1505 @@
+diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
+new file mode 100644
+index 0000000..9552fac
+--- /dev/null
++++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
+@@ -0,0 +1,23 @@
++package com.unciv.logic.automation
++
++import com.unciv.logic.map.mapunit.MapUnit
++import com.unciv.models.ruleset.nation.Personality
++import java.util.concurrent.ConcurrentHashMap
++
++/**
++ *  Strategic overrides set from outside the game by a civ's "ruler" (see desktop RulerHost).
++ *  Not serialized with the save - the host persists and re-applies them.
++ */
++object RulerOverrides {
++    /** civID -> personality replacing the nation's ruleset personality for all AI decisions */
++    val personalities = ConcurrentHashMap<String, Personality>()
++
++    /** civIDs of AI civs that have a ruler - these keep their notifications, as the advisor reports from them */
++    val ruledCivs: MutableSet<String> = ConcurrentHashMap.newKeySet()
++
++    /**
++     *  Asked before the automation moves each unit of a ruled civ. Returning true means the ruler's own order
++     *  handled this unit this turn and the automation must leave it alone.
++     */
++    @Volatile var unitHandler: ((MapUnit) -> Boolean)? = null
++}
+diff --git a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
+index b997da7..74d759d 100644
+--- a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
++++ b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
+@@ -2,6 +2,7 @@ package com.unciv.logic.automation.civilization
+ 
+ import com.unciv.UncivGame
+ import com.unciv.logic.automation.Automation
++import com.unciv.logic.automation.RulerOverrides
+ import com.unciv.logic.automation.ThreatLevel
+ import com.unciv.logic.automation.Timers.Companion.timeThis
+ import com.unciv.logic.automation.unit.CivilianUnitAutomation
+@@ -415,7 +416,10 @@ object NextTurnAutomation {
+         for (unit in sortedUnits) {
+             // settlers need to move before automateSettlerEscorting(),
+             // move spaceship parts before that to make sure we're not blocking them
+-            if (unit.hasUnique(UniqueType.SpaceshipPart) || unit.hasUnique(UniqueType.FoundCity)) UnitAutomation.automateUnitMoves(unit)
++            if (unit.hasUnique(UniqueType.SpaceshipPart) || unit.hasUnique(UniqueType.FoundCity)) {
++                if (RulerOverrides.unitHandler?.invoke(unit) == true) continue // the ruler gave this unit its own orders
++                UnitAutomation.automateUnitMoves(unit)
++            }
+         }
+ 
+         if (civInfo.cities.isNotEmpty()) automateSettlerEscorting(civInfo)
+@@ -424,7 +428,10 @@ object NextTurnAutomation {
+ 
+         for (unit in sortedUnits) {
+             // spaceship parts and settlers have already moved
+-            if (!unit.hasUnique(UniqueType.SpaceshipPart) && !unit.hasUnique(UniqueType.FoundCity)) UnitAutomation.automateUnitMoves(unit)
++            if (!unit.hasUnique(UniqueType.SpaceshipPart) && !unit.hasUnique(UniqueType.FoundCity)) {
++                if (RulerOverrides.unitHandler?.invoke(unit) == true) continue
++                UnitAutomation.automateUnitMoves(unit)
++            }
+         }
+     }
+ 
+diff --git a/core/src/com/unciv/logic/civilization/Civilization.kt b/core/src/com/unciv/logic/civilization/Civilization.kt
+index 049029c..1a6e731 100644
+--- a/core/src/com/unciv/logic/civilization/Civilization.kt
++++ b/core/src/com/unciv/logic/civilization/Civilization.kt
+@@ -4,6 +4,7 @@ import com.unciv.Constants
+ import com.unciv.UncivGame
+ import com.unciv.json.LastSeenImprovement
+ import com.unciv.logic.*
++import com.unciv.logic.automation.RulerOverrides
+ import com.unciv.logic.automation.unit.WorkerAutomation
+ import com.unciv.logic.city.City
+ import com.unciv.logic.city.managers.CityFounder
+@@ -469,6 +470,7 @@ class Civilization : IsPartOfGameInfoSerialization {
+ 
+     @Readonly
+     fun getPersonality(): Personality {
++        RulerOverrides.personalities[civID]?.let { return it }
+         return if (isAIOrAutoPlaying()) gameInfo.ruleset.personalities[nation.personality] ?: Personality.neutralPersonality
+         else Personality.neutralPersonality
+     }
+@@ -1159,7 +1161,8 @@ class Civilization : IsPartOfGameInfoSerialization {
+      *  @param notificationIcons Zero or more icons to decorate the notification with - see [NotificationIcon]
+      */
+     fun addNotification(text: String, actions: Iterable<NotificationAction>?, category: NotificationCategory, vararg notificationIcons: String) {
+-        if (playerType == PlayerType.AI) return // no point in lengthening the saved game info if no one will read it
++        // no point in lengthening the saved game info if no one will read it - but a ruled civ's advisor does
++        if (playerType == PlayerType.AI && civID !in RulerOverrides.ruledCivs) return
+         notifications.add(Notification(text, notificationIcons, actions, category))
+     }
+     // endregion
+diff --git a/desktop/build.gradle.kts b/desktop/build.gradle.kts
+index d1a6cb1..1301fd3 100644
+--- a/desktop/build.gradle.kts
++++ b/desktop/build.gradle.kts
+@@ -38,6 +38,13 @@ tasks.register<JavaExec>("run") {
+     isIgnoreExitValue = true
+ }
+ 
++tasks.register<JavaExec>("rulerHost") {
++    dependsOn(tasks.getByName("classes"))
++    mainClass.set("com.unciv.app.desktop.ruler.RulerHost")
++    classpath = sourceSets.main.get().runtimeClasspath
++    workingDir = assetsDir
++}
++
+ tasks.register<JavaExec>("debug") {
+     dependsOn(tasks.getByName("classes"))
+     mainClass.set(mainClassName)
+diff --git a/desktop/src/com/unciv/app/desktop/ruler/Json.kt b/desktop/src/com/unciv/app/desktop/ruler/Json.kt
+new file mode 100644
+index 0000000..53fd859
+--- /dev/null
++++ b/desktop/src/com/unciv/app/desktop/ruler/Json.kt
+@@ -0,0 +1,14 @@
++package com.unciv.app.desktop.ruler
++
++/** Minimal JSON writer for maps, lists and primitives - all the API responses need */
++object Json {
++    fun write(v: Any?): String = when (v) {
++        null -> "null"
++        is String -> "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
++        is Number, is Boolean -> v.toString()
++        is Map<*, *> -> v.entries.joinToString(",", "{", "}") { write(it.key.toString()) + ":" + write(it.value) }
++        is Iterable<*> -> v.joinToString(",", "[", "]") { write(it) }
++        is Sequence<*> -> write(v.toList())
++        else -> write(v.toString())
++    }
++}
+diff --git a/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt b/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt
+new file mode 100644
+index 0000000..0ebf718
+--- /dev/null
++++ b/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt
+@@ -0,0 +1,211 @@
++package com.unciv.app.desktop.ruler
++
++import com.unciv.logic.civilization.Civilization
++import com.unciv.logic.map.HexMath
++import com.unciv.logic.map.tile.Tile
++import java.awt.BasicStroke
++import java.awt.Color
++import java.awt.Font
++import java.awt.Graphics2D
++import java.awt.Polygon
++import java.awt.RenderingHints
++import java.awt.image.BufferedImage
++import java.io.ByteArrayOutputStream
++import javax.imageio.ImageIO
++import kotlin.math.cos
++import kotlin.math.sin
++import kotlin.math.sqrt
++
++/**
++ *  Draws the world as one civ knows it, in the manner of an old atlas: parchment for the unknown,
++ *  muted terrain, inked coastlines and rivers, dashed borders, serif names. No grid, no coordinates.
++ */
++object MapRenderer {
++    private const val HEX = 34f // pixel distance between neighbouring hex centres
++    private val RADIUS = HEX / sqrt(3f) + 1.6f // corner radius for that spacing; slight overlap hides seams
++
++    private val parchment = Color(232, 219, 186)
++    private val ink = Color(60, 45, 30)
++    private val terrainColors = mapOf(
++        "Ocean" to Color(150, 184, 204), "Coast" to Color(178, 206, 216), "Lakes" to Color(176, 208, 220),
++        "Grassland" to Color(172, 190, 132), "Plains" to Color(204, 194, 138), "Desert" to Color(226, 210, 160),
++        "Tundra" to Color(198, 198, 176), "Snow" to Color(238, 238, 232), "Mountain" to Color(160, 150, 138),
++    )
++
++    fun render(civ: Civilization): ByteArray {
++        val game = civ.gameInfo
++        val tiles = game.tileMap.values
++        val explored = tiles.filter { it.isExplored(civ) }.ifEmpty { tiles }
++        val allPoints = tiles.associateWith { HexMath.hex2WorldCoords(it.position) }
++        val points = allPoints.filterKeys { tile -> explored.any { it.aerialDistanceTo(tile) <= 2 } }
++        val minX = points.values.minOf { it.x }; val maxX = points.values.maxOf { it.x }
++        val minY = points.values.minOf { it.y }; val maxY = points.values.maxOf { it.y }
++        val scale = HEX / sqrt(3f)
++        val margin = HEX * 2
++        val width = ((maxX - minX) * scale + margin * 2).toInt().coerceAtLeast(720)
++        val height = ((maxY - minY) * scale + margin * 2).toInt() + 30
++        fun px(tile: Tile) = (points[tile]!!.x - minX) * scale + margin
++        fun py(tile: Tile) = height - 30 - ((points[tile]!!.y - minY) * scale + margin) // y up in the game, down on screen
++
++        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
++        val g = image.createGraphics()
++        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
++        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
++        g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
++        g.color = parchment
++        g.fillRect(0, 0, width, height)
++        // a faint mottle so the parchment is not flat
++        val mottle = java.util.Random(7)
++        g.color = Color(200, 185, 150, 40)
++        repeat(width * height / 900) { val x = mottle.nextInt(width); val y = mottle.nextInt(height); g.fillOval(x, y, 3, 3) }
++
++        val visible = civ.viewableTiles
++        val known = points.keys.filter { it.isExplored(civ) }
++        fun hexagon(tile: Tile, radius: Float): Polygon {
++            val polygon = Polygon()
++            for (i in 0 until 6) {
++                val angle = Math.toRadians(60.0 * i) // flat-top: neighbours lie at 0°, 60°, 120°
++                polygon.addPoint((px(tile) + radius * cos(angle)).toInt(), (py(tile) + radius * sin(angle)).toInt())
++            }
++            return polygon
++        }
++        /** The edge shared with a neighbour, as a segment */
++        fun edge(tile: Tile, neighbor: Tile): Pair<Pair<Float, Float>, Pair<Float, Float>> {
++            val mx = (px(tile) + px(neighbor)) / 2; val my = (py(tile) + py(neighbor)) / 2
++            val dx = px(neighbor) - px(tile); val dy = py(neighbor) - py(tile)
++            val length = sqrt(dx * dx + dy * dy)
++            val nx = -dy / length * RADIUS / 2; val ny = dx / length * RADIUS / 2
++            return Pair(Pair(mx - nx, my - ny), Pair(mx + nx, my + ny))
++        }
++        fun line(g: Graphics2D, segment: Pair<Pair<Float, Float>, Pair<Float, Float>>) =
++            g.drawLine(segment.first.first.toInt(), segment.first.second.toInt(), segment.second.first.toInt(), segment.second.second.toInt())
++
++        // Terrain
++        for (tile in known) {
++            g.color = terrainColors[tile.baseTerrain] ?: Color(180, 170, 150)
++            g.fillPolygon(hexagon(tile, RADIUS))
++        }
++        // Features as small ink glyphs
++        for (tile in known) {
++            val x = px(tile); val y = py(tile)
++            for (feature in tile.terrainFeatures) when (feature) {
++                "Forest", "Jungle" -> {
++                    g.color = if (feature == "Forest") Color(96, 120, 78) else Color(74, 110, 70)
++                    for ((ox, oy) in listOf(-6f to 2f, 5f to 3f, -1f to -5f)) g.fillOval((x + ox - 3).toInt(), (y + oy - 3).toInt(), 7, 7)
++                }
++                "Hill" -> {
++                    g.color = Color(120, 100, 76); g.stroke = BasicStroke(1.4f)
++                    g.drawArc((x - 8).toInt(), (y - 3).toInt(), 16, 10, 0, 180)
++                }
++                "Marsh" -> { g.color = Color(90, 120, 120); g.stroke = BasicStroke(1f); for (oy in listOf(-4, 0, 4)) g.drawLine((x - 5).toInt(), (y + oy).toInt(), (x + 5).toInt(), (y + oy).toInt()) }
++                "Oasis" -> { g.color = Color(120, 170, 200); g.fillOval((x - 4).toInt(), (y - 3).toInt(), 8, 6) }
++            }
++            if (tile.baseTerrain == "Mountain") {
++                g.color = Color(110, 100, 92)
++                val peak = Polygon(intArrayOf((x - 9).toInt(), x.toInt(), (x + 9).toInt()), intArrayOf((y + 6).toInt(), (y - 9).toInt(), (y + 6).toInt()), 3)
++                g.fillPolygon(peak)
++                g.color = Color(235, 235, 235)
++                g.fillPolygon(Polygon(intArrayOf((x - 3).toInt(), x.toInt(), (x + 3).toInt()), intArrayOf((y - 4).toInt(), (y - 9).toInt(), (y - 4).toInt()), 3))
++            }
++            tile.resource?.let { name ->
++                val resource = game.ruleset.tileResources[name] ?: return@let
++                g.color = when (resource.resourceType.name) { "Luxury" -> Color(190, 140, 30); "Strategic" -> Color(150, 50, 40); else -> Color(90, 80, 60, 120) }
++                g.fillOval((x + RADIUS * 0.45f - 2.5f).toInt(), (y - RADIUS * 0.45f - 2.5f).toInt(), 5, 5)
++            }
++        }
++        // Coastlines: ink where land meets water, and where the known world ends
++        g.color = ink
++        g.stroke = BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
++        for (tile in known) {
++            if (tile.isWater) continue
++            for (neighbor in tile.neighbors) if (neighbor in points && neighbor.isExplored(civ) && neighbor.isWater) line(g, edge(tile, neighbor))
++        }
++        g.color = Color(120, 100, 70, 110)
++        g.stroke = BasicStroke(1f)
++        for (tile in known) for (neighbor in tile.neighbors) if (neighbor in points && !neighbor.isExplored(civ)) line(g, edge(tile, neighbor))
++        // Rivers run along hex edges, on the lower side of a tile
++        g.color = Color(70, 120, 170)
++        g.stroke = BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
++        for (tile in known) {
++            val p = tile.position
++            val riverEdges = listOfNotNull(
++                if (tile.hasBottomRiver) game.tileMap.getIfTileExistsOrNull(p.x - 1, p.y - 1) else null,
++                if (tile.hasBottomRightRiver) game.tileMap.getIfTileExistsOrNull(p.x - 1, p.y) else null,
++                if (tile.hasBottomLeftRiver) game.tileMap.getIfTileExistsOrNull(p.x, p.y - 1) else null,
++            )
++            for (neighbor in riverEdges) if (neighbor in points) line(g, edge(tile, neighbor))
++        }
++        // Territory: a faint wash and a dashed border in the nation's colour
++        for (tile in known) {
++            val owner = tile.getOwner() ?: continue
++            val c = owner.nation.getOuterColor()
++            g.color = Color(c.r, c.g, c.b, 0.16f)
++            g.fillPolygon(hexagon(tile, RADIUS))
++        }
++        g.stroke = BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, floatArrayOf(5f, 4f), 0f)
++        for (tile in known) {
++            val owner = tile.getOwner() ?: continue
++            val c = owner.nation.getOuterColor()
++            g.color = Color(c.r, c.g, c.b, 0.85f)
++            for (neighbor in tile.neighbors) if (neighbor in points && neighbor.getOwner() != owner) line(g, edge(tile, neighbor))
++        }
++        // The fog of memory: known but out of sight fades towards parchment
++        g.color = Color(parchment.red, parchment.green, parchment.blue, 70)
++        for (tile in known) if (tile !in visible) g.fillPolygon(hexagon(tile, RADIUS))
++
++        // Units in sight, as small map markers
++        for (tile in visible) {
++            if (tile !in points) continue
++            for (unit in tile.getUnits()) {
++                val x = px(tile).toInt(); val y = py(tile).toInt()
++                val own = unit.civ == civ
++                val nation = unit.civ.nation.getOuterColor()
++                g.color = if (unit.civ.isBarbarian) Color(140, 30, 30) else Color(nation.r, nation.g, nation.b)
++                g.stroke = BasicStroke(1.2f)
++                if (unit.isCivilian()) { g.fillOval(x - 4, y - 4, 8, 8); g.color = ink; g.drawOval(x - 4, y - 4, 8, 8) }
++                else {
++                    val shield = Polygon(intArrayOf(x - 5, x + 5, x + 5, x, x - 5), intArrayOf(y - 5, y - 5, y + 1, y + 6, y + 1), 5)
++                    g.fillPolygon(shield); g.color = if (own) Color.WHITE else ink; g.drawPolygon(shield)
++                }
++            }
++        }
++        // Cities
++        for (tile in known) {
++            if (!tile.isCityCenter()) continue
++            val city = tile.getCity()!!
++            val x = px(tile).toInt(); val y = py(tile).toInt()
++            val c = city.civ.nation.getOuterColor()
++            val size = if (city.isCapital()) 16 else 12
++            g.color = Color(c.r, c.g, c.b)
++            g.fillOval(x - size / 2, y - size / 2, size, size)
++            g.color = ink
++            g.stroke = BasicStroke(if (city.civ == civ) 2.5f else 1.5f)
++            g.drawOval(x - size / 2, y - size / 2, size, size)
++            if (city.isCapital()) { g.color = parchment; g.fillOval(x - 3, y - 3, 6, 6) }
++            g.font = Font(Font.SERIF, if (city.civ == civ) Font.BOLD else Font.PLAIN, if (city.isCapital()) 14 else 12)
++            val label = if (city.civ == civ) city.name else "${city.name} · ${city.civ.civName}"
++            val textWidth = g.fontMetrics.stringWidth(label)
++            g.color = Color(parchment.red, parchment.green, parchment.blue, 200)
++            g.fillRoundRect(x - textWidth / 2 - 3, y + size / 2 + 1, textWidth + 6, 15, 6, 6)
++            g.color = ink
++            g.drawString(label, x - textWidth / 2, y + size / 2 + 13)
++        }
++        // Cartouche
++        val year = game.getYear()
++        val yearText = if (year < 0) "${-year} BC" else "AD $year"
++        g.font = Font(Font.SERIF, Font.BOLD, 18)
++        val title = "The Known World of ${civ.civName}, $yearText"
++        g.color = Color(parchment.red, parchment.green, parchment.blue, 220)
++        g.fillRoundRect(10, 10, g.fontMetrics.stringWidth(title) + 20, 30, 8, 8)
++        g.color = ink; g.stroke = BasicStroke(1.2f)
++        g.drawRoundRect(10, 10, g.fontMetrics.stringWidth(title) + 20, 30, 8, 8)
++        g.drawString(title, 20, 31)
++        g.font = Font(Font.SERIF, Font.ITALIC, 11)
++        g.drawString("Shields are soldiers, discs civilians, in their nation's colour. Faded land is remembered, not seen.", 12, height - 10)
++        g.dispose()
++
++        val bytes = ByteArrayOutputStream()
++        ImageIO.write(image, "png", bytes)
++        return bytes.toByteArray()
++    }
++}
+diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
+new file mode 100644
+index 0000000..08b195f
+--- /dev/null
++++ b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
+@@ -0,0 +1,181 @@
++package com.unciv.app.desktop.ruler
++
++import com.badlogic.gdx.utils.JsonValue
++import com.unciv.Constants
++import com.unciv.logic.civilization.AlertType
++import com.unciv.logic.civilization.Civilization
++import com.unciv.logic.civilization.PopupAlert
++import com.unciv.logic.civilization.diplomacy.DiplomacyFlags
++import com.unciv.logic.civilization.diplomacy.DiplomaticStatus
++import com.unciv.logic.trade.Trade
++import com.unciv.logic.trade.TradeEvaluation
++import com.unciv.logic.trade.TradeLogic
++import com.unciv.logic.trade.TradeOffer
++import com.unciv.logic.trade.TradeOfferType
++import com.unciv.logic.trade.TradeRequest
++
++/**
++ *  Diplomacy a ruler can order. Proposals to other civs are answered by that civ on its own turn
++ *  (its automation evaluates them), and the answer shows up in the chancery log.
++ */
++class RulerDiplomacy(private val log: (Civilization, String) -> Unit) {
++
++    private val hiddenOffers = setOf(TradeOfferType.City, TradeOfferType.Introduction, TradeOfferType.WarDeclaration, TradeOfferType.Technology)
++
++    /** Our open proposals: (our civ, their civ, terms) - checked each turn to report how they ended */
++    val pending = ArrayList<Triple<String, String, String>>()
++
++    fun TradeOffer.brief() = name + (if (type.numberType != TradeOfferType.TradeTypeNumberType.None) " x$amount" else "") + (if (duration > 0) " for $duration turns" else "")
++    fun Trade.brief() = "we give ${ourOffers.joinToString { it.brief() }.ifEmpty { "nothing" }} for ${theirOffers.joinToString { it.brief() }.ifEmpty { "nothing" }}"
++
++    /** Called after each turn: proposals that are no longer waiting were answered - say how, with the terms */
++    fun settleAnswers(civ: Civilization, notifications: List<String>) {
++        for (entry in pending.filter { it.first == civ.civName }.toList()) {
++            val other = civ.gameInfo.civilizations.firstOrNull { it.civName == entry.second } ?: continue
++            if (other.tradeRequests.any { it.requestingCiv == civ.civID }) continue // still waiting
++            pending.remove(entry)
++            val answer = when {
++                notifications.any { it.contains("[${other.civName}] has accepted your trade request") } -> "was accepted - the deal is in force"
++                notifications.any { it.contains("[${other.civName}] has denied your trade request") } -> "was refused"
++                notifications.any { it.contains("[${other.civName}] has made a counteroffer") } -> "got a counteroffer, which the officials will weigh"
++                notifications.any { it.contains("no longer relevant") } -> "lapsed: one side could no longer supply what was offered (a resource ran out, or a treaty state changed)"
++                else -> "ended without a recorded answer"
++            }
++            log(civ, "Our proposal to ${other.civName} (${entry.third}) $answer.")
++        }
++    }
++
++    private fun Civilization.known(name: String): Civilization =
++        getKnownCivs().firstOrNull { it.civName == name && it.isAlive() } ?: throw IllegalArgumentException("We have not met $name, or they are gone")
++
++    /** {with, give: [offers], want: [offers]}; an offer is {item, amount?} - see options.diplomacy for what can be traded */
++    fun proposeTrade(civ: Civilization, json: JsonValue): String {
++        val other = civ.known(json.getString("with"))
++        if (other.isCityState) throw IllegalArgumentException("City-states do not trade; send them a gift instead")
++        val logic = TradeLogic(civ, other)
++        val trade = Trade()
++        fun add(list: JsonValue?, available: List<TradeOffer>, into: MutableList<TradeOffer>, side: String) {
++            list?.forEach { entry ->
++                val item = entry.getString("item")
++                val offer = available.firstOrNull { it.name.equals(item, ignoreCase = true) && it.amount > 0 }
++                    ?: throw IllegalArgumentException("$side cannot offer '$item' right now; tradeable: ${available.filter { it.amount > 0 && it.type !in hiddenOffers }.joinToString { it.name + " x" + it.amount }}")
++                val copy = offer.copy()
++                val wanted = if (entry.has("amount")) entry.getInt("amount") else if (offer.type.numberType == TradeOfferType.TradeTypeNumberType.Gold) throw IllegalArgumentException("'$item' needs an amount") else 1
++                if (wanted < 1 || wanted > offer.amount) throw IllegalArgumentException("$side can offer at most ${offer.amount} of '$item', not $wanted")
++                copy.amount = wanted
++                into.add(copy)
++            }
++        }
++        add(json.get("give"), logic.ourAvailableOffers, trade.ourOffers, "We")
++        add(json.get("want"), logic.theirAvailableOffers, trade.theirOffers, other.civName)
++        if (trade.ourOffers.isEmpty() && trade.theirOffers.isEmpty()) throw IllegalArgumentException("An empty trade")
++        if (!TradeEvaluation().isTradeValid(trade, civ, other)) throw IllegalArgumentException("That trade is not valid right now")
++        // A TradeRequest holds the trade as the receiver sees it, so it goes out reversed
++        val acceptable = TradeEvaluation().isTradeAcceptable(trade.reverse(), other, civ)
++        other.tradeRequests.add(TradeRequest(civ.civID, trade.reverse()))
++        val summary = trade.brief()
++        pending += Triple(civ.civName, other.civName, summary)
++        log(civ, "We proposed a trade to ${other.civName}: $summary.")
++        val balance = TradeEvaluation().getTradeAcceptability(trade.reverse(), other, civ, true)
++        return "Proposed to ${other.civName}: $summary. They answer on their turn; by their own reckoning this deal is worth $balance to them (they accept at 0 or more), so they are ${if (acceptable) "likely to accept" else "likely to refuse - sweeten it or ask for less"}."
++    }
++
++    fun proposePeace(civ: Civilization, name: String): String {
++        val other = civ.known(name)
++        if (!civ.isAtWarWith(other)) throw IllegalArgumentException("We are not at war with $name")
++        val diplomacy = civ.getDiplomacyManager(other)!!
++        if (diplomacy.hasFlag(DiplomacyFlags.DeclaredWar)) throw IllegalArgumentException("Too soon: ${diplomacy.getFlag(DiplomacyFlags.DeclaredWar)} more turns of war before peace can be discussed")
++        if (diplomacy.hasFlag(DiplomacyFlags.DeclinedPeace)) throw IllegalArgumentException("$name declined peace recently; wait ${diplomacy.getFlag(DiplomacyFlags.DeclinedPeace)} turns")
++        val trade = Trade()
++        val treaty = TradeOffer(Constants.peaceTreaty, TradeOfferType.Treaty, speed = civ.gameInfo.speed)
++        trade.ourOffers.add(treaty)
++        trade.theirOffers.add(treaty)
++        val acceptable = TradeEvaluation().isTradeAcceptable(trade.reverse(), other, civ)
++        other.tradeRequests.add(TradeRequest(civ.civID, trade.reverse()))
++        pending += Triple(civ.civName, other.civName, "peace")
++        log(civ, "We proposed peace to ${other.civName}.")
++        return "Peace proposed to $name; they answer on their turn and seem ${if (acceptable) "willing" else "unwilling"}."
++    }
++
++    fun proposeFriendship(civ: Civilization, name: String): String {
++        val other = civ.known(name)
++        if (!civ.diplomacyFunctions.canSignDeclarationOfFriendshipWith(other)) throw IllegalArgumentException("A declaration of friendship with $name is not possible now (at war, already friends, or recently declined)")
++        if (other.popupAlerts.any { it.type == AlertType.DeclarationOfFriendship && it.value == civ.civID }) throw IllegalArgumentException("Already proposed; $name answers on their turn")
++        other.popupAlerts.add(PopupAlert(AlertType.DeclarationOfFriendship, civ.civID))
++        log(civ, "We proposed a declaration of friendship to ${other.civName}.")
++        return "Friendship proposed to $name; they answer on their turn."
++    }
++
++    fun giftGold(civ: Civilization, name: String, gold: Int): String {
++        val other = civ.known(name)
++        if (!other.isCityState) throw IllegalArgumentException("$name is not a city-state; trade with them instead")
++        if (gold <= 0) throw IllegalArgumentException("Gift must be positive")
++        if (civ.gold < gold) throw IllegalArgumentException("Treasury has only ${civ.gold} gold")
++        val influence = other.cityStateFunctions.influenceGainedByGift(civ, gold)
++        other.cityStateFunctions.receiveGoldGift(civ, gold)
++        val now = other.getDiplomacyManager(civ)!!.getInfluence().toInt()
++        log(civ, "We gave $gold gold to ${other.civName} (+$influence influence, now $now).")
++        return "Gave $gold gold to $name: +$influence influence, now $now" + (other.allyCiv?.let { ally -> "; their ally is ${ally.civName}" } ?: "")
++    }
++
++    /** Standing relations for the briefing */
++    fun relations(civ: Civilization): List<Map<String, Any?>> =
++        civ.getKnownCivs().filter { !it.isBarbarian && !it.isSpectator() && it.isAlive() }.map { other ->
++            val ours = civ.getDiplomacyManager(other)!!
++            val theirs = other.getDiplomacyManager(civ)
++            val entry = linkedMapOf<String, Any?>(
++                "civ" to other.civName,
++                "status" to ours.diplomaticStatus.name,
++                "theirAttitude" to theirs?.relationshipLevel()?.name,
++            )
++            if (other.isCityState) {
++                entry["cityState"] = other.cityStateType.name
++                entry["influence"] = theirs?.getInfluence()?.toInt()
++                entry["ally"] = other.allyCiv?.civName
++                entry["protectedByUs"] = ours.diplomaticStatus == DiplomaticStatus.Protector
++            } else {
++                entry["cities"] = other.cities.size
++                entry["score"] = other.calculateTotalScore().toInt()
++                entry["militaryStrength"] = other.getStatForRanking(com.unciv.ui.screens.victoryscreen.RankingType.Force)
++                entry["techs"] = other.tech.techsResearched.size
++                entry["friendship"] = ours.hasFlag(DiplomacyFlags.DeclarationOfFriendship)
++                entry["openBordersForUs"] = theirs?.hasOpenBorders ?: false
++                entry["theirGrievances"] = theirs?.diplomaticModifiers?.filter { it.value < 0 }?.keys?.toList()
++                entry["atWarWith"] = other.getKnownCivs().filter { it.isMajorCiv() && other.isAtWarWith(it) }.map { it.civName }.toList()
++                entry["dealsInForce"] = ours.trades.map { it.brief() }
++                val ourLuxuries = luxuries(civ); val theirLuxuries = luxuries(other)
++                entry["luxuriesTheyLack"] = (ourLuxuries.keys - theirLuxuries.keys).toList()
++                entry["luxuriesWeLack"] = (theirLuxuries.keys - ourLuxuries.keys).toList()
++            }
++            entry
++        }.toList()
++
++    /** Every deal in force, as "Civ: terms" - compared turn to turn so the log can say exactly what began and ended */
++    fun dealsInForce(civ: Civilization): Set<String> =
++        civ.diplomacy.values.flatMap { manager -> manager.trades.map { "${manager.otherCivName}: ${it.brief().replace(Regex(" for \\d+ turns"), "")}" } }.toSet() // durations tick down, the deal is the same
++
++    private fun luxuries(civ: Civilization) = civ.getCivResourcesByName()
++        .filter { it.value > 0 && civ.gameInfo.ruleset.tileResources[it.key]?.resourceType?.name == "Luxury" }
++
++    /** What could be traded with each major civ, for the options */
++    fun tradeOptions(civ: Civilization): Map<String, Any?> {
++        val resources = civ.getCivResourcesByName()
++        return mapOf(
++            "ourLuxuries" to luxuries(civ),
++            "ourSpareLuxuries" to resources.filter { it.value > 1 && civ.gameInfo.ruleset.tileResources[it.key]?.resourceType?.name == "Luxury" }.keys.toList(),
++            "ourGold" to civ.gold,
++            "with" to civ.getKnownCivs().filter { it.isMajorCiv() && it.isAlive() && !civ.isAtWarWith(it) }.map { other ->
++                val logic = TradeLogic(civ, other)
++                mapOf("civ" to other.civName,
++                    "weCanOffer" to logic.ourAvailableOffers.filter { it.type !in hiddenOffers && it.amount > 0 }.map { it.name + if (it.amount > 1) " x${it.amount}" else "" },
++                    "theyCanOffer" to logic.theirAvailableOffers.filter { it.type !in hiddenOffers && it.amount > 0 }.map { it.name + if (it.amount > 1) " x${it.amount}" else "" })
++            }.toList(),
++            "cityStates" to civ.getKnownCivs().filter { it.isCityState && it.isAlive() }.map { state ->
++                mapOf("civ" to state.civName, "type" to state.cityStateType.name,
++                    "influence" to state.getDiplomacyManager(civ)?.getInfluence()?.toInt(),
++                    "influenceFor250Gold" to state.cityStateFunctions.influenceGainedByGift(civ, 250))
++            }.toList(),
++            "note" to "Offers: luxury/strategic resource names, 'Gold' (amount), 'Gold per turn' (amount), 'Open Borders', 'Research Agreement', 'Defensive Pact', 'Embassy'. Friendship, peace and trades are answered by the other civ on its turn - watch the log."
++        )
++    }
++}
+diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
+new file mode 100644
+index 0000000..c85c750
+--- /dev/null
++++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
+@@ -0,0 +1,726 @@
++package com.unciv.app.desktop.ruler
++
++import com.badlogic.gdx.utils.JsonReader
++import com.badlogic.gdx.utils.JsonValue
++import com.sun.net.httpserver.HttpExchange
++import com.sun.net.httpserver.HttpServer
++import com.unciv.Constants
++import com.unciv.UncivGame
++import com.unciv.app.desktop.DesktopLogBackend
++import com.unciv.logic.GameInfo
++import com.unciv.logic.GameStarter
++import com.unciv.logic.automation.RulerOverrides
++import com.unciv.logic.city.City
++import com.unciv.logic.civilization.Civilization
++import com.unciv.logic.civilization.PlayerType
++import com.unciv.logic.civilization.diplomacy.DiplomaticStatus
++import com.unciv.logic.files.UncivFiles
++import com.unciv.logic.map.MapParameters
++import com.unciv.logic.map.MapSize
++import com.unciv.logic.map.mapunit.MapUnit
++import com.unciv.logic.map.tile.Tile
++import com.unciv.models.metadata.GameParameters
++import com.unciv.models.metadata.GameSettings
++import com.unciv.models.metadata.GameSetupInfo
++import com.unciv.models.metadata.Player
++import com.unciv.models.ruleset.INonPerpetualConstruction
++import com.unciv.models.ruleset.RulesetCache
++import com.unciv.models.ruleset.nation.Personality
++import com.unciv.models.ruleset.nation.PersonalityValue
++import com.unciv.models.skins.SkinCache
++import com.unciv.models.stats.Stat
++import com.unciv.models.tilesets.TileSetCache
++import com.unciv.ui.screens.victoryscreen.RankingType
++import com.unciv.utils.Log
++import java.io.File
++import java.net.InetSocketAddress
++import java.util.concurrent.Executors
++
++/**
++ *  Headless game host for "ruler" play: AI civs play themselves, steered by standing orders
++ *  that an outside orchestrator sets over a localhost JSON API.
++ *
++ *  Run with working dir android/assets. Args: <dataDir> [port]
++ */
++object RulerHost {
++    private lateinit var dataDir: File
++    private var gameInfo: GameInfo? = null
++    /** civName -> standing orders */
++    private val orders = HashMap<String, StandingOrders>()
++    private val publicEvents = ArrayList<Map<String, Any?>>()
++    /** civName -> what happened to that civ, turn by turn - the "chancery log" its advisor reads */
++    private val chancery = HashMap<String, ArrayList<Map<String, Any?>>>()
++    private val units = RulerUnits { civ, text -> log(civ, text) }
++    private val diplomacy = RulerDiplomacy { civ, text -> log(civ, text) }
++
++    class StandingOrders {
++        var personality = LinkedHashMap<String, Float>()
++        var research = ArrayList<String>()
++        var policyBranches = ArrayList<String>()
++        /** Buildings and units the officials must never queue on their own */
++        var neverBuild = ArrayList<String>()
++        fun toMap(civ: Civilization? = null) = mapOf(
++            "personality" to personality,
++            "neverBuild" to neverBuild,
++            "research" to research.filter { civ == null || !civ.tech.isResearched(it) },
++            "policyBranches" to policyBranches)
++    }
++
++    @JvmStatic
++    fun main(args: Array<String>) {
++        dataDir = File(args.getOrNull(0) ?: System.getenv("RULER_DATA") ?: "ruler-data").absoluteFile.apply { mkdirs() }
++        val port = (args.getOrNull(1) ?: System.getenv("RULER_PORT"))?.toIntOrNull() ?: 8765
++
++        Log.backend = DesktopLogBackend()
++        val game = UncivGame(true)
++        UncivGame.Current = game
++        game.settings = GameSettings().apply {
++            showTutorials = false
++            turnsBetweenAutosaves = 10000
++            notificationsLogMaxTurns = 30
++        }
++        RulesetCache.loadRulesets(true)
++        TileSetCache.loadTileSetConfigs(true)
++        SkinCache.loadSkinConfigs(true)
++
++        load()
++        RulerOverrides.unitHandler = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && units.handle(unit) }
++
++        val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
++        server.executor = Executors.newSingleThreadExecutor() // game state is not thread-safe
++        server.createContext("/") { exchange -> handle(exchange) }
++        server.start()
++        println("RulerHost listening on http://127.0.0.1:$port, data in $dataDir")
++    }
++
++    //region HTTP
++
++    private class ApiError(val status: Int, message: String) : Exception(message)
++
++    private class Png(val bytes: ByteArray)
++
++    private fun handle(exchange: HttpExchange) {
++        var status = 200
++        val response: Any? = try {
++            val body = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
++            val json = if (body.isBlank()) JsonValue(JsonValue.ValueType.`object`) else JsonReader().parse(body)
++            val query = (exchange.requestURI.rawQuery ?: "").split("&").filter { "=" in it }
++                .associate { it.substringBefore("=") to java.net.URLDecoder.decode(it.substringAfter("="), "UTF-8") }
++            route(exchange.requestMethod, exchange.requestURI.path, query, json)
++        } catch (ex: ApiError) {
++            status = ex.status
++            mapOf("error" to ex.message)
++        } catch (ex: Throwable) {
++            ex.printStackTrace()
++            status = 500
++            mapOf("error" to ex.toString())
++        }
++        val bytes = if (response is Png) response.bytes else Json.write(response).toByteArray()
++        exchange.responseHeaders.add("Content-Type", if (response is Png) "image/png" else "application/json")
++        exchange.sendResponseHeaders(status, bytes.size.toLong())
++        exchange.responseBody.use { it.write(bytes) }
++    }
++
++    private fun route(method: String, path: String, query: Map<String, String>, json: JsonValue): Any? {
++        fun civ() = ruledCiv(query["civ"] ?: throw ApiError(400, "Missing ?civ="))
++        val since = query["since"]?.toIntOrNull() ?: -1
++        return when ("$method $path") {
++            "GET /state" -> state()
++            "POST /new" -> newGame(json)
++            "POST /advance" -> advance(json.getInt("turns", 10))
++            "GET /briefing" -> briefing(civ(), query["since"]?.toIntOrNull())
++            "GET /options" -> options(civ())
++            "GET /log" -> chanceryLog(civ(), since)
++            "GET /map.png" -> Png(MapRenderer.render(civ()))
++            "GET /orders" -> civ().let { orders.getOrPut(it.civName) { StandingOrders() }.toMap(it) }
++            "POST /orders" -> setOrders(civ(), json)
++            "GET /events" -> publicEvents.filter { (it["turn"] as Int) > since }
++            else -> throw ApiError(404, "No route $method $path")
++        }
++    }
++
++    private fun game() = gameInfo ?: throw ApiError(409, "No game running - POST /new first")
++    /** "1250 BC" / "AD 400" for a turn of the running game */
++    private fun yearText(turn: Int): String {
++        val year = game().getYear(turn - game().turns)
++        return if (year < 0) "${-year} BC" else "AD $year"
++    }
++    private fun ruledCiv(name: String): Civilization {
++        val civ = game().civilizations.firstOrNull { it.civName == name } ?: throw ApiError(404, "No civ named $name")
++        if (civ.civID !in RulerOverrides.ruledCivs) throw ApiError(403, "$name has no ruler")
++        return civ
++    }
++    private fun GameInfo.majorCivs() = civilizations.filter { it.isMajorCiv() && !it.isSpectator() }
++
++    //endregion
++    //region Game lifecycle
++
++    private fun newGame(json: JsonValue): Any? {
++        val ruled = json.get("ruled")?.asStringArray()?.toList() ?: throw ApiError(400, "Missing ruled: [nation names]")
++        val others = json.get("others")?.asStringArray()?.toList() ?: listOf()
++        val newGame = GameStarter.startNewGame(GameSetupInfo(
++            GameParameters().apply {
++                speed = json.getString("speed", "Quick")
++                difficulty = json.getString("difficulty", "Prince")
++                numberOfCityStates = json.getInt("cityStates", 4)
++                players = ArrayList<Player>().apply {
++                    for (nation in ruled + others) add(Player(nation))
++                    add(Player(Constants.spectator, PlayerType.Human))
++                }
++            },
++            MapParameters().apply { mapSize = MapSize(json.getString("mapSize", "Small")) }
++        ))
++        gameInfo = newGame
++        UncivGame.Current.gameInfo = newGame
++        orders.clear()
++        publicEvents.clear()
++        chancery.clear()
++        units.orders.clear()
++        for (name in ruled) orders[name] = StandingOrders()
++        registerRuledCivs()
++        save()
++        return state()
++    }
++
++    private fun registerRuledCivs() {
++        RulerOverrides.ruledCivs.clear()
++        RulerOverrides.personalities.clear()
++        for ((civName, standing) in orders) {
++            val civ = game().civilizations.first { it.civName == civName }
++            RulerOverrides.ruledCivs += civ.civID
++            applyPersonality(civ, standing)
++        }
++    }
++
++    private fun save() {
++        val game = gameInfo ?: return
++        val saveData = UncivFiles.gameInfoToString(game, forceZip = true)
++        File(dataDir, "save.unciv").writeText(saveData)
++        // Also into the dev GUI's save list (working dir is android/assets), so `gradlew desktop:run` can watch the world as spectator
++        File("SaveFiles").mkdirs()
++        File("SaveFiles/Ruler game").writeText(saveData)
++        File(dataDir, "host.json").writeText(Json.write(mapOf(
++            "orders" to orders.mapValues { it.value.toMap() },
++            "publicEvents" to publicEvents,
++            "chancery" to chancery,
++            "unitOrders" to units.toMap()
++        )))
++    }
++
++    private fun load() {
++        val saveFile = File(dataDir, "save.unciv")
++        val hostFile = File(dataDir, "host.json")
++        if (!saveFile.exists() || !hostFile.exists()) return
++        val loaded = UncivFiles.gameInfoFromString(saveFile.readText())
++        gameInfo = loaded
++        UncivGame.Current.gameInfo = loaded
++        val host = JsonReader().parse(hostFile.readText())
++        for (entry in host.get("orders")) orders[entry.name] = StandingOrders().apply { readFrom(entry) }
++        for (event in host.get("publicEvents"))
++            publicEvents += mapOf("turn" to event.getInt("turn"), "year" to event.getString("year", ""), "text" to event.getString("text"))
++        host.get("chancery")?.forEach { civLog ->
++            chancery[civLog.name] = ArrayList(civLog.map { mapOf("turn" to it.getInt("turn"), "text" to it.getString("text")) })
++        }
++        units.load(host.get("unitOrders"))
++        registerRuledCivs()
++        println("Loaded game at turn ${loaded.turns}, ruled: ${orders.keys}")
++    }
++
++    private fun state(): Map<String, Any?> {
++        val game = gameInfo ?: return mapOf("running" to false)
++        val winner = game.majorCivs().firstOrNull { it.victoryManager.hasWon() }
++        return mapOf(
++            "running" to true,
++            "turn" to game.turns,
++            "year" to yearText(game.turns),
++            "ruled" to orders.keys.toList(),
++            "majorCivs" to game.majorCivs().map { mapOf("civ" to it.civName, "alive" to it.isAlive()) },
++            "winner" to winner?.civName,
++            "victoryType" to winner?.victoryManager?.getVictoryTypeAchieved()
++        )
++    }
++
++    //endregion
++    //region Orders
++
++    private fun StandingOrders.readFrom(json: JsonValue) {
++        json.get("personality")?.let { values ->
++            for (entry in values) {
++                if (entry.isNull) continue
++                if (PersonalityValue.entries.none { it.name == entry.name })
++                    throw ApiError(400, "Unknown personality value ${entry.name}, valid: ${PersonalityValue.entries.joinToString { it.name }}")
++                personality[entry.name] = entry.asFloat().coerceIn(0f, 10f)
++            }
++        }
++        json.get("research")?.let { research = ArrayList(it.asStringArray().toList()) }
++        json.get("policyBranches")?.let { policyBranches = ArrayList(it.asStringArray().toList()) }
++        json.get("neverBuild")?.let { neverBuild = ArrayList(it.asStringArray().toList()) }
++    }
++
++    private fun applyPersonality(civ: Civilization, standing: StandingOrders) {
++        // Rulers decide on war themselves, so by default the automation never declares it
++        val personality = Personality().apply { this[PersonalityValue.DeclareWar] = 0f }
++        for ((name, value) in standing.personality) personality[PersonalityValue.valueOf(name)] = value
++        RulerOverrides.personalities[civ.civID] = personality
++    }
++
++    private fun Civilization.city(name: String): City = cities.firstOrNull { it.name == name } ?: throw ApiError(400, "No city named $name")
++    private fun Civilization.construction(name: String): INonPerpetualConstruction =
++        (gameInfo.ruleset.buildings[name] ?: gameInfo.ruleset.units[name]) ?: throw ApiError(400, "Unknown building or unit $name")
++    private fun whyNot(city: City, construction: INonPerpetualConstruction) =
++        construction.getRejectionReasons(city.cityConstructions).filter { it.type.shouldShow }.map { it.errorMessage }.toList()
++
++    private fun setOrders(civ: Civilization, json: JsonValue): Any? {
++        val ruleset = civ.gameInfo.ruleset
++        val standing = orders.getOrPut(civ.civName) { StandingOrders() }
++        val alreadyKnown = ArrayList<String>()
++        json.get("research")?.asStringArray()?.forEach {
++            if (it !in ruleset.technologies) throw ApiError(400, "Unknown technology $it")
++            if (civ.tech.isResearched(it)) alreadyKnown += it
++        }
++        json.get("policyBranches")?.asStringArray()?.forEach {
++            if (it !in ruleset.policyBranches) throw ApiError(400, "Unknown policy branch $it, valid: ${ruleset.policyBranches.keys}")
++        }
++        standing.readFrom(json)
++        applyPersonality(civ, standing)
++
++        val done = ArrayList<String>()
++        val failed = ArrayList<String>()
++
++        // Replace a city's whole build queue; the officials then leave it alone until it runs out
++        json.get("queue")?.forEach { order ->
++            val city = civ.city(order.getString("city"))
++            val items = order.get("items").asStringArray().toList()
++            val constructions = items.map { civ.construction(it) }
++            for ((index, construction) in constructions.withIndex()) {
++                val reasons = whyNot(city, construction)
++                if (reasons.isNotEmpty()) throw ApiError(400, "${city.name} cannot build ${items[index]}: ${reasons.joinToString()}")
++            }
++            city.cityConstructions.constructionQueue.clear()
++            for (construction in constructions) city.cityConstructions.addToQueue(construction)
++            city.cityConstructions.currentConstructionIsUserSet = true
++            done += "${city.name} queue is now: ${city.cityConstructions.constructionQueue.joinToString()}"
++        }
++        // Put something at the front of a city's build queue
++        json.get("build")?.forEach { order ->
++            val city = civ.city(order.getString("city"))
++            val item = order.getString("item")
++            val construction = civ.construction(item)
++            val reasons = whyNot(city, construction)
++            if (reasons.isNotEmpty()) throw ApiError(400, "${city.name} cannot build $item: ${reasons.joinToString()}")
++            city.cityConstructions.constructionQueue.remove(item)
++            city.cityConstructions.addToQueue(construction, addToTop = true)
++            city.cityConstructions.currentConstructionIsUserSet = true
++            done += "${city.name} queue is now: ${city.cityConstructions.constructionQueue.joinToString()}"
++        }
++        // Buy outright with gold
++        json.get("purchase")?.forEach { order ->
++            val city = civ.city(order.getString("city"))
++            val item = order.getString("item")
++            val construction = civ.construction(item)
++            val reasons = whyNot(city, construction)
++            val cost = construction.getStatBuyCost(city, Stat.Gold)
++            val problem = when {
++                reasons.isNotEmpty() -> reasons.joinToString()
++                !construction.canBePurchasedWithStat(city, Stat.Gold) || cost == null -> "$item cannot be bought with gold"
++                civ.gold < cost -> "$item costs $cost gold, treasury has ${civ.gold}"
++                else -> null
++            }
++            if (problem != null) {
++                failed += "Could not buy $item in ${city.name}: $problem"
++            } else if (city.cityConstructions.purchaseConstruction(construction, -1, false)) {
++                done += "Bought $item in ${city.name} for $cost gold (${civ.gold} left)"
++                log(civ, "Bought $item in ${city.name} for $cost gold.")
++            } else failed += "Could not buy $item in ${city.name}: no room to place it"
++        }
++        // Unit orders, diplomacy - each reports its own success or failure
++        fun tryEach(list: JsonValue?, action: (JsonValue) -> String) {
++            list?.forEach { entry ->
++                try { done += action(entry) } catch (ex: IllegalArgumentException) { failed += ex.message ?: "failed" }
++            }
++        }
++        tryEach(json.get("units")) { units.give(civ, it) }
++        tryEach(json.get("trade")) { diplomacy.proposeTrade(civ, it) }
++        tryEach(json.get("peace")) { diplomacy.proposePeace(civ, it.asString()) }
++        tryEach(json.get("friendship")) { diplomacy.proposeFriendship(civ, it.asString()) }
++        tryEach(json.get("gift")) { diplomacy.giftGold(civ, it.getString("cityState"), it.getInt("gold")) }
++        // Declare war
++        json.get("declareWar")?.asStringArray()?.forEach { targetName ->
++            val target = civ.getKnownCivs().firstOrNull { it.civName == targetName } ?: throw ApiError(400, "We have not met $targetName")
++            val diplomacy = civ.getDiplomacyManager(target)!!
++            if (diplomacy.diplomaticStatus == DiplomaticStatus.War) throw ApiError(400, "Already at war with $targetName")
++            if (!diplomacy.canDeclareWar()) throw ApiError(400, "Cannot declare war on $targetName now")
++            diplomacy.declareWar()
++            addPublicEvent("${civ.civName} has declared war on $targetName!")
++            log(civ, "We declared war on $targetName.")
++            done += "Declared war on $targetName"
++        }
++        applyStandingOrders(civ)
++        save()
++        if (alreadyKnown.isNotEmpty()) failed += "Already known, dropped from the research goals: ${alreadyKnown.joinToString()}"
++        standing.research.removeAll { civ.tech.isResearched(it) }
++        // City focus: which yields the citizens work for
++        json.get("cityFocus")?.forEach { order ->
++            val city = civ.city(order.getString("city"))
++            val focus = com.unciv.logic.city.CityFocus.entries.firstOrNull { it.name.equals(order.getString("focus"), ignoreCase = true) || it.name.equals(order.getString("focus") + "Focus", ignoreCase = true) }
++                ?: throw ApiError(400, "Unknown focus; use ${com.unciv.logic.city.CityFocus.entries.joinToString { it.name }}")
++            city.setCityFocus(focus)
++            city.reassignAllPopulation()
++            done += "${city.name} now works its tiles for ${focus.name}"
++        }
++        return mapOf("orders" to standing.toMap(civ), "done" to done, "failed" to failed,
++            "researchQueue" to civ.tech.techsToResearch, "gold" to civ.gold)
++    }
++
++    /** Called before every turn so the automation finds research and policies already chosen the ruler's way */
++    private fun applyStandingOrders(civ: Civilization) {
++        val standing = orders[civ.civName] ?: return
++        val ruleset = civ.gameInfo.ruleset
++
++        val goal = standing.research.firstOrNull { !civ.tech.isResearched(it) }
++        if (goal != null) {
++            val path = civ.tech.getRequiredTechsToDestination(ruleset.technologies[goal]!!).map { it.name }
++            if (path.isNotEmpty() && civ.tech.techsToResearch != path) {
++                civ.tech.techsToResearch.clear()
++                civ.tech.techsToResearch.addAll(path)
++            }
++        }
++
++        while (civ.policies.canAdoptPolicy()) {
++            val policy = standing.policyBranches.asSequence().mapNotNull { ruleset.policyBranches[it] }
++                .firstNotNullOfOrNull { branch ->
++                    if (civ.policies.isAdoptable(branch)) branch
++                    else branch.policies.firstOrNull { civ.policies.isAdoptable(it) }
++                } ?: break // nothing preferred is available - the automation picks
++            civ.policies.adopt(policy)
++            log(civ, "Adopted the policy ${policy.name}.")
++        }
++    }
++
++    //endregion
++    //region Turns, chancery log and public events
++
++    private fun log(civ: Civilization, text: String) {
++        chancery.getOrPut(civ.civName) { ArrayList() } += mapOf("turn" to civ.gameInfo.turns, "text" to text)
++    }
++
++    private fun chanceryLog(civ: Civilization, since: Int) =
++        (chancery[civ.civName] ?: emptyList()).filter { (it["turn"] as Int) > since }
++
++    private val noise = listOf("has no work to do", "will end in", "will end next turn", "can be promoted", "assigned you a new quest", "no longer needs your help")
++
++    /** What one ruled civ looked like before a turn, to explain afterwards what the officials did */
++    private class CivSnapshot(civ: Civilization) {
++        val researching = civ.tech.currentTechnologyName()
++        val queues = civ.cities.associate { it.name to it.cityConstructions.constructionQueue.toList() }
++        val units = civ.units.getCivUnits().associate { it.id to Pair(it.name, it.getTile()) }
++        val gold = civ.gold
++        val happiness = civ.getHappiness()
++        val deals = RulerHost.dealsOf(civ)
++    }
++
++    internal fun dealsOf(civ: Civilization) = diplomacy.dealsInForce(civ)
++
++    private fun recordChancery(civ: Civilization, before: CivSnapshot) {
++        val turn = civ.gameInfo.turns
++        // The game's own notifications first - they cover research, buildings, combat, diplomacy
++        val notifications = civ.notificationsLog.lastOrNull()?.takeIf { it.turn == turn - 1 }?.notifications ?: emptyList()
++        // Other civs answer on their own turn, after ours - those notices are still in the current list
++        diplomacy.settleAnswers(civ, notifications.map { it.text } + civ.notifications.map { it.text })
++        for (notification in notifications) {
++            if (noise.any { it in notification.text }) continue
++            log(civ, notification.text.replace("[", "").replace("]", ""))
++        }
++        // Then what the officials changed on their own
++        for (city in civ.cities) {
++            val was = before.queues[city.name] ?: continue
++            val now = city.cityConstructions.constructionQueue
++            val built = notifications.filter { "has been built in [${city.name}]" in it.text }.map { it.text.substringAfter("[").substringBefore("]") }
++            for (item in was) if (item !in now && item !in built) {
++                val construction = civ.gameInfo.ruleset.buildings[item] ?: civ.gameInfo.ruleset.units[item]
++                val reasons = construction?.let { whyNot(city, it) } ?: emptyList()
++                log(civ, "The officials dropped $item from ${city.name}'s queue" + (if (reasons.isNotEmpty()) " because ${reasons.joinToString()}." else ", replacing it with their own choice."))
++            }
++            for (item in now) if (item !in was)
++                log(civ, "The officials queued $item in ${city.name}.")
++        }
++        for (city in civ.cities) if (city.name !in before.queues) log(civ, "Founded ${city.name}.")
++        val alive = civ.units.getCivUnits().map { it.id }.toSet()
++        for ((id, unit) in before.units) if (id !in alive && unit.first != "Settler") // settlers vanish by founding
++            log(civ, if (unit.first.startsWith("Great ")) "Our ${unit.first} is gone ${describeWhere(civ, unit.second)} - spent on its ability, or captured."
++                else "Our ${unit.first} was lost ${describeWhere(civ, unit.second)}.")
++        applyStandingOrders(civ) // a finished goal leaves the queue empty until the next goal's path is set - not idleness
++        val researching = civ.tech.currentTechnologyName()
++        if (researching == null) {
++            val cheapest = civ.gameInfo.ruleset.technologies.values.filter { civ.tech.canBeResearched(it.name) }.minByOrNull { it.cost }
++            if (cheapest != null) {
++                civ.tech.techsToResearch.add(cheapest.name)
++                log(civ, "Research had run out of goals, so the officials started ${cheapest.name}. Give new research goals.")
++            }
++        } else if (before.researching != researching && researching !in (orders[civ.civName]?.research ?: emptyList()))
++            log(civ, "Research is now on $researching.")
++        // Deals: say exactly what came into force and what ended
++        val dealsNow = diplomacy.dealsInForce(civ)
++        for (deal in dealsNow - before.deals) log(civ, "A deal came into force with $deal.")
++        for (deal in before.deals - dealsNow) log(civ, "A deal ended with $deal.")
++        // Great People wait for the ruler's word instead of being spent by the officials
++        for (unit in civ.units.getCivUnits()) if (unit.id !in before.units && unit.name.startsWith("Great ") && unit.id !in units.orders) {
++            units.orders[unit.id] = RulerUnits.Order("hold", null, null)
++            log(civ, "A ${unit.name} #${unit.id} was born ${describeWhere(civ, unit.getTile())} and awaits orders (use, move, or release to the officials).")
++        }
++        // The ruler's never-build list beats the officials' own choices
++        val forbidden = orders[civ.civName]?.neverBuild ?: emptyList<String>()
++        if (forbidden.isNotEmpty()) for (city in civ.cities) repeat(3) {
++            val current = city.cityConstructions.currentConstructionName()
++            if (current in forbidden && !city.cityConstructions.currentConstructionIsUserSet) {
++                city.cityConstructions.constructionQueue.remove(current)
++                log(civ, "The officials wanted $current in ${city.name}; it is on the never-build list, so it was struck.")
++                if (city.cityConstructions.constructionQueue.isEmpty()) city.cityConstructions.chooseNextConstruction()
++            }
++        }
++        if (civ.gold < before.gold - 40) log(civ, "The officials spent ${before.gold - civ.gold} gold (treasury now ${civ.gold}).")
++        if (before.happiness >= 0 && civ.getHappiness() < 0) log(civ, "The people have become unhappy (${civ.getHappiness()}).")
++    }
++
++    private fun describeWhere(civ: Civilization, tile: Tile): String {
++        val nearest = civ.cities.minByOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: return "far from home"
++        val distance = nearest.getCenterTile().aerialDistanceTo(tile)
++        return if (distance == 0) "in ${nearest.name}" else "$distance tiles from ${nearest.name}"
++    }
++
++    private class WorldSnapshot(game: GameInfo) {
++        val wars = HashSet<Set<String>>()
++        val cityOwners = HashMap<String, String>()
++        val wonders = HashMap<String, String>()
++        val eras = HashMap<String, String>()
++        val alive = HashSet<String>()
++        init {
++            for (civ in game.civilizations) {
++                if (civ.isBarbarian || civ.isSpectator()) continue
++                if (civ.isAlive()) alive += civ.civName
++                if (civ.isMajorCiv()) eras[civ.civName] = civ.getEra().name
++                for (city in civ.cities) {
++                    cityOwners[city.name] = civ.civName
++                    for (building in city.cityConstructions.getBuiltBuildings())
++                        if (building.isWonder) wonders[building.name] = civ.civName
++                }
++                for (diplomacy in civ.diplomacy.values)
++                    if (diplomacy.diplomaticStatus == DiplomaticStatus.War && !diplomacy.otherCiv.isBarbarian)
++                        wars += setOf(civ.civName, diplomacy.otherCivName)
++            }
++        }
++    }
++
++    private fun addPublicEvent(text: String) {
++        publicEvents += mapOf("turn" to game().turns, "year" to yearText(game().turns), "text" to text)
++    }
++
++    private fun recordPublicEvents(before: WorldSnapshot, after: WorldSnapshot) {
++        for (war in after.wars - before.wars) addPublicEvent("War has broken out between ${war.joinToString(" and ")}.")
++        for (war in before.wars - after.wars)
++            if (war.all { it in after.alive }) addPublicEvent("${war.joinToString(" and ")} have made peace.")
++        for ((city, owner) in after.cityOwners) {
++            val previousOwner = before.cityOwners[city]
++            if (previousOwner == null) {
++                if (owner in after.eras) addPublicEvent("$owner founded the city of $city.") // city-states founding themselves is not news
++            }
++            else if (previousOwner != owner) addPublicEvent("$owner captured $city from $previousOwner!")
++        }
++        for (city in before.cityOwners.keys - after.cityOwners.keys) addPublicEvent("The city of $city has been destroyed.")
++        for ((wonder, owner) in after.wonders)
++            if (wonder !in before.wonders) addPublicEvent("$owner completed the wonder $wonder.")
++        for ((civ, era) in after.eras)
++            if (before.eras[civ] != era) addPublicEvent("$civ entered the $era.")
++        for (civ in before.alive - after.alive) addPublicEvent("$civ has been destroyed.")
++    }
++
++    private fun advance(turns: Int): Any? {
++        val game = game()
++        if (game.majorCivs().any { it.victoryManager.hasWon() }) throw ApiError(409, "The game is over")
++        val startTurn = game.turns
++        val roundStart = WorldSnapshot(game)
++        var stopReason: String? = null
++        val ruledCivs = orders.keys.map { name -> game.civilizations.first { it.civName == name } }
++
++        for (i in 1..turns) {
++            val before = WorldSnapshot(game)
++            val civSnapshots = ruledCivs.associateWith { CivSnapshot(it) }
++            for (civ in ruledCivs) applyStandingOrders(civ)
++            game.nextTurn()
++            val after = WorldSnapshot(game)
++            recordPublicEvents(before, after)
++            for (civ in ruledCivs) recordChancery(civ, civSnapshots[civ]!!)
++
++            val winner = game.majorCivs().firstOrNull { it.victoryManager.hasWon() }
++            stopReason = when {
++                winner != null -> "${winner.civName} has won a ${winner.victoryManager.getVictoryTypeAchieved()} victory"
++                else -> orders.keys.firstNotNullOfOrNull { ruled -> councilEvent(ruled, roundStart, after) }
++            }
++            if (stopReason != null) break
++        }
++        save()
++        return mapOf(
++            "fromTurn" to startTurn,
++            "fromYear" to yearText(startTurn),
++            "turn" to game.turns,
++            "year" to yearText(game.turns),
++            "stoppedEarly" to stopReason,
++            "publicEvents" to publicEvents.filter { (it["turn"] as Int) > startTurn },
++            "rankings" to rankings()
++        )
++    }
++
++    /** Something a ruler must hear about right away, ending the round early */
++    private fun councilEvent(ruled: String, roundStart: WorldSnapshot, now: WorldSnapshot): String? {
++        if (ruled !in now.alive) return "$ruled has been destroyed"
++        val newEnemies = (now.wars - roundStart.wars).filter { ruled in it }.flatten().filter { it != ruled }
++            .filter { enemy -> game().civilizations.first { it.civName == enemy }.isMajorCiv() }
++        if (newEnemies.isNotEmpty()) return "$ruled is now at war with ${newEnemies.joinToString()}"
++        val lost = roundStart.cityOwners.filter { it.value == ruled && now.cityOwners[it.key] != ruled }.keys
++        if (lost.isNotEmpty()) return "$ruled lost ${lost.joinToString()}"
++        return null
++    }
++
++    private fun rankings() = game().majorCivs().filter { it.isAlive() }
++        .sortedByDescending { it.calculateTotalScore() }
++        .map { mapOf("civ" to it.civName, "score" to it.calculateTotalScore().toInt(), "cities" to it.cities.size) }
++
++    //endregion
++    //region Briefing
++
++    private fun briefing(civ: Civilization, logSince: Int? = null): Map<String, Any?> {
++        val next = civ.stats.statsForNextTurn
++        val turn = civ.gameInfo.turns
++        return mapOf(
++            "civ" to civ.civName,
++            "turn" to turn,
++            "year" to yearText(turn),
++            "era" to civ.getEra().name,
++            "score" to civ.calculateTotalScore().toInt(),
++            "gold" to civ.gold,
++            "perTurn" to mapOf("gold" to next.gold.toInt(), "science" to next.science.toInt(), "culture" to next.culture.toInt()),
++            "happiness" to civ.getHappiness(),
++            "happinessBreakdown" to civ.stats.getHappinessBreakdown().filter { it.value != 0f }.mapValues { it.value.toInt() },
++            "warnings" to warnings(civ),
++            "researching" to civ.tech.currentTechnologyName(),
++            "researchQueue" to civ.tech.techsToResearch,
++            "techsResearched" to civ.tech.techsResearched.size,
++            "policies" to civ.policies.getAdoptedPolicies().toList(),
++            "culture" to mapOf("stored" to civ.policies.storedCulture, "neededForNextPolicy" to civ.policies.getCultureNeededForNextPolicy()),
++            "militaryStrength" to civ.getStatForRanking(RankingType.Force),
++            "units" to civ.units.getCivUnits().map { units.describeUnit(civ, it) }.toList(),
++            "citySites" to units.citySites(civ),
++            "cities" to civ.cities.map { city ->
++                val stats = city.cityStats.currentCityStats
++                mapOf("name" to city.name, "pop" to city.population.population, "capital" to city.isCapital(),
++                    "buildQueue" to city.cityConstructions.constructionQueue,
++                    "turnsLeft" to city.cityConstructions.currentConstructionName().let { current ->
++                        if (current.isEmpty()) null else city.cityConstructions.turnsToConstruction(current) },
++                    "production" to stats.production.toInt(), "foodSurplus" to stats.food.toInt(),
++                    "unhappiness" to city.cityStats.happinessList.values.filter { it < 0 }.sum().toInt(),
++                    "focus" to city.getCityFocus().name,
++                    "health" to city.health, "garrison" to city.getCenterTile().militaryUnit?.name)
++            },
++            "threats" to threats(civ),
++            "knownCivs" to diplomacy.relations(civ),
++            "log" to chanceryLog(civ, logSince ?: (turn - 12)).map { "T${it["turn"]}: ${it["text"]}" },
++            "standingOrders" to orders[civ.civName]?.toMap(civ)
++        )
++    }
++
++    private fun warnings(civ: Civilization): List<String> {
++        val warnings = ArrayList<String>()
++        if (civ.getHappiness() < 0) warnings += "The people are unhappy (${civ.getHappiness()}): growth and production suffer. Luxuries, happiness buildings or fewer new cities help."
++        if (civ.tech.currentTechnologyName() == null) warnings += "Research is idle - give research goals."
++        val standing = orders[civ.civName]
++        val goalsLeft = standing?.research?.count { !civ.tech.isResearched(it) } ?: 0
++        if (standing != null && goalsLeft == 0) warnings += "All research goals are reached - the officials pick techs themselves until new goals are given."
++        else if (goalsLeft == 1) warnings += "Only one research goal left - add more."
++        val bestStrength = civ.units.getCivUnits().maxOfOrNull { it.baseUnit.strength.coerceAtLeast(it.baseUnit.rangedStrength) } ?: 0
++        for (city in civ.cities) {
++            val defender = city.getCenterTile().militaryUnit
++            if (defender == null) warnings += "${city.name} has no defender in it."
++            else if (defender.baseUnit.strength.coerceAtLeast(defender.baseUnit.rangedStrength) * 2 < bestStrength || defender.name == "Scout")
++                warnings += "${city.name} is only held by a ${defender.name} - weak for this age."
++        }
++        for (unit in civ.units.getCivUnits()) if (unit.name.startsWith("Great ") && units.orders[unit.id]?.action == "hold")
++            warnings += "${unit.name} #${unit.id} ${describeWhere(civ, unit.getTile())} awaits orders."
++        if (civ.policies.canAdoptPolicy()) warnings += "A policy can be adopted but none of the preferred branches has one available - add a branch to the policy order."
++        if (civ.units.getCivUnits().any { it.hasUnique(com.unciv.models.ruleset.unique.UniqueType.FoundCity) } && units.citySites(civ).isEmpty())
++            warnings += "We have a Settler but no free land for a city within reach - every site is too close to an existing city or unexplored. Explore further, or disband/keep the Settler."
++        for (city in civ.cities) {
++            if (city.cityConstructions.constructionQueue.isEmpty()) warnings += "${city.name} has an empty build queue."
++            if (city.cityStats.currentCityStats.food < 0) warnings += "${city.name} is starving."
++        }
++        if (civ.gold < 0 || civ.gold + civ.stats.statsForNextTurn.gold * 5 < 0) warnings += "The treasury is running dry (${civ.gold} gold, ${civ.stats.statsForNextTurn.gold.toInt()} per turn)."
++        if (civ.units.getCivUnits().none { !it.isCivilian() }) warnings += "We have no military units at all."
++        return warnings
++    }
++
++    /** Barbarian camps we can see and foreign soldiers close to our cities */
++    private fun threats(civ: Civilization): List<String> {
++        val threats = ArrayList<String>()
++        val tileMap = civ.gameInfo.tileMap
++        for (camp in civ.gameInfo.barbarians.encampments) {
++            if (camp.destroyed) continue
++            val tile = tileMap[camp.position]
++            if (tile !in civ.viewableTiles) continue
++            threats += "Barbarian camp at ${RulerUnits.where(civ, tile)}"
++        }
++        for (tile in civ.viewableTiles) {
++            val unit = tile.militaryUnit ?: continue
++            if (unit.civ == civ || unit.civ.isCityState) continue
++            val nearest = civ.cities.minByOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: continue
++            if (nearest.getCenterTile().aerialDistanceTo(tile) > 4) continue
++            val stance = when {
++                unit.civ.isBarbarian -> "hostile"
++                civ.isAtWarWith(unit.civ) -> "AT WAR"
++                civ.getDiplomacyManager(unit.civ)?.hasFlag(com.unciv.logic.civilization.diplomacy.DiplomacyFlags.DeclarationOfFriendship) == true -> "friend, harmless"
++                else -> "at peace"
++            }
++            threats += "${unit.civ.civName} ${unit.name} (strength ${unit.baseUnit.strength.coerceAtLeast(unit.baseUnit.rangedStrength)}, $stance) at ${RulerUnits.where(civ, tile)}"
++        }
++        return threats
++    }
++
++    private fun options(civ: Civilization): Map<String, Any?> {
++        val ruleset = civ.gameInfo.ruleset
++        return mapOf(
++            "researchableNow" to ruleset.technologies.values.filter { civ.tech.canBeResearched(it.name) }
++                .map { mapOf("tech" to it.name, "turns" to civ.tech.turnsToTech(it.name)) },
++            "researchGoals" to "Any technology name works as a research goal; the path to it is researched automatically.",
++            "futureTechs" to ruleset.technologies.values.filter { !civ.tech.isResearched(it.name) }.map { it.name },
++            "policyBranches" to ruleset.policyBranches.values.map {
++                mapOf("branch" to it.name, "era" to it.era,
++                    "adopted" to civ.policies.isAdopted(it.name),
++                    "complete" to civ.policies.isAdopted("${it.name} Complete"))
++            },
++            "personality" to mapOf(
++                "current" to RulerOverrides.personalities[civ.civID]?.let { p -> PersonalityValue.entries.associate { it.name to p[it] } },
++                "meaning" to mapOf(
++                    "Production/Food/Gold/Science/Culture/Happiness/Faith" to "how much cities favour buildings and tiles that yield that stat when the officials choose",
++                    "Military" to "how large an army the officials keep and how often cities train units on their own",
++                    "Aggressive" to "whether soldiers push out to attack or stay home and defend",
++                    "Expansion" to "how eagerly cities train settlers on their own; 10 means settlers whenever affordable",
++                    "Commerce" to "willingness to trade luxuries and make deals",
++                    "Diplomacy" to "effort spent on city-states and friendships",
++                    "Loyal" to "how much they honour friendships",
++                    "DeclareWar" to "0 = never on their own; higher = they may start wars they think they can win")),
++            "diplomacy" to diplomacy.tradeOptions(civ),
++            "buildable" to civ.cities.associate { city ->
++                city.name to (ruleset.buildings.values.asSequence() + ruleset.units.values.asSequence())
++                    .filter { it.isBuildable(city.cityConstructions) }
++                    .map { construction ->
++                        val buy = construction.getStatBuyCost(city, Stat.Gold)?.takeIf { construction.canBePurchasedWithStat(city, Stat.Gold) }
++                        "${construction.name} (${city.cityConstructions.turnsToConstruction(construction.name)}t" + (buy?.let { ", buy $it gold" } ?: "") + ")"
++                    }.toList()
++            },
++            "gold" to civ.gold,
++            "canDeclareWarOn" to civ.getKnownCivs()
++                .filter { it.isAlive() && !it.isBarbarian && !civ.isAtWarWith(it) && civ.getDiplomacyManager(it)!!.canDeclareWar() }
++                .map { it.civName }.toList()
++        )
++    }
++
++    //endregion
++}
+diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
+new file mode 100644
+index 0000000..2a06ae5
+--- /dev/null
++++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
+@@ -0,0 +1,230 @@
++package com.unciv.app.desktop.ruler
++
++import com.badlogic.gdx.utils.JsonValue
++import com.unciv.logic.automation.unit.CityLocationTileRanker
++import com.unciv.logic.civilization.Civilization
++import com.unciv.logic.map.HexMath
++import com.unciv.logic.map.mapunit.MapUnit
++import com.unciv.logic.map.tile.Tile
++import com.unciv.models.UnitActionType
++import com.unciv.models.ruleset.unique.UniqueType
++import com.unciv.ui.screens.worldscreen.unit.actions.UnitActions
++import kotlin.math.atan2
++import kotlin.math.roundToInt
++
++/**
++ *  A ruler's direct orders to single units. While a unit has an order the automation leaves it alone;
++ *  the order is carried out during the civ's turn via [com.unciv.logic.automation.RulerOverrides.unitHandler].
++ */
++class RulerUnits(private val log: (Civilization, String) -> Unit) {
++
++    /** action: move (then release), settle, fortify/garrison, hold, explore (then release), use (a great person's ability, then release) */
++    class Order(val action: String, val x: Int?, val y: Int?) {
++        /** Where the unit stood last turn and for how many turns, to notice an order that is going nowhere */
++        var lastSpot: String? = null
++        var turnsStuck = 0
++        fun toMap() = mapOf("action" to action, "x" to x, "y" to y)
++    }
++
++    /** unit id -> order */
++    val orders = HashMap<Int, Order>()
++
++    fun load(json: JsonValue?) {
++        orders.clear()
++        json?.forEach { orders[it.name.toInt()] = Order(it.getString("action"), it.get("x")?.takeUnless { v -> v.isNull }?.asInt(), it.get("y")?.takeUnless { v -> v.isNull }?.asInt()) }
++    }
++
++    fun toMap() = orders.mapKeys { it.key.toString() }.mapValues { it.value.toMap() }
++
++    /** Called by the automation for every unit of a ruled civ. True = we handled it, leave it alone. */
++    fun handle(unit: MapUnit): Boolean {
++        val order = orders[unit.id] ?: return false
++        val civ = unit.civ
++        val target = if (order.x != null && order.y != null) civ.gameInfo.tileMap.getIfTileExistsOrNull(order.x, order.y) else null
++
++        if (target != null && order.action == "settle") settleProblem(civ, target)?.let { problem ->
++            // The site went bad on the way (someone settled nearby): say so at once, do not walk on
++            log(civ, "Our Settler's site at ${where(civ, target)} is no longer usable: $problem${nearestSiteHint(civ, unit, target)}. The order is dropped; give a new site.")
++            orders.remove(unit.id)
++            return true
++        }
++        if (target != null && unit.getTile() != target) {
++            if (!unit.movement.canReach(target)) {
++                log(civ, "Our ${unit.name} cannot reach ${where(civ, target)}; the order is dropped and the officials take it back.")
++                orders.remove(unit.id)
++                return false
++            }
++            unit.movement.headTowards(target)
++            if (unit.getTile() != target) {
++                val spot = unit.getTile().position.toString()
++                order.turnsStuck = if (spot == order.lastSpot) order.turnsStuck + 1 else 0
++                order.lastSpot = spot
++                if (order.turnsStuck >= 3) {
++                    val blocker = target.militaryUnit?.takeIf { !unit.isCivilian() } ?: target.civilianUnit?.takeIf { unit.isCivilian() }
++                    log(civ, "Our ${unit.name} #${unit.id} has been stuck for ${order.turnsStuck} turns on its way to ${where(civ, target)}" +
++                        (blocker?.let { " - the tile is held by ${it.civ.civName}'s ${it.name}" } ?: " - the way is blocked") + ". The order is dropped.")
++                    orders.remove(unit.id)
++                    return false
++                }
++                return true // still on the way
++            }
++            log(civ, "Our ${unit.name} arrived at ${where(civ, target)}.")
++        }
++
++        return when (order.action) {
++            "settle" -> {
++                if (UnitActions.invokeUnitAction(unit, UnitActionType.FoundCity)) {
++                    log(civ, "Our Settler founded ${civ.cities.last().name} at ${where(civ, unit.getTile())}.")
++                    orders.remove(unit.id)
++                    true
++                } else {
++                    log(civ, "Our Settler cannot found a city at ${where(civ, unit.getTile())} (too close to another city, or unusable ground); the order is dropped.")
++                    orders.remove(unit.id)
++                    false
++                }
++            }
++            "fortify", "garrison" -> { unit.fortifyIfCan(); true }
++            "use" -> {
++                val used = ABILITIES.firstOrNull { UnitActions.invokeUnitAction(unit, it) }
++                if (used != null) log(civ, "Our ${unit.name} used its ability (${used.name}) at ${where(civ, unit.getTile())}.")
++                else log(civ, "Our ${unit.name} could not use its ability at ${where(civ, unit.getTile())}: nothing to use it on here (trade missions need a city-state's city, improvements need an unimproved tile of ours).")
++                orders.remove(unit.id)
++                used != null
++            }
++            "hold" -> true
++            "disband" -> { log(civ, "Our ${unit.name} #${unit.id} was disbanded."); orders.remove(unit.id); unit.disband(); true }
++            "explore" -> { unit.action = UnitActionType.Explore.value; orders.remove(unit.id); false }
++            else -> { orders.remove(unit.id); true } // "move": arrived, released to the officials from next turn
++        }
++    }
++
++    /** Give an order from the API: {unit: id, action, x?, y?, city?} */
++    fun give(civ: Civilization, json: JsonValue): String {
++        val unitId = json.getInt("unit")
++        val unit = civ.units.getUnitById(unitId) ?: throw IllegalArgumentException("No unit with id $unitId - see the briefing's unit list")
++        val action = json.getString("action", "move")
++        if (action !in listOf("move", "settle", "fortify", "garrison", "hold", "explore", "use", "disband", "release"))
++            throw IllegalArgumentException("Unknown unit action $action; use move, settle, fortify, garrison, hold, explore, use, disband or release")
++        if (action == "disband") { orders.remove(unitId); val name = unit.name; unit.disband(); log(civ, "Our $name #$unitId was disbanded."); return "$name #$unitId disbanded." }
++        if (action == "release") { orders.remove(unitId); return "${unit.name} #$unitId is back under the officials." }
++        if (action == "settle" && !unit.hasUnique(UniqueType.FoundCity)) throw IllegalArgumentException("${unit.name} cannot found cities")
++        if (action == "explore" && unit.isCivilian()) throw IllegalArgumentException("Civilians cannot explore; send a military unit")
++
++        var x: Int? = null; var y: Int? = null
++        json.get("city")?.takeUnless { it.isNull }?.asString()?.let { cityName ->
++            val city = civ.gameInfo.getCities().firstOrNull { it.name == cityName } ?: throw IllegalArgumentException("No city named $cityName")
++            x = city.getCenterTile().position.x; y = city.getCenterTile().position.y
++        }
++        json.get("x")?.takeUnless { it.isNull }?.let { x = it.asInt(); y = json.getInt("y") }
++        if (x != null && civ.gameInfo.tileMap.getIfTileExistsOrNull(x!!, y!!) == null) throw IllegalArgumentException("No tile at ($x,$y)")
++        if (x == null && action in listOf("move", "garrison")) throw IllegalArgumentException("$action needs a target: x/y or city")
++
++        val target = if (x != null) civ.gameInfo.tileMap[x!!, y!!] else unit.getTile()
++        if (action == "settle") settleProblem(civ, target)?.let { throw IllegalArgumentException("Cannot found a city at ${where(civ, target)}: $it" + nearestSiteHint(civ, unit, target)) }
++        if (action == "garrison" && !target.isCityCenter()) throw IllegalArgumentException("garrison needs a city")
++        if (action == "garrison" && unit.isCivilian()) throw IllegalArgumentException("Only soldiers can garrison")
++        if (action == "garrison") target.militaryUnit?.takeIf { it != unit }?.let { holder ->
++            throw IllegalArgumentException("${target.getCity()!!.name} is already held by ${holder.name} #${holder.id}; release or move that unit first, or station this one beside the city with fortify")
++        }
++        if (target != unit.getTile() && !unit.movement.canReach(target)) throw IllegalArgumentException("${unit.name} cannot reach ${where(civ, target)} (water, mountains or foreign borders in the way)")
++        orders[unitId] = Order(action, x, y)
++        val turns = if (target == unit.getTile()) 0 else kotlin.math.ceil(unit.movement.getShortestPath(target).size / unit.getMaxMovement().coerceAtLeast(1).toFloat()).toInt()
++        return "${unit.name} #$unitId will $action at ${where(civ, target)}" + (if (turns > 0) ", about $turns turns away" else "")
++    }
++
++    fun describeUnit(civ: Civilization, unit: MapUnit): String {
++        val order = orders[unit.id]
++        val state = when {
++            order != null -> "under orders: ${order.action}" + (if (order.x != null) " at (${order.x},${order.y})" else "")
++            unit.action?.startsWith("Fortify") == true -> "fortified"
++            unit.action == "Sleep" -> "sleeping"
++            unit.action?.contains("explore", ignoreCase = true) == true -> "exploring"
++            else -> "automated"
++        }
++        val health = if (unit.health < 100) ", ${unit.health} hp" else ""
++        return "${unit.name} #${unit.id} at ${where(civ, unit.getTile())}, $state$health"
++    }
++
++    /** Why a city cannot be founded on this tile, or null if it can */
++    fun settleProblem(civ: Civilization, tile: Tile): String? {
++        val constants = civ.gameInfo.ruleset.modOptions.constants
++        val tooClose = tile.getTilesInDistance(constants.minimalCityDistance).firstOrNull { it.isCityCenter() }
++        return when {
++            tile.isWater -> "it is water"
++            tile.isImpassible() -> "it is impassable"
++            tooClose != null -> "too close to ${tooClose.getCity()!!.name} (cities need ${constants.minimalCityDistance + 1} tiles between them)"
++            tile.getOwner() != null && tile.getOwner() != civ -> "it belongs to ${tile.getOwner()!!.civName}"
++            !tile.canBeSettled(civ) -> "the ground will not do"
++            !tile.isExplored(civ) -> "we have not explored it"
++            else -> null
++        }
++    }
++
++    private fun nearestSiteHint(civ: Civilization, unit: MapUnit, target: Tile): String {
++        val best = CityLocationTileRanker.getBestTilesToFoundCity(unit, 8, 0f).tileRankMap.entries
++            .filter { settleProblem(civ, it.key) == null }
++            .minByOrNull { it.key.aerialDistanceTo(target) * 10 - it.value } ?: return ""
++        return ". Nearest good site: ${where(civ, best.key)}"
++    }
++
++    /** Best places to found a city near our lands: the officials' ranking when a settler can judge, else our own simple survey */
++    fun citySites(civ: Civilization): List<String> {
++        val settler = civ.units.getCivUnits().firstOrNull { it.hasUnique(UniqueType.FoundCity) }
++        val ranked: Map<Tile, Float> = settler?.let { CityLocationTileRanker.getBestTilesToFoundCity(it, 8, 0f).tileRankMap }
++            ?.filterKeys { settleProblem(civ, it) == null }?.takeIf { it.isNotEmpty() }
++            ?: survey(civ)
++        return ranked.entries.sortedByDescending { it.value }.take(5).map { (tile, rank) -> describeSite(civ, tile, rank) }
++    }
++
++    /** Land within reach of our cities that could take a city, scored by what lies around it */
++    private fun survey(civ: Civilization): Map<Tile, Float> {
++        if (civ.cities.isEmpty()) return emptyMap()
++        val candidates = civ.cities.asSequence().flatMap { it.getCenterTile().getTilesInDistance(9) }.distinct()
++            .filter { it.isExplored(civ) && settleProblem(civ, it) == null }
++        return candidates.associateWith { tile ->
++            var score = 0f
++            for (near in tile.getTilesInDistance(2)) {
++                if (!near.isExplored(civ)) continue
++                score += when (near.baseTerrain) { "Grassland" -> 2f; "Plains" -> 1.6f; "Coast" -> 1f; "Desert", "Tundra", "Snow", "Ocean", "Mountain" -> 0.2f; else -> 1f }
++                if (near.resource != null) score += 3f
++                if (near.isHill()) score += 0.5f
++                if (near.isAdjacentToRiver()) score += 0.5f
++            }
++            if (tile.isAdjacentToRiver()) score += 4f
++            if (tile.neighbors.any { it.isWater }) score += 2f
++            if (tile.isHill()) score += 2f
++            score - civ.cities.minOf { it.getCenterTile().aerialDistanceTo(tile) } * 0.8f // nearer home is easier to hold
++        }
++    }
++
++    private fun describeSite(civ: Civilization, tile: Tile, rank: Float): String {
++        val resources = tile.getTilesInDistance(2).mapNotNull { it.resource }.groupingBy { it }.eachCount()
++            .entries.joinToString { if (it.value > 1) "${it.key} x${it.value}" else it.key }
++        val features = listOfNotNull(
++            tile.baseTerrain,
++            if (tile.isAdjacentToRiver()) "river" else null,
++            if (tile.neighbors.any { it.isWater }) "coast" else null,
++            if (tile.isHill()) "hill" else null,
++        ).joinToString(", ")
++        return "${where(civ, tile)}: $features" + (if (resources.isNotEmpty()) "; nearby $resources" else "") + " (rank ${rank.roundToInt()})"
++    }
++
++    companion object {
++        private val ABILITIES = listOf(UnitActionType.ConductTradeMission, UnitActionType.HurryResearch, UnitActionType.HurryWonder,
++            UnitActionType.HurryBuilding, UnitActionType.HurryPolicy, UnitActionType.FoundReligion, UnitActionType.EnhanceReligion,
++            UnitActionType.TriggerUnique, UnitActionType.CreateImprovement, UnitActionType.SpreadReligion)
++
++        /** "(x,y), 3 tiles NE of Rome" */
++        fun where(civ: Civilization, tile: Tile): String {
++            val coords = "(${tile.position.x},${tile.position.y})"
++            val nearest = civ.cities.minByOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: return coords
++            val distance = nearest.getCenterTile().aerialDistanceTo(tile)
++            if (distance == 0) return "$coords, in ${nearest.name}"
++            val from = HexMath.hex2WorldCoords(nearest.getCenterTile().position)
++            val to = HexMath.hex2WorldCoords(tile.position)
++            val angle = Math.toDegrees(atan2((to.y - from.y).toDouble(), (to.x - from.x).toDouble()))
++            val compass = listOf("E", "NE", "N", "NW", "W", "SW", "S", "SE")[(((angle + 360 + 22.5) % 360) / 45).toInt()]
++            return "$coords, $distance tiles $compass of ${nearest.name}"
++        }
++    }
++}
