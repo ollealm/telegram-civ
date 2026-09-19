@@ -64,7 +64,14 @@ export const host = {
     call<Record<string, unknown>>("GET", "/briefing" + civQuery(civ) + (logSince === undefined ? "" : `&since=${logSince}`)),
   options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
   events: () => call<PublicEvent[]>("GET", "/events"),
-  map: async (civ: string) => Buffer.from(await (await fetch(`${HOST}/map.png${civQuery(civ)}`)).arrayBuffer()),
+  map: async (civ: string, style: "atlas" | "reference" = "atlas") =>
+    Buffer.from(await (await fetch(`${HOST}/map.png${civQuery(civ)}&style=${style}`)).arrayBuffer()),
+  /** Draw names, borders and units onto a repaint of the reference map */
+  mapOverlay: async (civ: string, repaint: Buffer) => {
+    const response = await fetch(`${HOST}/map/overlay${civQuery(civ)}`, { method: "POST", body: new Uint8Array(repaint) });
+    if (!response.ok) throw new HostError(`overlay ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  },
   log: (civ: string, since: number) => call<{ turn: number; text: string }[]>("GET", `/log${civQuery(civ)}&since=${since}`),
   setOrders: (civ: string, orders: Orders) =>
     call<{ orders: Orders; done: string[]; failed: string[]; researchQueue: string[]; gold: number }>("POST", "/orders" + civQuery(civ), orders),

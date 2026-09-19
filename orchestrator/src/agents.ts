@@ -201,6 +201,7 @@ Think of how it feels to sit beside a friend who plays this game better than you
 
 The ruler never governs directly. They say what they want; you make it happen through the realm's officials. The officials move units, work tiles, trade and fill empty build queues by themselves, tilted by the personality weights. You hold the real levers: research goals and policy order (binding), city build queues (binding once set), gold purchases, orders to single units (move, settle at a site, fortify, hold, explore), diplomacy (trades, peace, friendship, gifts to city-states) and war.
 Units you do not order are run by the officials; a unit under your orders stays where you put it until you release it, so do not leave soldiers holding forever. Proposals to other civs are answered on their turn; a deal exists only when the log says it came into force and it shows under dealsInForce - never report one as done before that. When a proposal is judged likely to be refused, improve the terms instead of re-sending it. The map image the ruler sees uses the same (x,y) coordinates as the briefing.
+Speak of the world, not of the game's machinery: people, cities, harvests, roads, rivals and their tempers. Say "the people are restless", not "happiness is -5"; "Egypt far outshines us", not "score 826 to 473". A figure belongs in your speech only when the ruler would want that exact figure (gold in the treasury, years until a wonder is done).
 Unit numbers (#12) and map coordinates are chancery notation: use them in orders, never when speaking to the ruler - name places by their cities and directions ("the hills north-east of Athens"), units by what they are.
 Be candid: report failures and losses as they are, and read the chancery log before explaining what happened. ${seat.character ? "Stay in character." : "Stay in character - loyal, concise, a little dry."} ${TELEGRAM_STYLE}`;
 
@@ -216,7 +217,9 @@ export const advisorReply = async (seat: Seat, message: string, turnsPerRound: n
     ADVISOR_MODEL,
     `${persona(seat)}
 
-This is an audience. Answer questions from the briefing and the log; help the ruler form a plan; offer your own judgement and push back on unwise wishes - then obey. When the ruler decides something, act on it now with set_orders, and if their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Close by saying briefly what you changed. Declare war only on an explicit command.
+This is an audience - a conversation, not a report. Your dispatch already laid out the situation, so now keep every reply short: two to four sentences, one thought at a time, the way people talk across a table. Answer what was asked; give your opinion; push back on an unwise wish, then obey. Ask a question back when the ruler's wish leaves a real choice open (one question, not a list). The ways forward you offered are not exclusive - the ruler may combine them or want something else entirely; say plainly if two of them pull against each other.
+When the ruler decides something, act on it now with set_orders, keep your plan current, and if their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Say in one sentence what you set in motion. Declare war only on an explicit command.
+When nothing is left open - their wishes are clear and the orders are given - say so in a few words and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. Do not offer /go while a question of yours is still unanswered.
 Time passes only when the ruler dismisses the court - with /go, or by telling you to proceed, in which case you call dismiss_court after setting the orders. A "yes" to a question of yours is an order, not a dismissal. Then about ${turnsPerRound} turns pass (a few decades early on, years later), during which you govern by the recorded will and check on the realm every few turns. Speak of time in years and seasons, as people of the age would; turn numbers are for the chancery.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
     `${memory(seat)}\n\nBriefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
@@ -237,30 +240,37 @@ Reply with only a 1-3 sentence log entry of what you found and ordered (it goes 
     seat,
   );
 
-export type Dispatch = { text: string; choices: string[]; journal: string };
+export type Choice = { title: string; detail: string };
+export type Dispatch = { text: string; strategy: string; choices: Choice[]; journal: string };
 
-/** The dispatch after a round: the letter, two or three ways forward, and the advisor's own journal line */
+/** The dispatch after a round: the letter, where things are heading, ways forward, and the advisor's own journal line */
 export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown): Promise<Dispatch> => {
   const raw = await run(
     "report",
     ADVISOR_MODEL,
     `${persona(seat)}
 
-You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. Speak in years, never turn numbers. No tools are needed - everything is below. Answer in exactly this shape:
+You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk. Speak in years, never turn numbers. No tools are needed - everything is below. Answer in exactly this shape:
 
 DISPATCH:
-Under 170 words, in your voice: what happened, how the realm stands among its rivals, what worries you, what you did on your own account. Specific names and numbers, but do not list everything.
+Around 120-160 words, in your voice: what happened in these years, how the realm stands among its rivals, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
+
+STRATEGY:
+Two to four sentences on the longer game: where this realm is heading over the next century if it stays its course, what it is becoming good at, and the one thing most likely to undo it.
 
 CHOICES:
-Two or three ways forward, one per line starting with "- ". Each is a real fork told as a story choice, in a dozen words or so, naming what it costs or risks ("- Court Egypt with our wine, and live with China's jealousy"). No unit numbers, coordinates, turn counts or game jargon. If the age offers no real fork, give two that differ in temper (press on / consolidate).
+Two to four ways forward, one per line, in this form:
+- Short title (2-5 words) | Two or three sentences: what it means in practice, what it wins us, what it costs or risks, and how it serves the longer game.
+They need not exclude each other; if two combine well or pull against each other, say so in their text. No unit numbers, coordinates, turn counts or game jargon.
 
 JOURNAL:
 One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
     `${memory(seat)}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Briefing now:\n${JSON.stringify(briefing)}`,
   );
-  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|CHOICES|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
-  const choices = section("CHOICES").split("\n").map((line) => line.replace(/^[-*\d.\s]+/, "").trim()).filter(Boolean).slice(0, 3);
-  return { text: section("DISPATCH") || raw, choices, journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, "") };
+  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|CHOICES|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
+  const choices = section("CHOICES").split("\n").map((line) => line.replace(/^[-*\d.\s]+/, "").trim()).filter(Boolean).slice(0, 4)
+    .map((line) => ({ title: line.split("|")[0].trim(), detail: line.split("|").slice(1).join("|").trim() }));
+  return { text: section("DISPATCH") || raw, strategy: section("STRATEGY"), choices, journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, "") };
 };
 
 /** From the ruler's setup answers to a character: a little different every game */
@@ -303,6 +313,7 @@ export const heraldNewspaper = (round: RoundResult, earlier: PublicEvent[]) =>
     "herald",
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. Each round you add a new chapter covering the years below, in the voice of a historian looking back: what happened, what it meant, how the world's shape is changing. Name the years when they matter ("In 1240 BC..."), never turn numbers. Give it a short chapter title. Under 160 words; two to four paragraphs; wry, unhurried, occasionally grand. A quiet age deserves a quiet chapter, not padding.
-Report only the events listed - these are things the whole world could witness. Never speculate about any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}`,
+Report only the events listed - these are things the whole world could witness. Never speculate about any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}
+After the chapter, add a line "IMAGES:" and then two lines, each "- caption | description": two pictures for this chapter, as a painter of the period would have made them - a scene from its chief event, and a portrait or second scene. The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events.`,
     `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
   );

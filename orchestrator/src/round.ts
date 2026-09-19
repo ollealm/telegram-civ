@@ -18,7 +18,7 @@ export type RoundIO = {
   /** Wraps slow work for one seat, e.g. to show "typing…" */
   working: <T>(seat: Seat, work: Promise<T>) => Promise<T>;
   dispatch: (seat: Seat, dispatch: Dispatch) => Promise<void>;
-  chronicle: (chapter: string) => Promise<void>;
+  chronicle: (chapter: string, images: { caption: string; description: string }[], round: RoundResult) => Promise<void>;
   log: (...args: unknown[]) => void;
 };
 
@@ -58,15 +58,20 @@ export async function playRound(seats: Seat[], io: RoundIO): Promise<RoundResult
         const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
         const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
-        seat.choices = dispatch.choices;
-        remember(seat, { from: "advisor", text: [dispatch.text, ...dispatch.choices.map((choice, index) => `(${index + 1}) ${choice}`)].join("\n") });
+        seat.choices = dispatch.choices.map((choice) => `${choice.title}: ${choice.detail}`);
+        remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, ...seat.choices.map((choice, index) => `(${index + 1}) ${choice}`)].join("\n") });
         await io.dispatch(seat, dispatch);
       }),
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
       host
         .events()
         .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn)))
-        .then(io.chronicle),
+        .then((raw) => {
+          const [chapter, imageLines = ""] = raw.split(/\n\s*IMAGES:\s*\n?/);
+          const images = imageLines.split("\n").map((line) => line.replace(/^[-*\s]+/, "").split("|")).filter((parts) => parts.length >= 2)
+            .map(([caption, ...rest]) => ({ caption: caption.trim(), description: rest.join("|").trim() })).slice(0, 2);
+          return io.chronicle(chapter.trim(), images, finished);
+        }),
     ]);
     return finished;
   } finally {

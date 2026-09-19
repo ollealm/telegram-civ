@@ -3,6 +3,7 @@
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import { advisorGreeting, advisorReply, createCharacter } from "./agents.ts";
 import { flushDevFeed } from "./devfeed.ts";
+import { advisorPortrait, generateImage, onImageLog, paintedMap } from "./images.ts";
 import { host } from "./host.ts";
 import { playRound as runRound, roundLength } from "./round.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
@@ -48,6 +49,9 @@ async function ensureGame() {
   persist();
 }
 
+onImageLog((message) => log(message));
+
+/** /map: our own drawing at once (the painted one comes with each dispatch) */
 async function sendMap(bot: Bot, seat: Seat) {
   const png = await host.map(seat.civ);
   await bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"));
@@ -64,13 +68,22 @@ async function playRound() {
     await runRound(seated, {
       working: (seat, work) => whileTyping(botOf(seat), seat.chatId!, work),
       dispatch: async (seat, dispatch) => {
-        await sendMap(botOf(seat), seat).catch((error) => log("map failed:", error.message));
-        const ways = dispatch.choices.map((choice, index) => `${index + 1}. ${choice}`).join("\n");
+        const bot = botOf(seat);
+        const ways = dispatch.choices.map((choice, index) => `${index + 1}. ${choice.title}\n${choice.detail}`).join("\n\n");
         const keyboard = new InlineKeyboard();
-        dispatch.choices.forEach((_, index) => keyboard.text(`${index + 1}`, `choice:${index}`));
-        await botOf(seat).api.sendMessage(seat.chatId!, `${dispatch.text}${ways ? `\n\nWays forward:\n${ways}\n\nPick one, tell me something else, or /go and I will choose.` : ""}`, ways ? { reply_markup: keyboard } : {});
+        dispatch.choices.forEach((choice, index) => keyboard.text(`${index + 1}. ${choice.title}`.slice(0, 40), `choice:${index}`).row());
+        const letter = [dispatch.text, dispatch.strategy && `Where this is heading: ${dispatch.strategy}`, ways && `Ways forward (they can be combined):\n\n${ways}`, ways && "Pick one, or tell me what you think."].filter(Boolean).join("\n\n");
+        await bot.api.sendMessage(seat.chatId!, letter, ways ? { reply_markup: keyboard } : {});
+        // The painted map takes a minute or two; it follows the letter instead of holding it up
+        void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
       },
-      chronicle: broadcastHerald,
+      chronicle: async (chapter, images, round) => {
+        await broadcastHerald(chapter);
+        for (const image of images)
+          void generateImage(`${image.description}\n\nThe year is ${round.year}. Realistic oil painting of the period, no text or lettering.`).then(async (png) => {
+            if (png) for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "scene.png"), { caption: image.caption }).catch(() => {});
+          });
+      },
       log,
     });
     const game = await host.state();
@@ -123,6 +136,8 @@ function setUpAdvisor(bot: Bot, index: number) {
       remember(seat(), { from: "advisor", text: greeting });
       await ctx.reply(`${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely; time only passes when you say so or send /go.  /status  /map  /usage`);
       await flushDevFeed(herald, `Character for ${seat().civ}: ${seat().character!.name}`, [`autonomy: ${seat().character!.autonomy}`]);
+      const era = String((await host.briefing(seat().civ).catch(() => ({ era: "Ancient era" }))).era);
+      void advisorPortrait(seat().civ, seat().character!.sheet, era).then((png) => png && ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name })).catch(() => {});
     } catch (error) {
       log("character creation failed:", error);
       seat().setup = undefined;
