@@ -178,7 +178,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   bot.command("character", (ctx) => (state.phase === "passing" ? ctx.reply("Wait until time stops passing.") : beginSetup(ctx)));
 
   bot.callbackQuery(/^setup:(\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {}); // a press from before a restart is too old to acknowledge, but still counts
     if (!seat().setup) return;
     const option = SETUP[seat().setup!.length]?.options[Number(ctx.match[1])];
     if (option) await answerSetup(ctx, option);
@@ -232,7 +232,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   };
 
   bot.callbackQuery(/^choice:(\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {}); // a press from before a restart is too old to acknowledge, but still counts
     const choice = seat().choices?.[Number(ctx.match[1])];
     if (!choice) return void ctx.reply("That moment has passed, Majesty - tell me what you want now.");
     if (state.phase === "passing") return void ctx.reply("Time is passing, Majesty.");
