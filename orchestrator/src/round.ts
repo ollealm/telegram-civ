@@ -26,6 +26,9 @@ export async function playRound(seats: Seat[], io: RoundIO): Promise<RoundResult
   state.phase = "passing";
   persist();
   const notes = new Map(seats.map((seat) => [seat.civ, [] as string[]]));
+  // What the rulers said aloud before this round began belongs to the chapter about it
+  const proclaimed = seats.flatMap((seat) => seat.proclamations ?? []);
+  for (const seat of seats) seat.proclamations = undefined;
   try {
     const fromTurn = (await host.state()).turn;
     const length = roundLength(fromTurn);
@@ -65,7 +68,7 @@ export async function playRound(seats: Seat[], io: RoundIO): Promise<RoundResult
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
       host
         .events()
-        .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn)))
+        .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed))
         .then((raw) => {
           const [chapter, imageLines = ""] = raw.split(/\n\s*IMAGES:\s*\n?/);
           const images = imageLines.split("\n").map((line) => line.replace(/^[-*\s]+/, "").split("|")).filter((parts) => parts.length >= 2)

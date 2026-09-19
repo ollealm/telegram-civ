@@ -218,7 +218,16 @@ function setUpAdvisor(bot: Bot, index: number) {
     queue = queue.then(async () => {
       try {
         const game = await host.state();
-        const reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), message, roundLength(game.turn)));
+        const raw = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), message, roundLength(game.turn)));
+        // The closing carries two lines meant for us, not the ruler: a picture of the decision, and words for the Chronicler
+        const image = /^IMAGE:\s*(.+?)\s*\|\s*(.+)$/m.exec(raw);
+        const proclamation = /^PROCLAMATION:\s*(.+)$/m.exec(raw)?.[1].trim();
+        const reply = raw.replace(/^(IMAGE|PROCLAMATION):.*\n?/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+        if (proclamation && !/^\(?none|^-$/i.test(proclamation)) (seat().proclamations ??= []).push(proclamation);
+        if (image)
+          void generateImage(`${image[2]}\n\nRealistic oil painting of the period, no text or lettering.`)
+            .then((png) => png && bot.api.sendPhoto(ctx.chat!.id, new InputFile(png, "decision.png"), { caption: image[1] }))
+            .catch((error) => log("decision image failed:", error.message));
         remember(seat(), { from: "ruler", text: message });
         remember(seat(), { from: "advisor", text: reply });
         seat().choices = undefined;

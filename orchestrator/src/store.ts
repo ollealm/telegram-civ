@@ -30,6 +30,8 @@ export type Seat = {
   setup?: string[];
   /** The ways forward offered in the last dispatch; buttons refer to these by index */
   choices?: string[];
+  /** The ruler's own words made public this round, for the Chronicler */
+  proclamations?: string[];
   /** Rolling campaign memory, one short entry per round */
   journal: string[];
   chat: ChatMessage[];
