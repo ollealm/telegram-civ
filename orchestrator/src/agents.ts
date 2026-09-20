@@ -97,7 +97,7 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
   tools.push(
     tool(
       "update_plan",
-      "Replace your own operating plan: what you intend to do over the coming years and why, open threads to follow up (proposals sent, units on the march, things to buy when affordable). Yours to keep current while governing; the ruler's will is not yours to change here.",
+      "Replace your own operating plan: what you intend to do over the coming years and why, open threads to follow up (proposals sent, units on the march, things to buy when affordable). Keep it under 150 words and rewrite it whole each time - strike what is done or overtaken, never let it become a diary (it is read at every look-in, so a bloated plan costs the realm at every one). Yours to keep current while governing; the ruler's will is not yours to change here.",
       { plan: z.string() },
       async ({ plan }) => {
         seat.plan = plan;
@@ -275,7 +275,7 @@ export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: numb
     `${persona(seat)}
 
 ${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} ${wokenBy.length ? `You were sent for ahead of your usual look-in because: ${wokenBy.join("; ")}. Deal with that first.\n` : ""}Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Log lines that begin "By your order" were yours; "The officials..." were theirs. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${warRule(seat)}
-${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".`,
+${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be. Then read your operating plan against the realm as it now is, and rewrite it if it has gone stale.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".`,
     `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
     seat,
     newAge,
