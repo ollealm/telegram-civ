@@ -5,7 +5,8 @@
 // Results: ../data/harness/league-<date>.csv (score per realm per round), the Chronicler's chapters and a closing epic on the console.
 
 import { appendFileSync, mkdirSync } from "node:fs";
-import { chroniclerEpic, createCharacter, onTrace, playtestReview } from "../src/agents.ts";
+import { chroniclerEpic, onTrace, playtestReview } from "../src/agents.ts";
+import { draftSovereign } from "../src/characters.ts";
 import { host } from "../src/host.ts";
 import { playRound } from "../src/round.ts";
 import { persist, state, type Seat } from "../src/store.ts";
@@ -39,7 +40,7 @@ onTrace((trace) => {
 const nations = (await host.nations()).map((nation) => nation.name).sort(() => Math.random() - 0.5);
 state.seats = models.map((model, index): Seat => ({ civ: nations[index], kind: "agent", model, will: "", journal: [], chat: [], ready: false }));
 for (const seat of state.seats) {
-  seat.character = { ...(await createCharacter(seat, [{ question: "What kind of sovereign rules this people?", answer: "Someone unexpected, with a clear ambition of their own" }])), autonomy: "bold" };
+  seat.character = await draftSovereign(seat.civ, seat.model!).then(({ name, title, sheet }) => ({ name, title, sheet }));
   say(`${seat.civ}: ${seat.character.name} on ${seat.model}`);
 }
 await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others: nations.slice(models.length, models.length + gameAi), mapSize, cityStates: 4 });

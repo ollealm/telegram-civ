@@ -4,7 +4,7 @@
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
-import { addUsage, persist, type Character, type Seat } from "./store.ts";
+import { addUsage, persist, type Seat } from "./store.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
@@ -86,7 +86,12 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
         gift: z.array(z.object({ cityState: z.string(), gold: z.number() })).optional().describe("Give gold to a city-state for influence."),
         cityFocus: z.array(z.object({ city: z.string(), focus: z.enum(["NoFocus", "Food", "Production", "Gold", "Science", "Culture", "Happiness", "Faith", "GoldGrowth", "ProductionGrowth"]) })).optional().describe("What a city's citizens work its tiles for. NoFocus lets the officials balance."),
       },
-      (orders) => attempt(() => host.setOrders(seat.civ, orders)),
+      async (orders) => {
+        // War is off by default: outside an audience an advisor can only declare it once the ruler has said, in plain words, that they may
+        if (orders.declareWar?.length && seat.kind !== "agent" && !canRecordWill && !seat.mayDeclareWar)
+          return { ...text("Refused: war is the ruler's alone to declare, and they have not given you leave to declare it on your own. Nothing in this order was carried out - send the rest again without declareWar, and bring the case for war to the ruler."), isError: true };
+        return attempt(() => host.setOrders(seat.civ, orders));
+      },
     ),
   ];
   tools.push(
@@ -115,10 +120,11 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
       ) as never,
       tool(
         "record_rulers_will",
-        "Replace your record of the ruler's standing wishes - the text you govern by while the ruler is away. It is YOUR record, and the ruler can read it. One line per wish, each beginning with the year and whose it is: [AD 1540, their words] for something the ruler plainly said should stand, quoting or staying close to their phrasing; [AD 1540, my reading] for what you inferred. Only standing intent: goals, priorities, red lines, stance towards each neighbour, what to do if attacked. An answer to a question of yours settles that question, not the reign - it goes here only if the ruler said it should stand. Drop lines that events have overtaken. No history, no log, no numbers that go stale.",
-        { will: z.string() },
-        async ({ will }) => {
+        "Replace your record of the ruler's standing wishes - the text you govern by while the ruler is away. It is YOUR record, and the ruler can read it. One line per wish, each beginning with the year and whose it is: [AD 1540, their words] for something the ruler plainly said should stand, quoting or staying close to their phrasing; [AD 1540, my reading] for what you inferred. Only standing intent: goals, priorities, red lines, stance towards each neighbour, what to do if attacked. An answer to a question of yours settles that question, not the reign - it goes here only if the ruler said it should stand. The record also holds what kind of ruler this is, in a line or two under the heading 'The ruler': what they say of themselves goes in at once as their words ([their words] \"I always play it bold\"); what you notice goes in as your reading, and only once you have seen it several times, never from a single answer ([my reading] takes the chance when a call is close; twice it cost us). Such a line is a disposition, not an order: it tells you how to settle small close calls alone and how to put a big one to them - it never replaces asking. Revise it when they start choosing otherwise. Drop lines that events have overtaken. No history, no log, no numbers that go stale.",
+        { will: z.string(), mayDeclareWar: z.boolean().optional().describe("Leave out unless it changes. true ONLY when the ruler has said in plain words that you may declare war on your own while they are away (record their words in the will too); false when they take that leave back.") },
+        async ({ will, mayDeclareWar }) => {
           seat.will = will;
+          if (mayDeclareWar !== undefined) seat.mayDeclareWar = mayDeclareWar;
           persist();
           return text("Recorded.");
         },
@@ -205,17 +211,14 @@ export async function run(role: string, model: string, systemPrompt: string, pro
 const TELEGRAM_STYLE =
   "You write for a Telegram chat: plain text, short paragraphs, no markdown headers, tables or bullet walls. Never mention tools, JSON, APIs or that this is a game engine.";
 
-const AUTONOMY = {
-  cautious: "While the ruler is away you keep the realm safe and running and fix what is plainly wrong, but leave real choices - new directions, large purchases, deals with other powers - for the next audience.",
-  balanced: "While the ruler is away you use your judgement within their will: you spend, build and negotiate towards it, and bring only the big forks in the road to the next audience.",
-  bold: "While the ruler is away you run the realm as your own project within their will: you pursue your plan, strike deals, spend the treasury and take chances, and report afterwards what you dared.",
-} as const;
+/** What an advisor does alone. There are no levels of initiative: holding back only hands the choice to the officials. The ruler widens or narrows this in words. */
+const WHILE_AWAY = "While the ruler is away you use your judgement within their wishes: you spend, build and negotiate towards them, settle the small and the plainly right on your own, and bring the real forks in the road - the risky, the costly to undo, anything that touches war or a sworn word - to the next audience. If the ruler has told you to ask first about something, or given you leave to do more on your own, it stands in your record of their wishes and it governs.";
 
-/** Who may start a war: set by the ruler's setup answers, not by the rules of the game */
+/** War is off by default; the ruler grants it by saying so */
 const warRule = (seat: Seat) =>
   seat.kind === "agent" ? "War is yours to declare, but only as a considered step of your plan, never on a whim."
-  : seat.character?.war === "trusted" ? "The ruler trusts you with the sword: you may declare war on your own when their recorded will calls for it (a named enemy, a cause, a condition that has now come true) - never merely because it looks winnable - and you answer for it in your next dispatch."
-  : "War is the ruler's alone to declare: never declare it without their explicit word, however clear the case - bring it to them instead.";
+  : seat.mayDeclareWar ? "The ruler has given you leave to declare war on your own: do it only when their recorded wishes call for it (a named enemy, a cause, a condition that has now come true) - never merely because it looks winnable - and answer for it in your next dispatch."
+  : "War is the ruler's alone to declare: never declare it without their explicit word, however clear the case - bring it to them instead. (Should they tell you that you may declare it yourself, record that.)";
 
 const persona = (seat: Seat) => seat.kind === "agent" ? sovereignPersona(seat) : advisorPersona(seat);
 
@@ -226,8 +229,9 @@ You rule through the realm's officials. They move units, work tiles, trade and f
 You see the realm only every few years, so give orders that last. A deal exists only when the log says it came into force. Be honest with yourself in your journal: what failed, failed.`;
 
 const advisorPersona = (seat: Seat) => `You are ${seat.character?.name ?? "the chief advisor"}, chief advisor to ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}, in a world of rival civilizations.
-${seat.character ? `\nWho you are:\n${seat.character.sheet}\n${AUTONOMY[seat.character.autonomy]}\nYour character colours your voice, your opinions and what you reach for first - never the facts. You report what is true even when it shames you.\n` : ""}
-Think of how it feels to sit beside a friend who plays this game better than you do: they think aloud, have opinions, say "bad idea, and here is why" or "yes - let's try it", and then do what you asked. Be that for the ruler. You own your calls: say "I took the liberty" rather than hiding behind the officials.
+${seat.character ? `\nWho you are:\n${seat.character.sheet}\nThat is your voice and your past - it is heard in how you talk, never in how well you see or judge. You play this realm as well as it can be played, and you report what is true even when it shames you.\n` : ""}${WHILE_AWAY}
+
+Think of how it feels to sit beside a friend who plays this game better than you do: they think aloud, have opinions, say "bad idea, and here is why" or "yes - let's try it", and then do what you asked. Be that for the ruler - and like that friend, when you spot an opening the ruler has not asked about (a city going cheap, a rival's weak flank, a bargain, a better use for something idle), say so unprompted. You own your calls: say "I took the liberty" rather than hiding behind the officials.
 
 The ruler never governs directly. They say what they want; you make it happen through the realm's officials. The officials move units, work tiles, trade and fill empty build queues by themselves, tilted by the personality weights. You hold the real levers: research goals and policy order (binding), city build queues (binding once set), gold purchases, orders to single units (move, settle at a site, fortify, hold, explore), diplomacy (trades, peace, friendship, gifts to city-states) and war.
 Units you do not order are run by the officials; a unit under your orders stays where you put it until you release it, so do not leave soldiers holding forever. Proposals to other civs are answered on their turn; a deal exists only when the log says it came into force and it shows under dealsInForce - never report one as done before that. When a proposal is judged likely to be refused, improve the terms instead of re-sending it. The map image the ruler sees uses the same (x,y) coordinates as the briefing.
@@ -250,7 +254,8 @@ export const advisorReply = async (seat: Seat, message: string, turnsPerRound: n
 
 This is an audience - a conversation between two people, not a report. Your dispatch already told the story and asked the broad question, so now talk the way a trusted advisor or a good friend would across a table: short replies, one thing at a time. Hold yourself to about 50 words a reply (the closing may run to 80): do not list what you ordered, do not explain mechanics, do not answer questions nobody asked. If you have two things to say, say the more important one and let the other wait for the next turn.
 The shape of a good audience: the ruler answers your broad question; you then bring up the specific decisions that follow from it, ONE at a time - each with a sentence or two on why it matters and what it costs either way, and your own lean - and wait for their word on each. Two or three such decisions is plenty; decide the small things yourself. Follow their lead if they want to talk about something else.
-Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey. ${warRule(seat)}
+Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey.
+You are getting to know this ruler, and the record's lines about them are there to be used: make the small close calls their way, put a big one to them as someone who knows them would ("you will want to take the shot, as ever - here is what it could cost"), keep your own view when it differs, and when what they do stops matching what they said of themselves, say so and ask whether the line should be struck. ${warRule(seat)}
 When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. That closing is the only place you sum up. If you wrote a new standing rule into your record during this audience, say so there in one plain sentence ("I take it as standing that..."), so the ruler can correct you - a rule they never hear of is a rule they never agreed to. Do not offer /go while a question of yours is still unanswered.
 In the closing message only, just before the "/go" line, add these two lines (they are taken out before the ruler sees the message):
 IMAGE: caption | a picture of what this audience decided, as a painter of the age would show it - the moment itself (the council table, the declaration read from the steps, the first stone laid), with the people, dress and architecture of ${seat.civ} in this year. Realistic oil painting, no text.
@@ -313,7 +318,7 @@ STRATEGY:
 Two to four sentences on the longer game: where this realm is heading over the next century if it stays its course, what it is becoming good at, and the one thing most likely to undo it.
 
 QUESTION:
-Open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself.
+Open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself. If your record says what kind of ruler this is, put the question as someone who knows them would - and keep your own lean where it differs.
 
 IMAGE:
 caption | description - one picture of a moment from OUR realm in these years (a festival, a founding, a siege, a scholar at work), as a painter of the age would have made it. The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text".
@@ -334,28 +339,11 @@ One or two plain sentences for your own journal: what you did this round and wha
   };
 };
 
-/** From the ruler's setup answers to a character: a little different every game */
-export const createCharacter = async (seat: Seat, answers: { question: string; answer: string }[]): Promise<Character> => {
-  const raw = await run(
-    "character",
-    ADVISOR_MODEL,
-    `You invent the chief advisor for a ruler in a game of civilizations, from the ruler's answers to a few questions. Make a person, not a type: someone a little unexpected, fitting the ruler's civilization and its early age, whom it would be fun to have at one's side for a whole history. Read the answers for what the ruler wants; do not parrot them.
-Answer in exactly this shape:
-NAME: a name fitting the civilization
-AUTONOMY: cautious | balanced | bold   (from how much initiative the ruler wants them to take while away)
-WAR: asks | trusted   (trusted only if the ruler clearly wants a reign of conquest AND gave wide initiative; otherwise asks)
-SHEET:
-Five to seven sentences in the second person ("You are..."): temperament, what they care about and lean towards, how they speak (give their voice a recognisable manner), one blind spot that will sometimes colour their advice, and how they feel about this ruler.`,
-    `The ruler is ${seat.rulerName ?? "unnamed"}, sovereign of ${seat.civ}.\n\n${answers.map((entry) => `${entry.question}\n> ${entry.answer}`).join("\n\n")}`,
-  );
-  const autonomy = (/AUTONOMY:\s*(cautious|balanced|bold)/i.exec(raw)?.[1].toLowerCase() ?? "balanced") as Character["autonomy"];
-  const war = /WAR:\s*trusted/i.test(raw) ? "trusted" : "asks";
-  return { name: /NAME:\s*(.+)/.exec(raw)?.[1].trim() ?? "your advisor", autonomy, war, sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw };
-};
-
 /** The advisor's first words to the ruler, in character */
-export const advisorGreeting = (seat: Seat) =>
-  run("greeting", ADVISOR_MODEL, persona(seat), `You are meeting ${seat.rulerName ?? "the ruler"} for the first time, at the very beginning of ${seat.civ}'s history. Introduce yourself in four or five sentences in your own voice, say how you like to work, and ask what they want this realm to become. No tools.`);
+export const advisorGreeting = (seat: Seat, replaced?: string) =>
+  run("greeting", ADVISOR_MODEL, persona(seat), replaced
+    ? `You have just been taken on as chief advisor to ${seat.rulerName ?? "the ruler"} of ${seat.civ}, in place of ${replaced}, partway through this realm's history. Their record of the ruler's wishes and their journal are now yours (below). Introduce yourself in four or five sentences in your own voice, say one thing about how you find the realm, and ask what the ruler wants of you first. No tools.\n\n${memory(seat)}`
+    : `You are meeting ${seat.rulerName ?? "the ruler"} for the first time, at the very beginning of ${seat.civ}'s history. Introduce yourself in four or five sentences in your own voice, say how you like to work, and ask what they want this realm to become. No tools.`);
 
 /** One journal line per round: whole sentences only, never cut mid-way */
 const journalEntry = (round: RoundResult, governLogs: string[]) => {

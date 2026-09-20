@@ -10,12 +10,10 @@ export type ChatMessage = { from: "ruler" | "advisor"; text: string };
 /** Who the advisor is this game - made from the ruler's answers in the setup round, stable until /newgame */
 export type Character = {
   name: string;
-  /** The sheet as prose: temperament, leanings, manner of speech, a blind spot */
+  /** Their station, as it follows the name ("the Lawspeaker") */
+  title?: string;
+  /** Who they are and how they speak. Voice and background only: nothing in it bends their judgement. */
   sheet: string;
-  /** How much the advisor does unasked while the ruler is away, and with unanswered choices */
-  autonomy: "cautious" | "balanced" | "bold";
-  /** asks: war only on the ruler's word. trusted: may declare war alone when the ruler's will calls for it. */
-  war?: "asks" | "trusted";
 };
 
 export type Seat = {
@@ -34,6 +32,11 @@ export type Seat = {
   /** The advisor's own operating plan: what it intends and why. Governing may update it; the will it may not. */
   plan?: string;
   character?: Character;
+  /** Advisors to choose from during setup, and whether the ruler has already sent for a second three */
+  candidates?: { name: string; title: string; pitch: string; sheet: string }[];
+  rerolled?: boolean;
+  /** War is the ruler's alone unless they have said, in plain words, that the advisor may declare it */
+  mayDeclareWar?: boolean;
   /** Setup round in progress: the answers given so far */
   setup?: string[];
   /** The ways forward offered in the last dispatch; buttons refer to these by index */

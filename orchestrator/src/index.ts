@@ -1,7 +1,10 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, createCharacter } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic } from "./agents.ts";
+import { card, draftCandidates, draftSovereign } from "./characters.ts";
+
+const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, generateImage, onImageLog, paintedMap } from "./images.ts";
 import { host } from "./host.ts";
@@ -60,10 +63,7 @@ async function createWorld() {
   for (const seat of state.seats.filter((other) => other.kind === "agent")) {
     const taken = state.seats.map((other) => other.civ).filter(Boolean);
     seat.civ ||= shuffled(nations.filter((nation) => !taken.includes(nation.name)))[0].name;
-    seat.character ??= await createCharacter(seat, [
-      { question: "What kind of sovereign rules this people?", answer: "Someone unexpected, with a clear ambition of their own" },
-      { question: "How do they rule?", answer: "Alone and decisively - there is no one above them" },
-    ]).then((character) => ({ ...character, autonomy: "bold" as const }));
+    seat.character ??= await draftSovereign(seat.civ, seat.model ?? ADVISOR_MODEL).then(({ name, title, sheet }) => ({ name, title, sheet }));
     log(`${seat.civ} is ruled by ${seat.character?.name} (${seat.model})`);
   }
   const ruled = state.seats.map((seat) => seat.civ);
@@ -164,13 +164,6 @@ function usageSummary() {
   return rows.length ? `${rows.join("\n")}\nTotal: $${total.toFixed(2)} (API-price equivalent)` : "No usage yet.";
 }
 
-/** The setup round: a few questions whose answers become the advisor's character - different every game */
-const SETUP = [
-  { question: "What kind of reign shall this be?", options: ["A golden age of builders and scholars", "An empire won by the sword", "A web of trade and alliances", "Surprise me"] },
-  { question: "Who do you want at your side?", options: ["A blunt old soldier", "A silver-tongued courtier", "A dry, bookish scholar", "Someone unexpected"] },
-  { question: "When you are away, how much may your advisor decide alone?", options: ["Keep things steady and ask me", "Use your judgement", "Run the realm and tell me after"] },
-];
-
 function setUpAdvisor(bot: Bot, index: number) {
   const seat = (): Seat => state.seats[index];
   let queue: Promise<unknown> = Promise.resolve();
@@ -195,29 +188,45 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().civ = chosen.name;
     persist();
     await ctx.reply(`${chosen.name} it is - the people of ${chosen.leader}.`);
-    await askSetupQuestion(ctx);
+    await presentCandidates(ctx);
   };
 
-  const askSetupQuestion = async (ctx: Context) => {
-    const step = SETUP[seat().setup!.length];
-    const keyboard = new InlineKeyboard();
-    step.options.forEach((option, optionIndex) => keyboard.text(option, `setup:${optionIndex}`).row());
-    await ctx.reply(`${step.question}\n\n(Pick one, or answer in your own words.)`, { reply_markup: keyboard });
-  };
-
-  const answerSetup = async (ctx: Context, answer: string) => {
-    seat().setup!.push(answer);
-    persist();
-    if (seat().setup!.length < SETUP.length) return askSetupQuestion(ctx);
-    const answers = SETUP.map((step, stepIndex) => ({ question: step.question, answer: seat().setup![stepIndex] }));
+  /** Three people present themselves; the ruler takes one, or sends once for three others */
+  const presentCandidates = async (ctx: Context) => {
     try {
-      seat().character = await whileTyping(bot, ctx.chat!.id, createCharacter(seat(), answers));
-      seat().setup = undefined;
+      const takenNames = state.seats.flatMap((other) => (other.character ? [other.character.name.split(/[ ,]/)[0]] : []));
+      seat().candidates = await whileTyping(bot, ctx.chat!.id, draftCandidates(seat().civ, ADVISOR_MODEL, takenNames));
       persist();
-      const greeting = await whileTyping(bot, ctx.chat!.id, advisorGreeting(seat()));
+      const keyboard = new InlineKeyboard();
+      seat().candidates!.forEach((candidate, candidateIndex) => keyboard.text(candidate.name, `advisor:${candidateIndex}`).row());
+      if (!seat().rerolled) keyboard.text("Send for three others", "advisor:others");
+      await ctx.reply(`Three have come to offer themselves as your chief advisor.\n\n${seat().candidates!.map(card).join("\n\n")}\n\nWhom will you have at your side?`, { reply_markup: keyboard });
+    } catch (error) {
+      log("drafting candidates failed:", error);
+      seat().setup = undefined;
+      await ctx.reply("Your advisors are delayed on the road. Send /start to try again.");
+    }
+  };
+
+  const chooseAdvisor = async (ctx: Context, choice: string) => {
+    if (choice === "others") {
+      if (seat().rerolled) return;
+      seat().rerolled = true;
+      return presentCandidates(ctx);
+    }
+    const chosen = seat().candidates?.[Number(choice)];
+    if (!chosen) return;
+    const replaced = seat().character?.name;
+    try {
+      seat().character = { name: chosen.name, title: chosen.title, sheet: chosen.sheet };
+      seat().setup = undefined;
+      seat().candidates = undefined;
+      seat().rerolled = undefined;
+      persist();
+      const greeting = await whileTyping(bot, ctx.chat!.id, advisorGreeting(seat(), replaced));
       remember(seat(), { from: "advisor", text: greeting });
-      await ctx.reply(`${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely; time only passes when you say so or send /go.  /status  /map  /usage`);
-      await flushDevFeed(herald, `Character for ${seat().civ}: ${seat().character!.name}`, [`autonomy: ${seat().character!.autonomy}`]);
+      await ctx.reply(`${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely; time only passes when you say so or send /go.  /status  /map  /will  /usage`);
+      await flushDevFeed(herald, `Character for ${seat().civ}: ${seat().character!.name}, ${chosen.title}`, [chosen.sheet]);
       if (state.phase === "setup") {
         const missing = state.seats.filter((other) => other.kind !== "agent" && (!other.civ || !other.character)).length;
         if (missing === 0) await createWorld();
@@ -226,8 +235,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       const era = String((await host.briefing(seat().civ).catch(() => ({ era: "Ancient era" }))).era);
       void advisorPortrait(seat().civ, seat().character!.sheet, era).then((png) => png && ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name })).catch(() => {});
     } catch (error) {
-      log("character creation failed:", error);
-      seat().setup = undefined;
+      log("taking on the advisor failed:", error);
       await ctx.reply("Your advisor is delayed on the road. Send /start to try again.");
     }
   };
@@ -254,31 +262,36 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().setup = [];
     persist();
     if (!seat().civ) {
-      await ctx.reply("A new history is about to begin. Before your court assembles, a few questions.");
+      await ctx.reply("A new history is about to begin. First, your people.");
       return askForPeople(ctx);
     }
-    await ctx.reply(`${seat().civ} is yours to rule. Before your court assembles, three questions.`);
-    await askSetupQuestion(ctx);
+    await ctx.reply(seat().character ? `${seat().character!.name} will step aside once you have chosen another; what they wrote down of your wishes passes to their successor.` : `${seat().civ} is yours to rule. Your court assembles.`);
+    await presentCandidates(ctx);
   };
 
   bot.command("start", (ctx) =>
     seat().character
-      ? ctx.reply(`${seat().character!.name} is at your side, Majesty. Talk freely; time only passes when you say so or send /go.\n\n/status  /map  /usage  /character (choose a new advisor)`)
+      ? ctx.reply(`${seat().character!.name} is at your side, Majesty. Talk freely; time only passes when you say so or send /go.\n\n/status  /map  /will  /usage  /character`)
       : beginSetup(ctx),
   );
 
-  bot.command("character", (ctx) => (state.phase === "passing" ? ctx.reply("Wait until time stops passing.") : beginSetup(ctx)));
+  // Who is at the ruler's side: exactly the text the advisor itself is given, and the way to replace them
+  bot.command("character", (ctx) =>
+    seat().character
+      ? ctx.reply(`${seat().character!.name}${seat().character!.title ? `, ${seat().character!.title}` : ""}\n\n${seat().character!.sheet}\n\n${seat().mayDeclareWar ? "You have given them leave to declare war on their own; tell them if you take it back." : "War is yours alone to declare, unless you tell them otherwise."} What else they may do unasked is whatever you tell them - see /will.`,
+          { reply_markup: new InlineKeyboard().text("Dismiss them and send for candidates", "advisor:new") })
+      : beginSetup(ctx),
+  );
 
   bot.callbackQuery(/^people:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
     if (seat().setup && !seat().civ) await choosePeople(ctx, ctx.match[1]);
   });
 
-  bot.callbackQuery(/^setup:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^advisor:(\d+|others|new)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {}); // a press from before a restart is too old to acknowledge, but still counts
-    if (!seat().setup) return;
-    const option = SETUP[seat().setup!.length]?.options[Number(ctx.match[1])];
-    if (option) await answerSetup(ctx, option);
+    if (ctx.match[1] === "new") return state.phase === "passing" ? void (await ctx.reply("Wait until time stops passing.")) : beginSetup(ctx);
+    if (seat().setup) await chooseAdvisor(ctx, ctx.match[1]);
   });
 
   const dismiss = async (reply: (text: string) => Promise<unknown>, silently = false) => {
@@ -432,7 +445,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
     if (seat().setup && !seat().civ) return choosePeople(ctx, ctx.message.text);
-    if (seat().setup) return answerSetup(ctx, ctx.message.text);
+    if (seat().setup) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
     if (state.phase === "setup") return seat().character ? ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.") : beginSetup(ctx);
     if (!seat().character && seat().chat.length === 0) return beginSetup(ctx);
     audience(ctx, ctx.message.text);
@@ -471,7 +484,7 @@ if (devChat && devFeedInChat())
       `game: ${game.year} (turn ${game.turn}); ruled ${game.ruled.join(", ")}; others ${game.majorCivs.map((civ) => civ.civ).filter((civ) => !game.ruled.includes(civ)).join(", ") || "none"}`,
       `models: advisor ${process.env.ADVISOR_MODEL ?? "claude-opus-5"}, govern ${process.env.GOVERN_MODEL ?? process.env.ADVISOR_MODEL ?? "claude-opus-5"}, chronicler ${process.env.HERALD_MODEL ?? process.env.ADVISOR_MODEL ?? "claude-opus-5"}`,
       `rounds: ${process.env.TURNS_PER_ROUND ?? 12} turns (${process.env.EARLY_ROUND_TURNS ?? 24} before turn ${process.env.EARLY_GAME_UNTIL_TURN ?? 48}), govern every ${process.env.GOVERN_EVERY_TURNS ?? 4}`,
-      ...state.seats.map((seat) => `${seat.civ}: ${seat.character ? `${seat.character.name} (${seat.character.autonomy})` : "no character yet - /start"}`),
+      ...state.seats.map((seat) => `${seat.civ}: ${seat.character ? `${seat.character.name}${seat.character.title ? `, ${seat.character.title}` : ""}` : "no character yet - /start"}`),
       "Full prompts arrive as .md files after each audience and round.",
     ].join("\n")).catch(() => {}),
   );
