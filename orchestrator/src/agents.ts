@@ -44,6 +44,12 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
       () => attempt(() => host.options(seat.civ)),
     ),
     tool(
+      "look_up",
+      "The rulebook entry for a building, wonder, unit, technology or policy: cost, what it gives, what it needs, whether a wonder is already built somewhere. Check before advising on anything you are not sure of - never advise from memory.",
+      { name: z.string() },
+      ({ name }) => attempt(() => host.lookup(seat.civ, name)),
+    ),
+    tool(
       "get_log",
       "The chancery log: everything that happened to our realm turn by turn - what was built, lost, researched, what the officials changed on their own.",
       { sinceTurn: z.number().describe("Return entries after this turn") },
@@ -56,7 +62,7 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
         personality: z.object(Object.fromEntries(PERSONALITY_VALUES.map((name) => [name, weight]))).partial().optional().describe(PERSONALITY_HELP),
         research: z.array(z.string()).optional().describe("Technology goals in priority order; the path to each is researched automatically and the officials never deviate while a goal remains."),
         policyBranches: z.array(z.string()).optional().describe("Policy branches in the order to adopt and complete them."),
-        neverBuild: z.array(z.string()).optional().describe("Standing: buildings and units the officials may never queue on their own (e.g. Barracks, Knight). Replaces the previous list. You can still order them yourself."),
+        neverBuild: z.array(z.string()).optional().describe("Standing: buildings and units the officials may never queue on their own (e.g. Barracks, Knight; 'all wonders' and 'all military units' work as whole categories). Replaces the previous list. You can still order them yourself."),
         queue: z.array(z.object({ city: z.string(), items: z.array(z.string()) })).optional().describe("Replace a city's whole build queue, in order. Binding: the officials only add to it once it runs out."),
         build: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Put one item at the front of a city's queue, keeping the rest."),
         purchase: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Buy a unit or building outright with gold, delivered at once. See get_options for prices."),
@@ -141,7 +147,7 @@ async function run(role: string, model: string, systemPrompt: string, prompt: st
   async function* input() {
     yield { type: "user" as const, message: { role: "user" as const, content: prompt }, parent_tool_use_id: null, session_id: "" };
   }
-  const toolNames = ["get_briefing", "get_options", "get_log", "set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])];
+  const toolNames = ["get_briefing", "get_options", "look_up", "get_log", "set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])];
   const stream = query({
     prompt: input() as never,
     options: {
@@ -195,6 +201,12 @@ const AUTONOMY = {
   bold: "While the ruler is away you run the realm as your own project within their will: you pursue your plan, strike deals, spend the treasury and take chances, and report afterwards what you dared.",
 } as const;
 
+/** Who may start a war: set by the ruler's setup answers, not by the rules of the game */
+const warRule = (seat: Seat) =>
+  seat.kind === "agent" ? "War is yours to declare, but only as a considered step of your plan, never on a whim."
+  : seat.character?.war === "trusted" ? "The ruler trusts you with the sword: you may declare war on your own when their recorded will calls for it (a named enemy, a cause, a condition that has now come true) - never merely because it looks winnable - and you answer for it in your next dispatch."
+  : "War is the ruler's alone to declare: never declare it without their explicit word, however clear the case - bring it to them instead.";
+
 const persona = (seat: Seat) => seat.kind === "agent" ? sovereignPersona(seat) : advisorPersona(seat);
 
 /** A realm with no human ruler: the same person, the same levers and limits, but answerable to no one */
@@ -227,7 +239,7 @@ export const advisorReply = async (seat: Seat, message: string, turnsPerRound: n
 
 This is an audience - a conversation between two people, not a report. Your dispatch already told the story and asked the broad question, so now talk the way a trusted advisor or a good friend would across a table: short replies, one thing at a time. Hold yourself to about 50 words a reply (the closing may run to 80): do not list what you ordered, do not explain mechanics, do not answer questions nobody asked. If you have two things to say, say the more important one and let the other wait for the next turn.
 The shape of a good audience: the ruler answers your broad question; you then bring up the specific decisions that follow from it, ONE at a time - each with a sentence or two on why it matters and what it costs either way, and your own lean - and wait for their word on each. Two or three such decisions is plenty; decide the small things yourself. Follow their lead if they want to talk about something else.
-Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey. Declare war only on an explicit command.
+Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey. ${warRule(seat)}
 When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. That closing is the only place you sum up. Do not offer /go while a question of yours is still unanswered.
 In the closing message only, just before the "/go" line, add these two lines (they are taken out before the ruler sees the message):
 IMAGE: caption | a picture of what this audience decided, as a painter of the age would show it - the moment itself (the council table, the declaration read from the steps, the first stone laid), with the people, dress and architecture of ${seat.civ} in this year. Realistic oil painting, no text.
@@ -240,13 +252,13 @@ Time passes only when the ruler dismisses the court - with /go, or by telling yo
   );
 
 /** The advisor governing between audiences: a short pass every few turns, with the fresh briefing already in hand */
-export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number) =>
+export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number, wokenBy: string[] = []) =>
   run(
     "govern",
     seat.model ?? GOVERN_MODEL,
     `${persona(seat)}
 
-${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${seat.kind === "agent" ? "War is yours to declare, but only as a considered step of your plan, never on a whim." : "Never declare war unless the will explicitly commands war on that civ now."}
+${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} ${wokenBy.length ? `You were sent for ahead of your usual look-in because: ${wokenBy.join("; ")}. Deal with that first.\n` : ""}Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Log lines that begin "By your order" were yours; "The officials..." were theirs. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${warRule(seat)}
 Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".`,
     `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
     seat,
@@ -299,12 +311,14 @@ export const createCharacter = async (seat: Seat, answers: { question: string; a
 Answer in exactly this shape:
 NAME: a name fitting the civilization
 AUTONOMY: cautious | balanced | bold   (from how much initiative the ruler wants them to take while away)
+WAR: asks | trusted   (trusted only if the ruler clearly wants a reign of conquest AND gave wide initiative; otherwise asks)
 SHEET:
 Five to seven sentences in the second person ("You are..."): temperament, what they care about and lean towards, how they speak (give their voice a recognisable manner), one blind spot that will sometimes colour their advice, and how they feel about this ruler.`,
     `The ruler is ${seat.rulerName ?? "unnamed"}, sovereign of ${seat.civ}.\n\n${answers.map((entry) => `${entry.question}\n> ${entry.answer}`).join("\n\n")}`,
   );
   const autonomy = (/AUTONOMY:\s*(cautious|balanced|bold)/i.exec(raw)?.[1].toLowerCase() ?? "balanced") as Character["autonomy"];
-  return { name: /NAME:\s*(.+)/.exec(raw)?.[1].trim() ?? "your advisor", autonomy, sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw };
+  const war = /WAR:\s*trusted/i.test(raw) ? "trusted" : "asks";
+  return { name: /NAME:\s*(.+)/.exec(raw)?.[1].trim() ?? "your advisor", autonomy, war, sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw };
 };
 
 /** The advisor's first words to the ruler, in character */

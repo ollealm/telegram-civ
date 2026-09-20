@@ -15,7 +15,7 @@ const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
 /** Models for agent-ruled realms, dealt in turn */
 const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-opus-5,claude-sonnet-5").split(",").map((model) => model.trim());
 /** How the game's own peoples are handicapped; rulers' realms always get the player's side of the scale */
-const DIFFICULTIES: Record<string, string> = { Gentle: "Chieftain", Easy: "Warlord", Even: "Prince", Hard: "King" };
+const DIFFICULTIES: Record<string, string> = { Even: "Prince", Easy: "Warlord", Gentle: "Chieftain", Hard: "King" };
 const CITY_STATES: Record<string, number> = { Tiny: 2, Small: 4, Medium: 6, Large: 8, Huge: 10 };
 
 const advisorTokens = Object.keys(process.env)
@@ -391,7 +391,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         if (draft.ai > 0) {
           const keyboard = new InlineKeyboard();
           row(keyboard, "difficulty", Object.keys(DIFFICULTIES));
-          return void ctx.editMessageText(`${draft.ai} people${draft.ai === 1 ? "" : "s"} played by the game. It plays a tight game; how hard should they be? Gentle and Easy slow them down and help the ruled realms, Even is level terms, Hard favours them.`, { reply_markup: keyboard });
+          return void ctx.editMessageText(`${draft.ai} people${draft.ai === 1 ? "" : "s"} played by the game. How should they be matched? Even is level terms and the usual choice; Easy and Gentle slow them down and help the ruled realms; Hard favours them.`, { reply_markup: keyboard });
         }
       }
       if (step === "ai" || step === "difficulty") {

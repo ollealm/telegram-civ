@@ -47,23 +47,30 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     let round: RoundResult | undefined;
     let carried = pending?.publicEvents ?? [];
     // A council event (war, a lost city, victory) ends the round early
+    // Everyone looks in on schedule; in between, an advisor is sent for only when something happened in their realm
+    let woken: Record<string, string[]> = {};
+    let lookedAt = new Map(seats.map((seat) => [seat.civ, fromTurn]));
     for (let played = opening.turn - fromTurn; played < length; ) {
-      const step = Math.min(GOVERN_EVERY, length - played);
-      const sinceTurn = fromTurn + played;
+      const now = fromTurn + played;
+      const scheduled = Object.keys(woken).length === 0;
+      const due = scheduled ? seats : seats.filter((seat) => woken[seat.civ]);
       await Promise.all(
-        seats.map((seat) =>
+        due.map((seat) =>
           io
-            .working(seat, governPass(seat, sinceTurn, step))
-            .then((entry) => notes.get(seat.civ)!.push(`T${sinceTurn}: ${entry}`))
+            .working(seat, governPass(seat, lookedAt.get(seat.civ)!, GOVERN_EVERY, woken[seat.civ]))
+            .then((entry) => { notes.get(seat.civ)!.push(`T${now}: ${entry}`); lookedAt.set(seat.civ, now); })
             .catch((error) => io.log(`govern pass for ${seat.civ} failed:`, error.message)),
         ),
       );
-      const chunk = await host.advance(step);
+      const untilNextLookIn = GOVERN_EVERY - (played % GOVERN_EVERY);
+      const chunk = await host.advance(Math.min(untilNextLookIn, length - played), true);
       played = chunk.turn - fromTurn;
       round = { ...chunk, fromTurn, fromYear: round?.fromYear ?? pending?.fromYear ?? chunk.fromYear, publicEvents: [...(round?.publicEvents ?? carried), ...chunk.publicEvents] };
       carried = [];
-      io.log(`Advanced to turn ${chunk.turn}`, chunk.stoppedEarly ?? "");
-      if (chunk.stoppedEarly || chunk.turn === sinceTurn) break;
+      // A wake-up that lands on a scheduled look-in anyway needs no pass of its own
+      woken = played % GOVERN_EVERY === 0 || played >= length ? {} : Object.fromEntries(Object.entries(chunk.wake ?? {}).filter(([civ]) => seats.some((seat) => seat.civ === civ)));
+      io.log(`Advanced to turn ${chunk.turn}`, chunk.stoppedEarly ?? "", Object.keys(woken).length ? `woke ${Object.keys(woken).join(", ")}` : "");
+      if (chunk.stoppedEarly || chunk.turn === now) break;
     }
     if (!round) throw new Error("No turns were played");
     const finished = round;

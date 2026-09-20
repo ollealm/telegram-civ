@@ -14,6 +14,8 @@ export type Character = {
   sheet: string;
   /** How much the advisor does unasked while the ruler is away, and with unanswered choices */
   autonomy: "cautious" | "balanced" | "bold";
+  /** asks: war only on the ruler's word. trusted: may declare war alone when the ruler's will calls for it. */
+  war?: "asks" | "trusted";
 };
 
 export type Seat = {

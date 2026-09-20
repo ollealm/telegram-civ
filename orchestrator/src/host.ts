@@ -34,6 +34,8 @@ export type RoundResult = {
   turn: number;
   year: string;
   stoppedEarly: string | null;
+  /** civ -> what just happened that its advisor should see before the next scheduled look-in */
+  wake?: Record<string, string[]>;
   publicEvents: PublicEvent[];
   rankings: { civ: string; score: number; cities: number }[];
 };
@@ -59,7 +61,8 @@ export const host = {
   state: () => call<GameState>("GET", "/state"),
   newGame: (setup: { ruled: string[]; others: string[]; mapSize?: string; cityStates?: number; difficulty?: string }) =>
     call<GameState>("POST", "/new", setup),
-  advance: (turns: number) => call<RoundResult>("POST", "/advance", { turns }),
+  advance: (turns: number, wake = false) => call<RoundResult>("POST", "/advance", { turns, wake }),
+  lookup: (civ: string, name: string) => call<Record<string, unknown>>("GET", `/lookup${civQuery(civ)}&name=${encodeURIComponent(name)}`),
   briefing: (civ: string, logSince?: number) =>
     call<Record<string, unknown>>("GET", "/briefing" + civQuery(civ) + (logSince === undefined ? "" : `&since=${logSince}`)),
   options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
