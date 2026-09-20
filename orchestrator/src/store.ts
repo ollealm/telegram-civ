@@ -20,6 +20,8 @@ export type Character = {
 
 export type Seat = {
   civ: string;
+  /** Where the realm stood among its rivals at the last dispatch, as the chancery reckoned it */
+  standing?: string;
   /** agent: a realm with no human ruler - the advisor rules alone, under the same limits (it acts every few turns) */
   kind?: "human" | "agent";
   /** The model this seat's advisor runs on, when not the default */

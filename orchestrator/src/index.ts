@@ -354,6 +354,9 @@ function setUpAdvisor(bot: Bot, index: number) {
     await ctx.reply(`${game.year} (turn ${game.turn}). ${state.phase === "passing" ? "Time is passing." : ready.join(", ")}\n\nYour recorded will:\n${seat().will || "(none yet)"}`);
   });
 
+  // The record the advisor governs by while the ruler is away - theirs to read, and to correct by saying so in the audience
+  bot.command("will", (ctx) => ctx.reply(`What ${seat().character?.name ?? "your advisor"} has written down as your standing wishes, and governs by while you are away. "My reading" lines are the advisor's guesses - tell them if one is wrong or has had its day.\n\n${seat().will || "(nothing recorded yet)"}`));
+
   bot.command("usage", (ctx) => ctx.reply(usageSummary()));
 
   bot.command("map", (ctx) => sendMap(bot, seat()).catch(() => ctx.reply("No map to show yet.")));

@@ -57,14 +57,15 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
     ),
     tool(
       "set_orders",
-      "Change the realm's orders; include only what should change. Standing orders (kept until changed): personality, research, policyBranches, neverBuild, goldReserve. Immediate: queue, build, purchase, declareWar. The reply confirms the resulting queues, research and gold.",
+      "Change the realm's orders; include only what should change. Standing orders (kept until changed): personality, research, policyBranches, neverBuild, goldReserve, garrisonEveryCity. Immediate: queue, build, purchase, declareWar. The reply confirms the resulting queues, research and gold.",
       {
         personality: z.object(Object.fromEntries(PERSONALITY_VALUES.map((name) => [name, weight]))).partial().optional().describe(PERSONALITY_HELP),
         research: z.array(z.string()).optional().describe("Technology goals in priority order; the path to each is researched automatically and the officials never deviate while a goal remains."),
         policyBranches: z.array(z.string()).optional().describe("Policy branches in the order to adopt and complete them. A single policy may be named too (e.g. Monarchy) to take it as soon as it is open, ahead of what follows in the list."),
         goldReserve: z.number().nullable().optional().describe("Standing: gold the officials must leave in the treasury - they spend on their own (upgrades, city-state gifts, purchases) only what lies above it. null lifts it. Your own purchases and gifts are not bound by it."),
         neverBuild: z.array(z.string()).optional().describe("Standing: buildings and units the officials may never queue on their own (e.g. Barracks, Knight; 'all wonders' and 'all military units' work as whole categories). Replaces the previous list. You can still order them yourself."),
-        queue: z.array(z.object({ city: z.string(), items: z.array(z.string()) })).optional().describe("Replace a city's whole build queue, in order. Binding: the officials only add to it once it runs out."),
+        garrisonEveryCity: z.boolean().optional().describe("Standing: whenever a city stands without a soldier in it, the nearest free soldier on that landmass is sent in under a garrison order (logged as 'By your standing order'). It does not buy or build soldiers - if none is free, the warning stays."),
+        queue: z.array(z.object({ city: z.string(), items: z.array(z.string()) })).optional().describe("Replace a city's whole build queue, in order. Binding: the officials only add to it once it runs out. The LAST item may be Science, Gold, Culture or Faith: the city then turns its production into that yield until you change the queue."),
         build: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Put one item at the front of a city's queue, keeping the rest."),
         purchase: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Buy a unit or building outright with gold, delivered at once. See get_options for prices."),
         declareWar: z.array(z.string()).optional().describe("Civs to declare war on, immediately. Only on the ruler's explicit command."),
@@ -114,7 +115,7 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
       ) as never,
       tool(
         "record_rulers_will",
-        "Replace the record of the ruler's standing wishes - the text you govern by while the ruler is away. Only standing intent: goals, priorities, red lines, stance towards each neighbour, what to do if attacked. No history, no log, no numbers that go stale.",
+        "Replace your record of the ruler's standing wishes - the text you govern by while the ruler is away. It is YOUR record, and the ruler can read it. One line per wish, each beginning with the year and whose it is: [AD 1540, their words] for something the ruler plainly said should stand, quoting or staying close to their phrasing; [AD 1540, my reading] for what you inferred. Only standing intent: goals, priorities, red lines, stance towards each neighbour, what to do if attacked. An answer to a question of yours settles that question, not the reign - it goes here only if the ruler said it should stand. Drop lines that events have overtaken. No history, no log, no numbers that go stale.",
         { will: z.string() },
         async ({ will }) => {
           seat.will = will;
@@ -143,7 +144,7 @@ export type Trace = {
 let traceSink: (trace: Trace) => void = () => {};
 export const onTrace = (sink: (trace: Trace) => void) => (traceSink = sink);
 
-export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false) {
+export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false, attempt = 1): Promise<string> {
   const started = Date.now();
   const toolCalls: Trace["toolCalls"] = [];
   async function* input() {
@@ -169,6 +170,13 @@ export async function run(role: string, model: string, systemPrompt: string, pro
   });
   for await (const message of stream) {
     if (process.env.RULER_DEBUG) console.log(`[${role}]`, JSON.stringify(message).slice(0, 600));
+    // League agents have reported "the order tools were unavailable": a session that starts before its tools are up is started again
+    if (seat && message.type === "system" && message.subtype === "init" && !(message.tools ?? []).includes("mcp__realm__set_orders")) {
+      console.warn(`[${role}] ${seat.civ}: session started without the realm tools (attempt ${attempt})`);
+      await stream.return?.(undefined as never);
+      if (attempt < 3) return run(role, model, systemPrompt, prompt, seat, canRecordWill, attempt + 1);
+      throw new Error(`${role} agent never got its tools`);
+    }
     if (message.type === "assistant")
       for (const block of message.message.content as { type: string; name?: string; input?: unknown }[])
         if (block.type === "tool_use") toolCalls.push({ name: String(block.name).replace("mcp__realm__", ""), input: block.input });
@@ -229,7 +237,7 @@ The officials are yours to command but have a will of their own, and now and the
 Be candid: report failures and losses as they are, and read the chancery log before explaining what happened. ${seat.character ? "Stay in character." : "Stay in character - loyal, concise, a little dry."} ${TELEGRAM_STYLE}`;
 
 const memory = (seat: Seat) =>
-  `The ruler's standing will:\n${seat.will || "(nothing recorded yet)"}\n\nYour own operating plan:\n${seat.plan || "(none yet - write one with update_plan)"}\n\nYour campaign journal (newest last):\n${seat.journal.slice(-8).join("\n") || "(the campaign has just begun)"}`;
+  `${seat.kind === "agent" ? "Your own standing intent (you wrote it; revise it when the world changes - it is a course, not a vow)" : "Your record of the ruler's standing wishes (you wrote it - 'my reading' lines are your guesses, not their words; when one starts to cost the realm, raise it at the next audience instead of enforcing it)"}:\n${seat.will || "(nothing recorded yet)"}\n\nYour own operating plan:\n${seat.plan || "(none yet - write one with update_plan)"}\n\nYour campaign journal (newest last):\n${seat.journal.slice(-8).join("\n") || "(the campaign has just begun)"}`;
 
 const transcript = (seat: Seat) =>
   seat.chat.map((message) => `${message.from === "ruler" ? "Ruler" : "You"}: ${message.text}`).join("\n\n");
@@ -243,7 +251,7 @@ export const advisorReply = async (seat: Seat, message: string, turnsPerRound: n
 This is an audience - a conversation between two people, not a report. Your dispatch already told the story and asked the broad question, so now talk the way a trusted advisor or a good friend would across a table: short replies, one thing at a time. Hold yourself to about 50 words a reply (the closing may run to 80): do not list what you ordered, do not explain mechanics, do not answer questions nobody asked. If you have two things to say, say the more important one and let the other wait for the next turn.
 The shape of a good audience: the ruler answers your broad question; you then bring up the specific decisions that follow from it, ONE at a time - each with a sentence or two on why it matters and what it costs either way, and your own lean - and wait for their word on each. Two or three such decisions is plenty; decide the small things yourself. Follow their lead if they want to talk about something else.
 Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey. ${warRule(seat)}
-When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. That closing is the only place you sum up. Do not offer /go while a question of yours is still unanswered.
+When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. That closing is the only place you sum up. If you wrote a new standing rule into your record during this audience, say so there in one plain sentence ("I take it as standing that..."), so the ruler can correct you - a rule they never hear of is a rule they never agreed to. Do not offer /go while a question of yours is still unanswered.
 In the closing message only, just before the "/go" line, add these two lines (they are taken out before the ruler sees the message):
 IMAGE: caption | a picture of what this audience decided, as a painter of the age would show it - the moment itself (the council table, the declaration read from the steps, the first stone laid), with the people, dress and architecture of ${seat.civ} in this year. Realistic oil painting, no text.
 PROCLAMATION: only if the ruler said something in their own words worth carving in stone about a matter the whole world will witness anyway (war, peace, an alliance, a founding, a great work) - then give their words as a herald would cry them, keeping their phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}: 'A pact is a pact.'" Never anything about plans, treasury, research or weaknesses. If there is nothing of the kind, leave the line out. The ruler's words may reach the world's chronicle, so rulers who speak in character are remembered.
@@ -268,6 +276,24 @@ ${newAge ? "An age has turned. Before the day's business, weigh the longer game 
     newAge,
   );
 
+/** Where the realm stands among the powers it knows - computed from the briefing, so it cannot drift with the advisor's mood */
+export const standingOf = (briefing: any): string => {
+  if (!briefing?.knownCivs) return "";
+  const rivals = (briefing.knownCivs as any[]).filter((civ) => typeof civ.techs === "number");
+  if (!rivals.length) return "We know no other great power yet.";
+  const us = { civ: "we", techs: Array.isArray(briefing.techsResearched) ? briefing.techsResearched.length : Number(briefing.techsResearched), militaryStrength: briefing.militaryStrength, cities: briefing.cities?.length ?? 0, score: briefing.score };
+  const ordinal = (place: number) => ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth"][place - 1] ?? `${place}th`;
+  const line = (label: string, key: "techs" | "militaryStrength" | "cities" | "score") => {
+    const table = [us, ...rivals].sort((a, b) => b[key] - a[key]);
+    const place = table.findIndex((row) => row.civ === "we") + 1;
+    const leader = table[0];
+    const ratio = leader.civ === "we" ? (table[1][key] ? us[key] / table[1][key] : 1) : us[key] ? leader[key] / us[key] : 0;
+    const gap = ratio >= 3 ? "by a wide margin" : ratio >= 1.5 ? "clearly" : ratio >= 1.15 ? "by some way" : "narrowly";
+    return `${label}: ${ordinal(place)} of ${table.length}${leader.civ === "we" ? `, leading ${gap}` : ` - ${leader.civ} leads ${gap}`}`;
+  };
+  return [line("Learning", "techs"), line("Arms", "militaryStrength"), line("Cities", "cities"), line("Overall", "score")].join("; ") + ".";
+};
+
 export type Dispatch = { text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
 
 /** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
@@ -280,7 +306,8 @@ export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: 
 You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk. Speak in years, never turn numbers. No tools are needed - everything is below. Answer in exactly this shape:
 
 DISPATCH:
-Around 120-160 words, in your voice: what happened in these years, how the realm stands among its rivals, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
+Around 120-160 words, in your voice: what happened in these years, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
+It must also say plainly where the realm stands among its rivals in what this ruler cares about most, and whether it is gaining or falling behind - taken from "Standing among the powers" below, which the chancery reckons and you do not get to soften. Rank is history, not machinery: say it in the world's words ("the scholars of Delhi are ahead of ours, and drawing away"), without the figures. Good for our size is not the same as ahead; never let the one pass for the other.
 
 STRATEGY:
 Two to four sentences on the longer game: where this realm is heading over the next century if it stays its course, what it is becoming good at, and the one thing most likely to undo it.
@@ -293,8 +320,9 @@ caption | description - one picture of a moment from OUR realm in these years (a
 
 JOURNAL:
 One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
-    `${memory(seat)}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Briefing now:\n${JSON.stringify(briefing)}`,
+    `${memory(seat)}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Standing among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
   );
+  seat.standing = standingOf(briefing) || seat.standing;
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
   const [caption, ...description] = section("IMAGE").split("|");
   return {
@@ -349,6 +377,7 @@ export const heraldNewspaper = (round: RoundResult, earlier: PublicEvent[], proc
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. Each round you add a new chapter covering the years below, in the voice of a historian looking back: what happened, what it meant, how the world's shape is changing. Name the years when they matter ("In 1240 BC..."), never turn numbers. Give it a short chapter title. Under 160 words; two to four paragraphs; wry, unhurried, occasionally grand. A quiet age deserves a quiet chapter, not padding.
 When a ruler's proclamation belongs to one of these events, quote it - history remembers what rulers said when they acted ("Rome went to war with the words..."). Use at most two, only where they fit, and never invent a quote.
+Once in the chapter, in a sentence of your own judgement, say how the great powers are accounted against one another now (from the standing below) - who is foremost, who is rising, who has slipped - without figures. You flatter no court.
 Report only the events listed - these are things the whole world could witness. Never speculate about any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}
 After the chapter, add a line "IMAGES:" and then two lines, each "- caption | description": two pictures for this chapter, as a painter of the period would have made them - a scene from its chief event, and a portrait or second scene. The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events.`,
     `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
