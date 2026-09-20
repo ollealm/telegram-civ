@@ -9,7 +9,8 @@ import type { Seat } from "../src/store.ts";
 const civ = process.argv[2] ?? "Sweden";
 const model = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 const trait = (key: string) => TRAITS.find((entry) => entry.key === key)!;
-const CASTS = [["daring", "proud"], ["cunning", "restless"], ["wary", "softhearted"], ["singleminded", "cunning"], []];
+const FREE = process.argv[3] === "free"; // no trait list: the writer gives each person one conviction of their own
+const CASTS = FREE ? [[], [], [], []] : [["daring", "proud"], ["cunning", "restless"], ["wary", "softhearted"], ["singleminded", "cunning"], []];
 
 const will = `[their words] "Make ${civ} a realm of learning and of sea trade."\n[their words] "Keep the peace where we can. Found new towns where the land is good."`;
 const briefing = {
@@ -43,7 +44,7 @@ const round = { fromTurn: 96, fromYear: "AD 860", turn: 108, year: "AD 920", sto
 mkdirSync("../data/harness", { recursive: true });
 const out = `../data/harness/mockturn-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.md`;
 const results = await Promise.all(CASTS.map(async (keys) => {
-  const candidate: Candidate = await draftCandidate(civ, model, keys.map(trait));
+  const candidate: Candidate = await draftCandidate(civ, model, keys.map(trait), undefined, undefined, FREE);
   const seat: Seat = { civ, rulerName: "olle", will, plan: "", journal: [], chat: [], ready: false, character: { name: candidate.name, sheet: fullSheet(candidate), autonomy: "balanced", war: "asks" } as Seat["character"] };
   const dispatch = await advisorReport(seat, round as never, ["AD 870: renewed furs-for-wine with India.", "AD 900: set research to Education."], briefing);
   const alone = await run("govern", model,

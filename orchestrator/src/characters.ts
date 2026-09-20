@@ -21,7 +21,7 @@ export const TRAITS: Trait[] = [
   { key: "singleminded", group: "attention", label: "Single-minded", sentence: "Once the ruler has named a great aim, everything is measured against it: in council you argue against whatever does not serve it, however tempting, and you come back to the aim every time." },
 ];
 
-export const TEMPERAMENT_RULE = "Your temperament shows in what you argue for in council: argue it properly, as your own conviction. The ruler decides, and you obey without sulking. While the ruler is away you serve their recorded wishes, not your own leanings - and you never bend a fact.";
+export const TEMPERAMENT_RULE = "Your own outlook shows in what you argue for in council: argue it properly, as your own conviction. The ruler decides, and you obey without sulking. While the ruler is away you serve their recorded wishes, not your own leanings - and you never bend a fact.";
 
 const WALKS_OF_LIFE = ["a farmer's child", "a sailor or fisher", "an old soldier", "a merchant", "a temple servant", "a keeper of laws and records", "a builder or craftsman", "a herder", "a healer", "a singer of old songs", "an exile taken in from another land", "the steward of a great household", "a hunter and tracker", "a smith or miner"];
 
@@ -38,7 +38,7 @@ export const rollTraits = (): Trait[] => {
 
 export type Candidate = { name: string; title: string; pitch: string; sheet: string; traits: Trait[]; walk: string; manner: string };
 
-export const draftCandidate = async (civ: string, model: string, traits = rollTraits(), walk = pick(WALKS_OF_LIFE), manner = pick(MANNERS)): Promise<Candidate> => {
+export const draftCandidate = async (civ: string, model: string, traits = rollTraits(), walk = pick(WALKS_OF_LIFE), manner = pick(MANNERS), ownOutlook = false): Promise<Candidate> => {
   const raw = await run(
     "character",
     model,
@@ -52,7 +52,7 @@ NAME should be an attested but uncommon name of that people - not the first that
 TITLE: two to four words for their station, as it would follow their name ("the Lawspeaker")
 PITCH: at most 30 words in their own voice, presenting themselves to the ruler. It should let the manner be heard; it must not list their traits.
 SHEET:
-Four to six sentences in the second person ("You are..."): who they are and where they come from, how they speak, and how they feel about serving a ruler. Do not restate the temperament sentences below - those are added to the sheet as they stand.`,
+Four to six sentences in the second person ("You are..."): who they are and where they come from, how they speak, and how they feel about serving a ruler. ${ownOutlook ? "Give them one conviction their life has taught them, which they will argue for in council: about HOW a realm should act - when to risk, whom to trust, what is owed to people or to a given word, how fast to move - never about WHAT it should pursue (not learning, conquest, trade, faith or any other road to greatness; that is the ruler's alone). State it in one plain sentence that begins \"You hold that\"." : "Do not restate the temperament sentences below - those are added to the sheet as they stand."}`,
     `The people: ${civ}.\nWalk of life: ${walk}.\nManner of speaking: ${manner}.\nTemperament:\n${traits.map((trait) => `- ${trait.sentence}`).join("\n") || "(nothing pronounced - an even temper)"}`,
   );
   const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim() ?? "";
@@ -65,4 +65,4 @@ export const card = (candidate: Candidate) =>
 
 /** The sheet as the advisor reads it: the person, then the temperament in the card's own words */
 export const fullSheet = (candidate: Candidate) =>
-  candidate.traits.length ? `${candidate.sheet}\n${candidate.traits.map((trait) => trait.sentence).join(" ")}\n${TEMPERAMENT_RULE}` : candidate.sheet;
+  `${candidate.sheet}\n${candidate.traits.map((trait) => trait.sentence).join(" ")}\n${TEMPERAMENT_RULE}`;
