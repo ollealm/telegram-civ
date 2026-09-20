@@ -20,7 +20,14 @@ const say = (...args: unknown[]) => console.log(new Date().toISOString().slice(1
 const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
 mkdirSync("../data/harness", { recursive: true });
 const problems = `../data/harness/league-${stamp}-problems.jsonl`;
+// Every look-in: was it scheduled or a wake-up, did it change anything, what did it cost - to judge whether the fixed look-in earns its keep
+const passes = `../data/harness/league-${stamp}-passes.csv`;
+appendFileSync(passes, "civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
 onTrace((trace) => {
+  if (trace.role === "govern") {
+    const orderCalls = trace.toolCalls.filter((call) => /set_orders|update_plan/.test(call.name)).length;
+    appendFileSync(passes, [trace.civ, trace.model, /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000)].join(",") + "\n");
+  }
   for (const call of trace.toolCalls) {
     const result = call.result ?? "";
     if (/\\"failed\\":\[\\"|is_error|isError|\\"error\\"/.test(result))
