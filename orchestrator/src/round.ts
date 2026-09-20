@@ -49,6 +49,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     // A council event (war, a lost city, victory) ends the round early
     // Everyone looks in on schedule; in between, an advisor is sent for only when something happened in their realm
     let woken: Record<string, string[]> = {};
+    const sentFor = new Set<string>();
     let lookedAt = new Map(seats.map((seat) => [seat.civ, fromTurn]));
     for (let played = opening.turn - fromTurn; played < length; ) {
       const now = fromTurn + played;
@@ -68,7 +69,11 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       round = { ...chunk, fromTurn, fromYear: round?.fromYear ?? pending?.fromYear ?? chunk.fromYear, publicEvents: [...(round?.publicEvents ?? carried), ...chunk.publicEvents] };
       carried = [];
       // A wake-up that lands on a scheduled look-in anyway needs no pass of its own
-      woken = played % GOVERN_EVERY === 0 || played >= length ? {} : Object.fromEntries(Object.entries(chunk.wake ?? {}).filter(([civ]) => seats.some((seat) => seat.civ === civ)));
+      // ...and an advisor is sent for at most once between two look-ins; whatever else happens waits for the next one
+      if (played % GOVERN_EVERY === 0) sentFor.clear();
+      woken = played % GOVERN_EVERY === 0 || played >= length ? {}
+        : Object.fromEntries(Object.entries(chunk.wake ?? {}).filter(([civ]) => seats.some((seat) => seat.civ === civ) && !sentFor.has(civ)));
+      for (const civ of Object.keys(woken)) sentFor.add(civ);
       io.log(`Advanced to turn ${chunk.turn}`, chunk.stoppedEarly ?? "", Object.keys(woken).length ? `woke ${Object.keys(woken).join(", ")}` : "");
       if (chunk.stoppedEarly || chunk.turn === now) break;
     }
