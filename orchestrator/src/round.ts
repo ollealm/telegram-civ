@@ -1,7 +1,7 @@
 // One round of play, shared by the Telegram bots and the test harness:
 // the advisors govern every few turns, time passes, then dispatches and the Chronicler's chapter go out.
 
-import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, sovereignCouncil, type Dispatch } from "./agents.ts";
+import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
@@ -58,7 +58,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       await Promise.all(
         due.map((seat) =>
           io
-            .working(seat, governPass(seat, lookedAt.get(seat.civ)!, GOVERN_EVERY, woken[seat.civ]))
+            .working(seat, governPass(seat, lookedAt.get(seat.civ)!, GOVERN_EVERY, woken[seat.civ], seat.kind === "agent" && scheduled && played === 0))
             .then((entry) => { notes.get(seat.civ)!.push(`T${now}: ${entry}`); lookedAt.set(seat.civ, now); })
             .catch((error) => io.log(`govern pass for ${seat.civ} failed:`, error.message)),
         ),
@@ -106,8 +106,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         const governLogs = notes.get(seat.civ)!;
         const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
         if (seat.kind === "agent") {
-          const entry = await sovereignCouncil(seat, finished, governLogs, briefing).catch((error) => `(council failed: ${error.message})`);
-          seat.journal.push(`${finished.fromYear} to ${finished.year}: ${entry}`);
+          // An agent realm holds no council with itself: its journal is its own look-in notes, and it weighs the longer game at the first look-in of the next age
+          const entry = governLogs.map((note) => note.replace(/^T\d+: /, "")).filter((note) => !/^nothing to change/i.test(note)).join(" ");
+          seat.journal.push(`${finished.fromYear} to ${finished.year}: ${entry.length > 700 ? `${entry.slice(0, 700)}...` : entry || "A quiet age; nothing changed."}`);
           return;
         }
         const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));

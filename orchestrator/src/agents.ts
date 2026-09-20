@@ -254,16 +254,17 @@ Time passes only when the ruler dismisses the court - with /go, or by telling yo
   );
 
 /** The advisor governing between audiences: a short pass every few turns, with the fresh briefing already in hand */
-export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number, wokenBy: string[] = []) =>
+export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number, wokenBy: string[] = [], newAge = false) =>
   run(
     "govern",
     seat.model ?? GOVERN_MODEL,
     `${persona(seat)}
 
 ${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} ${wokenBy.length ? `You were sent for ahead of your usual look-in because: ${wokenBy.join("; ")}. Deal with that first.\n` : ""}Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Log lines that begin "By your order" were yours; "The officials..." were theirs. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${warRule(seat)}
-Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".`,
+${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".`,
     `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
     seat,
+    newAge,
   );
 
 export type Dispatch = { text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
@@ -398,19 +399,6 @@ export const heraldBulletin = (news: string, events: PublicEvent[]) =>
     `The news: ${news}\n\nWhat the world has witnessed in these last years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing else)"}`,
   );
 
-/** An agent-ruled realm holds council with itself at the end of each round: where are we, what do I want next */
-export const sovereignCouncil = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown) =>
-  run(
-    "council",
-    seat.model ?? ADVISOR_MODEL,
-    `${persona(seat)}
-
-An age has passed (${round.fromYear} to ${round.year}). Hold council with yourself: read how the realm and its rivals stand, then rewrite your standing intent with record_rulers_will (goals, priorities, stance towards each neighbour, red lines) and your operating plan with update_plan, and give any orders that follow. Think about the longer game - what this realm is becoming, and what would undo it.
-Reply with one or two plain sentences for your journal: what you decided and why.`,
-    `${memory(seat)}\n\nYour notes while governing this age:\n${governLogs.join("\n") || "(none)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
-    seat,
-    true,
-  );
 
 /** Out of character, after a game: what the agent made of the tools and the information it had */
 export const playtestReview = (seat: Seat) =>
