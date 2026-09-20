@@ -5,7 +5,7 @@
 // Results: ../data/harness/league-<date>.csv (score per realm per round), the Chronicler's chapters and a closing epic on the console.
 
 import { appendFileSync, mkdirSync } from "node:fs";
-import { chroniclerEpic, createCharacter } from "../src/agents.ts";
+import { chroniclerEpic, createCharacter, onTrace, playtestReview } from "../src/agents.ts";
 import { host } from "../src/host.ts";
 import { playRound } from "../src/round.ts";
 import { persist, state, type Seat } from "../src/store.ts";
@@ -16,6 +16,19 @@ const gameAi = Number(process.argv[4] ?? 0);
 const mapSize = process.argv[5] ?? "Small";
 const say = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args);
 
+// Every order that failed, and every call that errored, for the bug hunt afterwards
+const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+mkdirSync("../data/harness", { recursive: true });
+const problems = `../data/harness/league-${stamp}-problems.jsonl`;
+onTrace((trace) => {
+  for (const call of trace.toolCalls) {
+    const result = call.result ?? "";
+    if (/\\"failed\\":\[\\"|is_error|isError|\\"error\\"/.test(result))
+      appendFileSync(problems, JSON.stringify({ civ: trace.civ, model: trace.model, role: trace.role, tool: call.name, input: call.input, result: result.slice(0, 1200) }) + "\n");
+  }
+  if (trace.reply.startsWith("(failed")) appendFileSync(problems, JSON.stringify({ civ: trace.civ, model: trace.model, role: trace.role, failed: trace.reply }) + "\n");
+});
+
 const nations = (await host.nations()).map((nation) => nation.name).sort(() => Math.random() - 0.5);
 state.seats = models.map((model, index): Seat => ({ civ: nations[index], kind: "agent", model, will: "", journal: [], chat: [], ready: false }));
 for (const seat of state.seats) {
@@ -25,8 +38,7 @@ for (const seat of state.seats) {
 await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others: nations.slice(models.length, models.length + gameAi), mapSize, cityStates: 4 });
 persist();
 
-mkdirSync("../data/harness", { recursive: true });
-const csv = `../data/harness/league-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.csv`;
+const csv = `../data/harness/league-${stamp}.csv`;
 appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd\n");
 const modelOf = (civ: string) => state.seats.find((seat) => seat.civ === civ)?.model ?? "game AI";
 
@@ -45,7 +57,12 @@ for (;;) {
   if (game.winner || round.turn >= maxTurns || game.majorCivs.filter((civ) => civ.alive).length < 2) {
     say(game.winner ? `${game.winner} (${modelOf(game.winner)}) won a ${game.victoryType} victory` : "The league ends here.");
     const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
-    say("\n" + (await chroniclerEpic(await host.events(), standings, "The age of the league has closed.")));
+    say("\n" + (await chroniclerEpic(await host.events(), standings, "This history has reached its end.")));
+    for (const seat of state.seats) {
+      const review = await playtestReview(seat).catch((error) => `(review failed: ${error.message})`);
+      say(`\n=== PLAYTEST REVIEW: ${seat.civ} (${seat.model}, ${seat.character?.name}) ===\n${review}\n`);
+      appendFileSync(`../data/harness/league-${stamp}-reviews.md`, `## ${seat.civ} - ${seat.model} - ${seat.character?.name}\n\nWill:\n${seat.will}\n\nPlan:\n${seat.plan ?? ""}\n\nJournal:\n${seat.journal.join("\n")}\n\nReview:\n${review}\n\n`);
+    }
     break;
   }
 }

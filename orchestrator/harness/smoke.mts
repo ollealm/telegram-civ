@@ -27,7 +27,7 @@ check("research: path set", r.researchQueue.length > 0 && r.researchQueue.at(-1)
 const firstTech = r.researchQueue[0];
 
 // policies + personality are standing
-r = await order("Rome", { policyBranches: ["Tradition"], personality: { Science: 9 } });
+r = await order("Rome", { policyBranches: ["Tradition"], personality: { Science: 9 }, goldReserve: 100000 }); // the reserve keeps the officials out of the purse, so the money levers below have gold to work with
 check("standing orders stored", (r.orders.policyBranches ?? [])[0] === "Tradition" && r.orders.personality?.Science === 9);
 
 // queue: binding, exact
@@ -106,7 +106,7 @@ if (greeceKnown) {
     const greeceAfter = await briefing("Greece");
     const romeDelta = romeAfter.gold - rome.gold - rome.perTurn.gold;
     const greeceDelta = greeceAfter.gold - greeceBefore.gold - greeceBefore.perTurn.gold;
-    check("trade: gold moved from us to them", romeDelta <= -10 && greeceDelta >= 10, `Rome ${romeDelta}, Greece ${greeceDelta}; ${r.done.join(" ")}`);
+    check("trade: gold moved from us to them", greeceDelta >= 10 && romeDelta < greeceDelta, `Rome ${romeDelta}, Greece ${greeceDelta}; ${r.done.join(" ")}`);
     const tradeLog = (await host.log("Rome", romeAfter.turn - 2)).map((entry) => entry.text).join("\n");
     check("trade: answer logged with terms", /Our proposal to Greece .* (was accepted|was refused|lapsed|counteroffer)/.test(tradeLog), tradeLog.split("\n").filter((l) => l.includes("proposal")).join(" | "));
   } else check("trade: gold moved from us to them", false, "no gold");
@@ -116,6 +116,9 @@ if (greeceKnown) {
 
 const map = await host.map("Rome");
 check("map: renders a PNG", map.length > 10000 && map.subarray(1, 4).toString() === "PNG", `${map.length} bytes`);
+
+const spent = (await host.log("Rome", 0)).filter((entry) => entry.text.startsWith("The officials spent"));
+check("gold reserve: officials kept out of the purse", spent.length === 0, spent.map((entry) => entry.text).join(" | "));
 
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} levers verified` + (failed.length ? `; FAILED: ${failed.map((f) => f.lever).join(", ")}` : ""));

@@ -57,11 +57,12 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
     ),
     tool(
       "set_orders",
-      "Change the realm's orders; include only what should change. Standing orders (kept until changed): personality, research, policyBranches. Immediate: queue, build, purchase, declareWar. The reply confirms the resulting queues, research and gold.",
+      "Change the realm's orders; include only what should change. Standing orders (kept until changed): personality, research, policyBranches, neverBuild, goldReserve. Immediate: queue, build, purchase, declareWar. The reply confirms the resulting queues, research and gold.",
       {
         personality: z.object(Object.fromEntries(PERSONALITY_VALUES.map((name) => [name, weight]))).partial().optional().describe(PERSONALITY_HELP),
         research: z.array(z.string()).optional().describe("Technology goals in priority order; the path to each is researched automatically and the officials never deviate while a goal remains."),
-        policyBranches: z.array(z.string()).optional().describe("Policy branches in the order to adopt and complete them."),
+        policyBranches: z.array(z.string()).optional().describe("Policy branches in the order to adopt and complete them. A single policy may be named too (e.g. Monarchy) to take it as soon as it is open, ahead of what follows in the list."),
+        goldReserve: z.number().nullable().optional().describe("Standing: gold the officials must leave in the treasury - they spend on their own (upgrades, city-state gifts, purchases) only what lies above it. null lifts it. Your own purchases and gifts are not bound by it."),
         neverBuild: z.array(z.string()).optional().describe("Standing: buildings and units the officials may never queue on their own (e.g. Barracks, Knight; 'all wonders' and 'all military units' work as whole categories). Replaces the previous list. You can still order them yourself."),
         queue: z.array(z.object({ city: z.string(), items: z.array(z.string()) })).optional().describe("Replace a city's whole build queue, in order. Binding: the officials only add to it once it runs out."),
         build: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Put one item at the front of a city's queue, keeping the rest."),
@@ -409,4 +410,14 @@ Reply with one or two plain sentences for your journal: what you decided and why
     `${memory(seat)}\n\nYour notes while governing this age:\n${governLogs.join("\n") || "(none)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
     seat,
     true,
+  );
+
+/** Out of character, after a game: what the agent made of the tools and the information it had */
+export const playtestReview = (seat: Seat) =>
+  run(
+    "review",
+    seat.model ?? ADVISOR_MODEL,
+    `You have just played ${seat.civ} in a game of civilizations through a small set of tools, looking in every few turns. Step out of character and review it as a playtester would, for the people who build the tools. Be concrete and brief (under 300 words): which orders failed or did nothing and why you think so; what information you lacked or could not trust; where the officials (the game's automation) worked against you; what you would change first. Separate what you know from the log from what you merely suspect - earlier reviewers blamed the tools for their own forgotten orders. You may read the briefing and log; change nothing.`,
+    memory(seat),
+    seat,
   );

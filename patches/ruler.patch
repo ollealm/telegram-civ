@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..31ee95a
+index 0000000..1131a76
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,32 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.map.mapunit.MapUnit
@@ -23,6 +23,12 @@ index 0000000..31ee95a
 +
 +    /** ids of cities whose build queue was set by the ruler - the automation must not overwrite its front item */
 +    val lockedCities: MutableSet<String> = ConcurrentHashMap.newKeySet()
++
++    /** ids of cities whose citizen focus was set by the ruler - the automation must not re-choose it every turn */
++    val focusedCities: MutableSet<String> = ConcurrentHashMap.newKeySet()
++
++    /** civID -> gold the officials must leave in the treasury; they spend on their own only what lies above it */
++    val goldReserve = ConcurrentHashMap<String, Int>()
 +
 +    /**
 +     *  Asked before the automation moves each unit of a ruled civ. Returning true means the ruler's own order
@@ -65,6 +71,19 @@ index b997da7..74d759d 100644
 +            }
          }
      }
+ 
+diff --git a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
+index f180f26..4e27cd6 100644
+--- a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
++++ b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
+@@ -18,6 +18,8 @@ object UseGoldAutomation {
+ 
+     /** allow AI to spend money to purchase city-state friendship, buildings & unit */
+     fun useGold(civ: Civilization) {
++        // A ruler's treasury reserve: the officials keep their hands off the purse until it holds more than that
++        com.unciv.logic.automation.RulerOverrides.goldReserve[civ.civID]?.let { if (civ.gold <= it) return }
+         for (unit in civ.units.getCivUnits())
+             UnitAutomation.tryUpgradeUnit(unit)
  
 diff --git a/core/src/com/unciv/logic/city/CityConstructions.kt b/core/src/com/unciv/logic/city/CityConstructions.kt
 index ebb116c..f8234e7 100644
@@ -114,6 +133,19 @@ index 7005930..142c92a 100644
              foodRequired *= city.civ.gameInfo.getDifficulty().aiCityGrowthModifier
          return foodRequired.toInt()
      }
+diff --git a/core/src/com/unciv/logic/city/managers/CityTurnManager.kt b/core/src/com/unciv/logic/city/managers/CityTurnManager.kt
+index 30077f8..d2ba835 100644
+--- a/core/src/com/unciv/logic/city/managers/CityTurnManager.kt
++++ b/core/src/com/unciv/logic/city/managers/CityTurnManager.kt
+@@ -48,7 +48,7 @@ class CityTurnManager(val city: City) {
+             city.setCityFocus(CityFocus.GoldFocus)
+             city.reassignAllPopulation()
+         } else if (city.shouldReassignPopulation || city.civ.isAI()) {
+-            if (city.civ.isAI())
++            if (city.civ.isAI() && city.id !in com.unciv.logic.automation.RulerOverrides.focusedCities)
+                 city.setCityFocus(chooseCityFocus())
+             city.reassignPopulation()  // includes cityStats.update
+         } else
 diff --git a/core/src/com/unciv/logic/civilization/Civilization.kt b/core/src/com/unciv/logic/civilization/Civilization.kt
 index 049029c..5526736 100644
 --- a/core/src/com/unciv/logic/civilization/Civilization.kt
@@ -704,10 +736,10 @@ index 0000000..08b195f
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..26dddbb
+index 0000000..50f4a23
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,799 @@
+@@ -0,0 +1,829 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -769,7 +801,10 @@ index 0000000..26dddbb
 +        var policyBranches = ArrayList<String>()
 +        /** Buildings and units the officials must never queue on their own */
 +        var neverBuild = ArrayList<String>()
++        /** Gold the officials must leave untouched; null = they spend as they see fit */
++        var goldReserve: Int? = null
 +        fun toMap(civ: Civilization? = null) = mapOf(
++            "goldReserve" to goldReserve,
 +            "personality" to personality,
 +            "neverBuild" to neverBuild,
 +            "research" to research.filter { civ == null || !civ.tech.isResearched(it) },
@@ -929,7 +964,8 @@ index 0000000..26dddbb
 +            "publicEvents" to publicEvents,
 +            "chancery" to chancery,
 +            "unitOrders" to units.toMap(),
-+            "lockedCities" to RulerOverrides.lockedCities.toList()
++            "lockedCities" to RulerOverrides.lockedCities.toList(),
++            "focusedCities" to RulerOverrides.focusedCities.toList()
 +        )))
 +    }
 +
@@ -950,6 +986,8 @@ index 0000000..26dddbb
 +        units.load(host.get("unitOrders"))
 +        RulerOverrides.lockedCities.clear()
 +        host.get("lockedCities")?.asStringArray()?.let { RulerOverrides.lockedCities += it }
++        RulerOverrides.focusedCities.clear()
++        host.get("focusedCities")?.asStringArray()?.let { RulerOverrides.focusedCities += it }
 +        registerRuledCivs()
 +        println("Loaded game at turn ${loaded.turns}, ruled: ${orders.keys}")
 +    }
@@ -983,6 +1021,7 @@ index 0000000..26dddbb
 +        json.get("research")?.let { research = ArrayList(it.asStringArray().toList()) }
 +        json.get("policyBranches")?.let { policyBranches = ArrayList(it.asStringArray().toList()) }
 +        json.get("neverBuild")?.let { neverBuild = ArrayList(it.asStringArray().toList()) }
++        json.get("goldReserve")?.let { goldReserve = if (it.isNull) null else it.asInt().coerceAtLeast(0) }
 +    }
 +
 +    private fun applyPersonality(civ: Civilization, standing: StandingOrders) {
@@ -990,6 +1029,7 @@ index 0000000..26dddbb
 +        val personality = Personality().apply { this[PersonalityValue.DeclareWar] = 0f }
 +        for ((name, value) in standing.personality) personality[PersonalityValue.valueOf(name)] = value
 +        RulerOverrides.personalities[civ.civID] = personality
++        standing.goldReserve?.let { RulerOverrides.goldReserve[civ.civID] = it } ?: RulerOverrides.goldReserve.remove(civ.civID)
 +    }
 +
 +    private fun Civilization.city(name: String): City = cities.firstOrNull { it.name == name } ?: throw ApiError(400, "No city named $name")
@@ -1002,18 +1042,28 @@ index 0000000..26dddbb
 +        val ruleset = civ.gameInfo.ruleset
 +        val standing = orders.getOrPut(civ.civName) { StandingOrders() }
 +        val alreadyKnown = ArrayList<String>()
-+        json.get("research")?.asStringArray()?.forEach {
-+            if (it !in ruleset.technologies) throw ApiError(400, "Unknown technology $it")
-+            if (civ.tech.isResearched(it)) alreadyKnown += it
++        val rejected = ArrayList<String>()
++        json.get("research")?.let { goals ->
++            val kept = goals.asStringArray().filter { goal ->
++                if (goal !in ruleset.technologies) rejected += "No technology is called '$goal'" + (if (goal in ruleset.policies) " - that is a policy; put it in policyBranches" else "; see get_options.futureTechs") + ". The other research goals were kept."
++                if (goal in ruleset.technologies && civ.tech.isResearched(goal)) alreadyKnown += goal
++                goal in ruleset.technologies
++            }
++            goals.remove(); json.addChild("research", JsonValue(JsonValue.ValueType.array).also { array -> kept.forEach { array.addChild(JsonValue(it)) } })
 +        }
-+        json.get("policyBranches")?.asStringArray()?.forEach {
-+            if (it !in ruleset.policyBranches) throw ApiError(400, "Unknown policy branch $it, valid: ${ruleset.policyBranches.keys}")
++        json.get("policyBranches")?.let { wishes ->
++            val kept = wishes.asStringArray().filter { wish ->
++                val known = wish in ruleset.policyBranches || wish in ruleset.policies
++                if (!known) rejected += "No policy or policy branch is called '$wish'; branches: ${ruleset.policyBranches.keys.joinToString()}. The others were kept."
++                known
++            }
++            wishes.remove(); json.addChild("policyBranches", JsonValue(JsonValue.ValueType.array).also { array -> kept.forEach { array.addChild(JsonValue(it)) } })
 +        }
 +        standing.readFrom(json)
 +        applyPersonality(civ, standing)
 +
 +        val done = ArrayList<String>()
-+        val failed = ArrayList<String>()
++        val failed = ArrayList<String>(rejected)
 +        /** Each item stands alone: a bad one is reported under "failed" and the rest still go through */
 +        fun tryEach(list: JsonValue?, action: (JsonValue) -> String) {
 +            list?.forEach { entry ->
@@ -1095,6 +1145,7 @@ index 0000000..26dddbb
 +            val focus = com.unciv.logic.city.CityFocus.entries.firstOrNull { it.name.equals(order.getString("focus"), ignoreCase = true) || it.name.equals(order.getString("focus") + "Focus", ignoreCase = true) }
 +                ?: throw ApiError(400, "Unknown focus; use ${com.unciv.logic.city.CityFocus.entries.joinToString { it.name }}")
 +            city.setCityFocus(focus)
++            if (focus == com.unciv.logic.city.CityFocus.NoFocus) RulerOverrides.focusedCities -= city.id else RulerOverrides.focusedCities += city.id
 +            city.reassignAllPopulation()
 +            "${city.name} now works its tiles for ${focus.name}"
 +        }
@@ -1119,11 +1170,16 @@ index 0000000..26dddbb
 +        }
 +
 +        while (civ.policies.canAdoptPolicy()) {
-+            val policy = standing.policyBranches.asSequence().mapNotNull { ruleset.policyBranches[it] }
-+                .firstNotNullOfOrNull { branch ->
-+                    if (civ.policies.isAdoptable(branch)) branch
-+                    else branch.policies.firstOrNull { civ.policies.isAdoptable(it) }
-+                } ?: break // nothing preferred is available - the automation picks
++            val policy = standing.policyBranches.asSequence().firstNotNullOfOrNull { wish ->
++                val branch = ruleset.policyBranches[wish]
++                val named = ruleset.policies[wish]
++                when {
++                    branch != null && civ.policies.isAdoptable(branch) -> branch
++                    branch != null -> branch.policies.firstOrNull { civ.policies.isAdoptable(it) }
++                    named != null && civ.policies.isAdoptable(named) -> named   // a single policy the ruler named, e.g. Monarchy
++                    else -> null
++                }
++            } ?: break // nothing preferred is available - the automation picks
 +            civ.policies.adopt(policy)
 +            log(civ, "Adopted the policy ${policy.name}.")
 +        }
@@ -1281,6 +1337,8 @@ index 0000000..26dddbb
 +    private val wakeWorthy = listOf("dropped .* because", "declared war", "denounced", "lost in action",
 +        "awaits orders", "captured", "has been destroyed", "has been stuck").map { Regex(it, RegexOption.IGNORE_CASE) }
 +
++    private val warningsWoken = HashMap<String, HashSet<String>>()
++
 +    private fun advance(turns: Int, wakeOnEvents: Boolean = false): Any? {
 +        val game = game()
 +        if (game.majorCivs().any { it.victoryManager.hasWon() }) throw ApiError(409, "The game is over")
@@ -1303,7 +1361,10 @@ index 0000000..26dddbb
 +
 +            for (civ in ruledCivs) {
 +                val news = chanceryLog(civ, game.turns - 1).map { it["text"] as String }.filter { line -> wakeWorthy.any { it.containsMatchIn(line) } }
-+                val fresh = warnings(civ).map { it.replace(Regex("-?\\d+"), "#") }.filter { it !in (warningsSeen[civ.civName] ?: emptySet()) }
++                // A warning wakes an advisor once per game: many of them flicker on and off between turns, and every look-in shows them all anyway
++                val everSeen = warningsWoken.getOrPut(civ.civName) { HashSet(warningsSeen[civ.civName] ?: emptySet()) }
++                val fresh = warnings(civ).map { it.replace(Regex("-?\\d+"), "#") }.filter { everSeen.add(it) }
++                    .filter { "no defender" in it || "unhappy" in it || "treasury" in it.lowercase() || "no military" in it }
 +                if (news.isNotEmpty() || fresh.isNotEmpty()) wake[civ.civName] = news + fresh
 +            }
 +            val winner = game.majorCivs().firstOrNull { it.victoryManager.hasWon() }
@@ -1345,6 +1406,7 @@ index 0000000..26dddbb
 +    //region Briefing
 +
 +    private fun briefing(civ: Civilization, logSince: Int? = null): Map<String, Any?> {
++        for (city in civ.cities) city.cityStats.update() // yields are cached per turn; stale ones showed food 0 and "0 turns left"
 +        val next = civ.stats.statsForNextTurn
 +        val turn = civ.gameInfo.turns
 +        return mapOf(
@@ -1509,10 +1571,10 @@ index 0000000..26dddbb
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..74d0ed7
+index 0000000..dc8a696
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,253 @@
+@@ -0,0 +1,257 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -1664,6 +1726,10 @@ index 0000000..74d0ed7
 +            throw IllegalArgumentException("${target.getCity()!!.name} is held by ${holder.civ.civName}'s ${holder.name}")
 +        }
 +        val willSwap = action == "garrison" && target.militaryUnit?.civ == civ
++        val occupant = (if (unit.isCivilian()) target.civilianUnit else target.militaryUnit)?.takeIf { it != unit }
++        if (occupant != null && !willSwap) throw IllegalArgumentException(
++            "${where(civ, target)} is already held by ${if (occupant.civ == civ) "our" else occupant.civ.civName + "'s"} ${occupant.name} #${occupant.id}; two ${if (unit.isCivilian()) "civilians" else "soldiers"} cannot share a tile. " +
++            (if (occupant.civ == civ) "Use garrison to swap places with it, pick a tile beside it, or leave it be - the place is already covered." else "Pick another tile."))
 +        if (target != unit.getTile() && !willSwap && !unit.movement.canReach(target)) throw IllegalArgumentException("${unit.name} cannot reach ${where(civ, target)} (water, mountains or foreign borders in the way)")
 +        orders[unitId] = Order(action, x, y)
 +        val turns = if (target == unit.getTile()) 0 else kotlin.math.ceil(unit.movement.getShortestPath(target).size / unit.getMaxMovement().coerceAtLeast(1).toFloat()).toInt()

@@ -45,6 +45,7 @@ export type Orders = {
   research?: string[];
   policyBranches?: string[];
   neverBuild?: string[];
+  goldReserve?: number | null;
   queue?: { city: string; items: string[] }[];
   build?: { city: string; item: string }[];
   purchase?: { city: string; item: string }[];
