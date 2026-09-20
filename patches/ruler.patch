@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..1131a76
+index 0000000..91e6eed
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,38 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.map.mapunit.MapUnit
@@ -30,14 +30,33 @@ index 0000000..1131a76
 +    /** civID -> gold the officials must leave in the treasury; they spend on their own only what lies above it */
 +    val goldReserve = ConcurrentHashMap<String, Int>()
 +
++    /** True when a ruled civ's never-build list covers this construction: the automation must not choose it at all */
++    @Volatile var forbidden: ((com.unciv.logic.civilization.Civilization, com.unciv.models.ruleset.INonPerpetualConstruction) -> Boolean)? = null
++
++    /** Called with (civ, gold, what for) whenever a ruled civ's automation spends from the treasury */
++    @Volatile var spendingNoted: ((com.unciv.logic.civilization.Civilization, Int, String) -> Unit)? = null
++
 +    /**
 +     *  Asked before the automation moves each unit of a ruled civ. Returning true means the ruler's own order
 +     *  handled this unit this turn and the automation must leave it alone.
 +     */
 +    @Volatile var unitHandler: ((MapUnit) -> Boolean)? = null
 +}
+diff --git a/core/src/com/unciv/logic/automation/city/ConstructionAutomation.kt b/core/src/com/unciv/logic/automation/city/ConstructionAutomation.kt
+index 87c9687..f13197d 100644
+--- a/core/src/com/unciv/logic/automation/city/ConstructionAutomation.kt
++++ b/core/src/com/unciv/logic/automation/city/ConstructionAutomation.kt
+@@ -102,7 +102,7 @@ class ConstructionAutomation(val cityConstructions: CityConstructions) {
+         return this.filter {
+             val cache = if (it is Building) buildableBuildings else buildableUnits
+             if (cache[it.name] == null) {
+-                cache[it.name] = it.isBuildable(cityConstructions)
++                cache[it.name] = it.isBuildable(cityConstructions) && com.unciv.logic.automation.RulerOverrides.forbidden?.invoke(civInfo, it) != true
+             }
+             cache[it.name]!!
+         }
 diff --git a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
-index b997da7..74d759d 100644
+index b997da7..0c4365f 100644
 --- a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 @@ -2,6 +2,7 @@ package com.unciv.logic.automation.civilization
@@ -72,19 +91,68 @@ index b997da7..74d759d 100644
          }
      }
  
+@@ -614,7 +621,7 @@ object NextTurnAutomation {
+             }
+         if (settlersInFlight >= maxSettlersInFlight) return
+         val settlerUnits = civInfo.gameInfo.ruleset.units.values
+-                .filter { it.isCityFounder() && it.isBuildable(civInfo) &&
++                .filter { it.isCityFounder() && it.isBuildable(civInfo) && com.unciv.logic.automation.RulerOverrides.forbidden?.invoke(civInfo, it) != true &&
+                     personality.getMatchingUniques(UniqueType.WillNotBuild, civInfo.state)
+                         .none { unique -> it.matchesFilter(unique.params[0], civInfo.state) } }
+         if (settlerUnits.isEmpty()) return
 diff --git a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
-index f180f26..4e27cd6 100644
+index f180f26..bf9b91c 100644
 --- a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
-@@ -18,6 +18,8 @@ object UseGoldAutomation {
+@@ -18,11 +18,31 @@ object UseGoldAutomation {
  
      /** allow AI to spend money to purchase city-state friendship, buildings & unit */
      fun useGold(civ: Civilization) {
-+        // A ruler's treasury reserve: the officials keep their hands off the purse until it holds more than that
-+        com.unciv.logic.automation.RulerOverrides.goldReserve[civ.civID]?.let { if (civ.gold <= it) return }
-         for (unit in civ.units.getCivUnits())
-             UnitAutomation.tryUpgradeUnit(unit)
+-        for (unit in civ.units.getCivUnits())
+-            UnitAutomation.tryUpgradeUnit(unit)
++        // A ruler's treasury reserve is a floor, not a gate: the officials only ever see what lies above it
++        val reserve = com.unciv.logic.automation.RulerOverrides.goldReserve[civ.civID] ?: 0
++        if (reserve > 0 && civ.gold <= reserve) return
++        if (reserve > 0) civ.addGold(-reserve)
++        try { spendGold(civ) } finally { if (reserve > 0) civ.addGold(reserve) }
++    }
++
++    /** Tells a ruled civ's chancery what the officials just paid for */
++    private inline fun itemised(civ: Civilization, what: () -> String, spend: () -> Unit) {
++        val before = civ.gold
++        spend()
++        if (civ.gold < before) com.unciv.logic.automation.RulerOverrides.spendingNoted?.invoke(civ, before - civ.gold, what())
++    }
  
+-        if (civ.isMajorCiv())
+-            useGoldForCityStates(civ)
++    private fun spendGold(civ: Civilization) {
++        for (unit in civ.units.getCivUnits().toList()) {
++            val name = unit.name
++            val tile = unit.getTile()
++            itemised(civ, { "re-arming a $name as ${(if (unit.isCivilian()) tile.civilianUnit else tile.militaryUnit)?.name ?: "something newer"}" }) { UnitAutomation.tryUpgradeUnit(unit) }
++        }
++
++        if (civ.isMajorCiv()) {
++            val influence = civ.getKnownCivs().filter { it.isCityState }.associateWith { it.getDiplomacyManager(civ)?.getInfluence() ?: 0f }
++            itemised(civ, { "gifts to " + (influence.filter { (it.key.getDiplomacyManager(civ)?.getInfluence() ?: 0f) > it.value + 1 }.keys.joinToString(" and ") { it.civName }.ifEmpty { "the city-states" }) }) { useGoldForCityStates(civ) }
++        }
+ 
+         val acceptableHurryCostModifier = civ.gold.coerceAtLeast(0)/100
+         // Ideally we buy things with good gold:production conversion from purchasing and hard-build the rest, but some mods have high hurryCostModifier on everything leading to too much gold being saved. 
+@@ -36,10 +56,10 @@ object UseGoldAutomation {
+             if (!city.cityConstructions.isConstructionPurchaseAllowed(construction, Stat.Gold, statBuyCost)) continue
+             if (civ.gold < statBuyCost || construction.hurryCostModifier > acceptableHurryCostModifier) continue
+             if (city.cityConstructions.getWorkDone(construction.name) > 0) continue // Don't buy things we already invested production into (may waste the invested production)
+-            city.cityConstructions.purchaseConstruction(construction, 0, true)
++            itemised(civ, { "buying ${construction.name} in ${city.name}" }) { city.cityConstructions.purchaseConstruction(construction, 0, true) }
+         }
+ 
+-        maybeBuyCityTiles(civ)
++        itemised(civ, { "buying land around our cities" }) { maybeBuyCityTiles(civ) }
+     }
+ 
+     private fun useGoldForCityStates(civ: Civilization) {
 diff --git a/core/src/com/unciv/logic/city/CityConstructions.kt b/core/src/com/unciv/logic/city/CityConstructions.kt
 index ebb116c..f8234e7 100644
 --- a/core/src/com/unciv/logic/city/CityConstructions.kt
@@ -736,10 +804,10 @@ index 0000000..08b195f
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..50f4a23
+index 0000000..2bae9c9
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,829 @@
+@@ -0,0 +1,842 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -829,6 +897,8 @@ index 0000000..50f4a23
 +        SkinCache.loadSkinConfigs(true)
 +
 +        load()
++        RulerOverrides.forbidden = { civ, construction -> civ.civID in RulerOverrides.ruledCivs && isForbidden(civ, construction) }
++        RulerOverrides.spendingNoted = { civ, gold, what -> if (civ.civID in RulerOverrides.ruledCivs) spending.getOrPut(civ.civName) { ArrayList() } += Pair(gold, what) }
 +        RulerOverrides.unitHandler = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && units.handle(unit) }
 +
 +        val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
@@ -922,6 +992,7 @@ index 0000000..50f4a23
 +                speed = json.getString("speed", "Quick")
 +                difficulty = json.getString("difficulty", "Prince")
 +                numberOfCityStates = json.getInt("cityStates", 4)
++                victoryTypes = ArrayList(com.unciv.models.ruleset.RulesetCache[baseRuleset]!!.victories.keys.filter { it != "Time" }) // left empty, no victory exists at all - and no Apollo Program
 +                players = ArrayList<Player>().apply {
 +                    for (nation in ruled + others) add(Player(nation))
 +                    add(Player(Constants.spectator, PlayerType.Human))
@@ -1188,6 +1259,9 @@ index 0000000..50f4a23
 +    //endregion
 +    //region Turns, chancery log and public events
 +
++    /** What the officials paid for during the turn being played, per civ - written into the chancery log once the turn is over */
++    private val spending = java.util.concurrent.ConcurrentHashMap<String, MutableList<Pair<Int, String>>>()
++
 +    private fun log(civ: Civilization, text: String) {
 +        chancery.getOrPut(civ.civName) { ArrayList() } += mapOf("turn" to civ.gameInfo.turns, "text" to text)
 +    }
@@ -1260,23 +1334,29 @@ index 0000000..50f4a23
 +        val dealsNow = diplomacy.dealsInForce(civ)
 +        for (deal in dealsNow - before.deals) log(civ, "A deal came into force with $deal.")
 +        for (deal in before.deals - dealsNow) log(civ, "A deal ended with $deal.")
-+        // The ruler's never-build list beats the officials' own choices
-+        val forbidden = orders[civ.civName]?.neverBuild ?: emptyList<String>()
-+        val noWonders = forbidden.any { it.equals("all wonders", ignoreCase = true) || it.equals("wonders", ignoreCase = true) }
-+        val noSoldiers = forbidden.any { it.equals("all military units", ignoreCase = true) || it.equals("military units", ignoreCase = true) }
-+        if (forbidden.isNotEmpty()) for (city in civ.cities) repeat(3) {
-+            val current = city.cityConstructions.currentConstructionName()
-+            val banned = current in forbidden
-+                || noWonders && civ.gameInfo.ruleset.buildings[current]?.isAnyWonder() == true
-+                || noSoldiers && civ.gameInfo.ruleset.units[current]?.isMilitary == true
-+            if (banned && city.id !in RulerOverrides.lockedCities) { // the user-set flag outlives the ruler's queue, the lock does not
-+                city.cityConstructions.constructionQueue.remove(current)
-+                log(civ, "The officials wanted $current in ${city.name}; it is on the never-build list, so it was struck.")
-+                if (city.cityConstructions.constructionQueue.isEmpty()) city.cityConstructions.chooseNextConstruction()
-+            }
++        // The never-build list is applied where the officials choose; this catches what slipped past (an item already in the queue when it was banned)
++        for (city in civ.cities) {
++            val current = city.cityConstructions.getCurrentConstruction() as? INonPerpetualConstruction ?: continue
++            if (city.id in RulerOverrides.lockedCities || !isForbidden(civ, current)) continue // the user-set flag outlives the ruler's queue, the lock does not
++            city.cityConstructions.constructionQueue.remove(current.name)
++            log(civ, "The officials wanted ${current.name} in ${city.name}; it is on the never-build list, so it was struck.")
++            if (city.cityConstructions.constructionQueue.isEmpty()) city.cityConstructions.chooseNextConstruction()
 +        }
-+        if (civ.gold < before.gold - 40) log(civ, "The officials spent ${before.gold - civ.gold} gold (treasury now ${civ.gold}).")
++        val paid = spending.remove(civ.civName) ?: emptyList<Pair<Int, String>>()
++        for ((what, items) in paid.groupBy { it.second }) log(civ, "The officials spent ${items.sumOf { it.first }} gold on ${what}.")
++        if (paid.isNotEmpty()) log(civ, "The treasury now holds ${civ.gold} gold.")
++        val unexplained = before.gold - civ.gold - paid.sumOf { it.first }
++        if (unexplained > 40) log(civ, "A further $unexplained gold left the treasury this turn without the officials' hand in it (upkeep, payments under our deals, or a deal struck).")
 +        if (before.happiness >= 0 && civ.getHappiness() < 0) log(civ, "The people have become unhappy (${civ.getHappiness()}).")
++    }
++
++    private fun isForbidden(civ: Civilization, construction: INonPerpetualConstruction): Boolean {
++        val forbidden = orders[civ.civName]?.neverBuild ?: return false
++        return forbidden.any { entry ->
++            entry.equals(construction.name, ignoreCase = true)
++                || entry.lowercase() in listOf("all wonders", "wonders") && (construction as? com.unciv.models.ruleset.Building)?.isAnyWonder() == true
++                || entry.lowercase() in listOf("all military units", "military units") && (construction as? com.unciv.models.ruleset.unit.BaseUnit)?.isMilitary == true
++        }
 +    }
 +
 +    private fun describeWhere(civ: Civilization, tile: Tile): String {
@@ -1414,6 +1494,7 @@ index 0000000..50f4a23
 +            "turn" to turn,
 +            "year" to yearText(turn),
 +            "era" to civ.getEra().name,
++            "waysToWin" to civ.gameInfo.gameParameters.victoryTypes.toList().ifEmpty { listOf("none - this world was made without victory conditions; nobody can build a spaceship or win a vote") },
 +            "score" to civ.calculateTotalScore().toInt(),
 +            "gold" to civ.gold,
 +            "perTurn" to mapOf("gold" to next.gold.toInt(), "science" to next.science.toInt(), "culture" to next.culture.toInt()),
@@ -1571,10 +1652,10 @@ index 0000000..50f4a23
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..2676a1e
+index 0000000..56d76c6
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,276 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -1596,11 +1677,11 @@ index 0000000..2676a1e
 +class RulerUnits(private val log: (Civilization, String) -> Unit) {
 +
 +    /** action: move (then release), settle, fortify/garrison, hold, explore (then release), use (a great person's ability, then release) */
-+    class Order(val action: String, val x: Int?, val y: Int?) {
++    class Order(val action: String, val x: Int?, val y: Int?, val ability: String? = null) {
 +        /** Where the unit stood last turn and for how many turns, to notice an order that is going nowhere */
 +        var lastSpot: String? = null
 +        var turnsStuck = 0
-+        fun toMap() = mapOf("action" to action, "x" to x, "y" to y)
++        fun toMap() = mapOf("action" to action, "x" to x, "y" to y, "ability" to ability)
 +    }
 +
 +    /** unit id -> order */
@@ -1608,7 +1689,7 @@ index 0000000..2676a1e
 +
 +    fun load(json: JsonValue?) {
 +        orders.clear()
-+        json?.forEach { orders[it.name.toInt()] = Order(it.getString("action"), it.get("x")?.takeUnless { v -> v.isNull }?.asInt(), it.get("y")?.takeUnless { v -> v.isNull }?.asInt()) }
++        json?.forEach { orders[it.name.toInt()] = Order(it.getString("action"), it.get("x")?.takeUnless { v -> v.isNull }?.asInt(), it.get("y")?.takeUnless { v -> v.isNull }?.asInt(), it.get("ability")?.takeUnless { v -> v.isNull }?.asString()) }
 +    }
 +
 +    fun toMap() = orders.mapKeys { it.key.toString() }.mapValues { it.value.toMap() }
@@ -1684,7 +1765,9 @@ index 0000000..2676a1e
 +            }
 +            "fortify", "garrison" -> { unit.fortifyIfCan(); true }
 +            "use" -> {
-+                val used = ABILITIES.firstOrNull { UnitActions.invokeUnitAction(unit, it) }
++                // A Great Person can usually be spent more than one way; the ruler says which, or gets the first that works
++                val wanted = ABILITIES.filter { order.ability == null || it in abilitiesNamed(order.ability) }
++                val used = wanted.firstOrNull { UnitActions.invokeUnitAction(unit, it) }
 +                if (used != null) log(civ, "Our ${unit.name} used its ability (${used.name}) at ${where(civ, unit.getTile())}.")
 +                else log(civ, "Our ${unit.name} could not use its ability at ${where(civ, unit.getTile())}: nothing to use it on here (trade missions need a city-state's city, improvements need an unimproved tile of ours).")
 +                orders.remove(unit.id)
@@ -1735,7 +1818,9 @@ index 0000000..2676a1e
 +        unit.currentMovement = unit.getMaxMovement().toFloat()
 +        val path = try { if (target == unit.getTile()) listOf() else unit.movement.getShortestPath(target) } finally { unit.currentMovement = spent }
 +        if (target != unit.getTile() && !willSwap && path.isEmpty()) throw IllegalArgumentException("${unit.name} cannot reach ${where(civ, target)} (water, mountains or foreign borders in the way)")
-+        orders[unitId] = Order(action, x, y)
++        val ability = json.get("ability")?.takeUnless { it.isNull }?.asString()
++        if (ability != null && abilitiesNamed(ability).isEmpty()) throw IllegalArgumentException("Unknown ability '$ability'; use one of: ${ABILITY_WORDS.keys.joinToString()}")
++        orders[unitId] = Order(action, x, y, ability)
 +        val turns = if (target == unit.getTile()) 0 else kotlin.math.ceil(path.size / unit.getMaxMovement().coerceAtLeast(1).toFloat()).toInt()
 +        return "${unit.name} #$unitId will $action at ${where(civ, target)}" + (if (turns > 0) ", about $turns turns away" else "")
 +    }
@@ -1821,6 +1906,17 @@ index 0000000..2676a1e
 +        private val ABILITIES = listOf(UnitActionType.ConductTradeMission, UnitActionType.HurryResearch, UnitActionType.HurryWonder,
 +            UnitActionType.HurryBuilding, UnitActionType.HurryPolicy, UnitActionType.FoundReligion, UnitActionType.EnhanceReligion,
 +            UnitActionType.TriggerUnique, UnitActionType.CreateImprovement, UnitActionType.SpreadReligion)
++
++        /** The words a ruler may use for the ways of spending a Great Person */
++        private val ABILITY_WORDS = mapOf(
++            "improvement" to listOf(UnitActionType.CreateImprovement), // academy, manufactory, customs house, holy site, citadel
++            "hurry research" to listOf(UnitActionType.HurryResearch),
++            "hurry production" to listOf(UnitActionType.HurryWonder, UnitActionType.HurryBuilding),
++            "hurry policy" to listOf(UnitActionType.HurryPolicy),
++            "trade mission" to listOf(UnitActionType.ConductTradeMission),
++            "religion" to listOf(UnitActionType.FoundReligion, UnitActionType.EnhanceReligion, UnitActionType.SpreadReligion),
++            "golden age" to listOf(UnitActionType.TriggerUnique))
++        private fun abilitiesNamed(word: String) = ABILITY_WORDS[word.lowercase().trim()] ?: emptyList()
 +
 +        /** "(x,y), 3 tiles NE of Rome" */
 +        fun where(civ: Civilization, tile: Tile): String {
