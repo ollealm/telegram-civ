@@ -143,7 +143,7 @@ export type Trace = {
 let traceSink: (trace: Trace) => void = () => {};
 export const onTrace = (sink: (trace: Trace) => void) => (traceSink = sink);
 
-async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false) {
+export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false) {
   const started = Date.now();
   const toolCalls: Trace["toolCalls"] = [];
   async function* input() {
