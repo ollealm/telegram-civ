@@ -2,12 +2,17 @@
 // It carries each realm's secrets (will, plan, briefing), so it goes to DEV_CHAT_ID only - today that defaults to
 // the Chronicler's chat because one person plays every seat; give it its own chat before friends join.
 
+import { mkdirSync, writeFileSync } from "node:fs";
 import { InputFile, type Bot } from "grammy";
 import { onTrace, type Trace } from "./agents.ts";
 import { state } from "./store.ts";
 
 const traces: Trace[] = [];
 onTrace((trace) => traces.push(trace));
+
+/** DEV_FEED=chat posts to Telegram; anything else keeps the same detail as files under data/game/devfeed/ */
+export const devFeedInChat = () => process.env.DEV_FEED === "chat";
+const FOLDER = "../data/game/devfeed";
 
 const devChat = () => Number(process.env.DEV_CHAT_ID) || state.heraldChats[0];
 const money = (usd: number) => `$${usd.toFixed(2)}`;
@@ -24,8 +29,7 @@ const asMarkdown = (trace: Trace) =>
 
 /** Post everything since the last flush: a short summary message and the full detail as a .md document */
 export async function flushDevFeed(bot: Bot, title: string, extra: string[] = []) {
-  const chat = devChat();
-  if (!chat || traces.length === 0) return;
+  if (traces.length === 0) return;
   const batch = traces.splice(0);
   const byRole = new Map<string, { calls: number; cost: number; ms: number; tokens: number }>();
   for (const trace of batch) {
@@ -46,7 +50,11 @@ export async function flushDevFeed(bot: Bot, title: string, extra: string[] = []
     ...extra,
     ...(orders.length ? ["orders:", ...orders] : []),
   ].join("\n");
+  const document = `# ${title}\n\n${summary}\n\n---\n\n${batch.map(asMarkdown).join("\n\n---\n\n")}`;
+  mkdirSync(FOLDER, { recursive: true });
+  writeFileSync(`${FOLDER}/${new Date().toISOString().replace(/[:.]/g, "-")}-${title.replace(/[^\w]+/g, "-").toLowerCase().slice(0, 60)}.md`, document);
+  const chat = devChat();
+  if (!devFeedInChat() || !chat) return;
   await bot.api.sendMessage(chat, summary.slice(0, 4000)).catch(() => {});
-  const document = `# ${title}\n\n${batch.map(asMarkdown).join("\n\n---\n\n")}`;
   await bot.api.sendDocument(chat, new InputFile(Buffer.from(document), `${title.replace(/[^\w]+/g, "-").toLowerCase()}.md`)).catch(() => {});
 }

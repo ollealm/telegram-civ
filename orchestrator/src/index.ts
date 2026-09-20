@@ -2,7 +2,7 @@
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import { advisorGreeting, advisorReply, chroniclerEpic, createCharacter } from "./agents.ts";
-import { flushDevFeed } from "./devfeed.ts";
+import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, generateImage, onImageLog, paintedMap } from "./images.ts";
 import { host } from "./host.ts";
 import { playRound as runRound, roundLength } from "./round.ts";
@@ -429,7 +429,7 @@ advisors.forEach(setUpAdvisor);
 setUpHerald();
 // Dev feed, start of session: the settings everything below runs with
 const devChat = Number(process.env.DEV_CHAT_ID) || state.heraldChats[0];
-if (devChat)
+if (devChat && devFeedInChat())
   void host.state().then((game) =>
     herald.api.sendMessage(devChat, [
       "🛠 Session started",
