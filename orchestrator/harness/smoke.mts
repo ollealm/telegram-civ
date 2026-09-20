@@ -61,6 +61,13 @@ if (warrior) {
 await host.advance(12);
 rome = await briefing("Rome");
 const log = (await host.log("Rome", 0)).map((entry) => entry.text).join("\n");
+// a unit that has spent its movement this turn (the automation's always have) can still be given a march
+const walker = rome.units.find((line: string) => /^(Warrior|Scout|Archer)/.test(line));
+if (walker) {
+  r = await order("Rome", { units: [{ unit: unitId(walker), action: "move", city: rome.cities[0].name }] });
+  check("units: a spent unit can still be sent home", !r.failed.some((f) => f.includes("cannot reach")), [...r.done, ...r.failed].join("; "));
+  await order("Rome", { units: [{ unit: unitId(walker), action: "release" }] });
+} else check("units: a spent unit can still be sent home", false, "no soldier after 12 turns");
 check("research: first step completed", log.includes(`Research of ${firstTech}`), firstTech);
 check("queue: ordered items were built", wanted.every((name) => log.includes(`${name} has been built`) || rome.cities[0].buildQueue.includes(name)), wanted.join(", "));
 check("log: no false idle-research alarm", !log.includes("run out of goals") && !log.includes("No research goal remains"));
