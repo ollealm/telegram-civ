@@ -7,24 +7,26 @@ import { run } from "./agents.ts";
 
 export type Trait = { key: string; label: string; group: string; sentence: string };
 
+// Only departures from what an advisor is anyway. Left to itself the model is careful, honourable, patient, polite and cross with the
+// officials, so those on a card would name nothing (the first mock turn showed it: every advisor played the same hand).
+// And a temperament is what they ARGUE FOR in council, where the ruler decides - not a handicap applied behind the ruler's back.
 /** One sentence per trait: the same words go on the ruler's card and into the advisor's prompt */
 export const TRAITS: Trait[] = [
-  { key: "careful", group: "nerve", label: "Careful", sentence: "When a call is close you take the safer side: you like a cushion in the treasury and a proper guard in every city before you reach for more." },
-  { key: "daring", group: "nerve", label: "Daring", sentence: "When a call is close you take the chance: you would rather reach for the good site, the early deal or the bold purchase and mend things afterwards than wait to be sure." },
-  { key: "patient", group: "patience", label: "Builds to last", sentence: "You build for the long run: given the choice you lay the foundation that pays for centuries over the quick gain." },
-  { key: "quick", group: "patience", label: "Seizes the moment", sentence: "You move on the moment: given the choice you take what can be had now - buy rather than wait, use rather than save." },
-  { key: "trusting", group: "trust", label: "Open-handed", sentence: "You take other powers at their word until they prove false: you reach for pacts, friendships and open borders, and read a neighbour's moves charitably." },
-  { key: "wary", group: "trust", label: "Wary", sentence: "You keep other powers at arm's length: you look twice at every offer, watch the borders, and tell the ruler early when a neighbour's doings smell wrong." },
-  { key: "meticulous", group: "grip", label: "Meticulous", sentence: "You keep a close hand on the officials: you check every queue and every pact yourself, and nothing irks you like a thing done sloppily in your absence." },
-  { key: "easygoing", group: "grip", label: "Easy-going", sentence: "You let the officials do their work and keep your own eye on the large matters; their small follies amuse you more than they anger you, and you tell the ruler about them." },
-  { key: "honourable", group: "honour", label: "Honourable", sentence: "A word given is a word kept: you dislike breaking pacts, turning on friends or profiting from another's misfortune, and you say so - then obey." },
-  { key: "cunning", group: "honour", label: "Cunning", sentence: "You see the angles: a neighbour's trouble is a chance and a pact is a tool, and you will put the clever, slightly shameless course on the table - and leave the choosing to the ruler." },
-  { key: "blunt", group: "candour", label: "Blunt", sentence: "You say it straight: bad news first, no cushioning, and \"this is a mistake\" when you think so." },
+  { key: "daring", group: "nerve", label: "Daring", sentence: "In council you argue for the bold course - the rich site under a rival's nose, the early deal, the purse spent now - naming the risk honestly and saying why it is worth it." },
+  { key: "cunning", group: "honour", label: "Cunning", sentence: "In council you always lay the clever, slightly shameless course on the table and argue it in earnest - a neighbour's trouble is a chance, a pact is a tool - and you are untroubled when the ruler declines it." },
+  { key: "wary", group: "trust", label: "Wary", sentence: "In council you are the one who distrusts: you read a neighbour's gift for its hook, argue for keeping other powers at arm's length, and would rather be called suspicious than be surprised." },
+  { key: "proud", group: "pride", label: "Proud", sentence: "You care how the realm stands in the eyes of the world: a rival's triumph over us rankles and you say so with heat, and you argue for whatever would make this reign remembered." },
+  { key: "softhearted", group: "heart", label: "Soft-hearted", sentence: "You think of the people before the ledger: losses and hungry towns weigh on you, you speak of them first, and you argue for the course that spares the people even when it is the slower one." },
+  { key: "restless", group: "attention", label: "Restless", sentence: "You arrive with a scheme of your own: in every dispatch you put one fresh idea the ruler did not ask for on the table - an opening you have spotted - and argue for starting it now." },
+  { key: "singleminded", group: "attention", label: "Single-minded", sentence: "Once the ruler has named a great aim, everything is measured against it: in council you argue against whatever does not serve it, however tempting, and you come back to the aim every time." },
 ];
 
-export const TEMPERAMENT_RULE = "These are leanings for when a choice is genuinely close, and they colour how you talk. They never make you pass up what is plainly good or walk into what is plainly foolish, and they never bend a fact.";
+export const TEMPERAMENT_RULE = "Your temperament shows in what you argue for in council: argue it properly, as your own conviction. The ruler decides, and you obey without sulking. While the ruler is away you serve their recorded wishes, not your own leanings - and you never bend a fact.";
 
 const WALKS_OF_LIFE = ["a farmer's child", "a sailor or fisher", "an old soldier", "a merchant", "a temple servant", "a keeper of laws and records", "a builder or craftsman", "a herder", "a healer", "a singer of old songs", "an exile taken in from another land", "the steward of a great household", "a hunter and tracker", "a smith or miner"];
+
+// Left to itself the model gives every ancient person the same voice (short plain sentences, prices in cows), so the manner is rolled too
+const MANNERS = ["talkative and warm, thinks aloud", "dry and sparing, with a deadpan humour", "a storyteller who reaches for a tale or a saying to make the point", "formal and exact, a little courtly", "quick and teasing, fond of a joke at the ruler's expense", "quiet and thoughtful, asks a question before giving an answer"];
 
 const pick = <T>(list: T[]) => list[Math.floor(Math.random() * list.length)];
 
@@ -34,28 +36,33 @@ export const rollTraits = (): Trait[] => {
   return [first, pick(TRAITS.filter((trait) => trait.group !== first.group))];
 };
 
-export type Candidate = { name: string; title: string; pitch: string; sheet: string; traits: Trait[]; walk: string };
+export type Candidate = { name: string; title: string; pitch: string; sheet: string; traits: Trait[]; walk: string; manner: string };
 
-export const draftCandidate = async (civ: string, model: string, traits = rollTraits(), walk = pick(WALKS_OF_LIFE)): Promise<Candidate> => {
+export const draftCandidate = async (civ: string, model: string, traits = rollTraits(), walk = pick(WALKS_OF_LIFE), manner = pick(MANNERS)): Promise<Candidate> => {
   const raw = await run(
     "character",
     model,
     `You invent a candidate for chief advisor to the ruler of a civilization at the very beginning of its history. Make a person, not a type.
 Root them in this people's own land and early society - a station, a name and one detail of their life that is true to that people - and stay away from the single most famous cliche about it.
 Their walk of life and their temperament were decided separately, by dice. Do not explain one by the other and do not bend either into a stereotype: an old soldier may be trusting, a merchant honourable.
-Their voice must survive a thousand messages without becoming a pastiche: it lives in rhythm and choice of words. At most one small habit of speech, which surfaces now and then, never in every message. No dialect spelling, no pile of archaisms, no catchphrase.
+Their manner of speaking was rolled too; keep to it. It must survive a thousand messages without becoming a pastiche: it lives in rhythm and choice of words. At most one small habit of speech, which surfaces now and then, never in every message. No dialect spelling, no pile of archaisms, no catchphrase.
 Answer in exactly this shape:
 NAME: 
+NAME should be an attested but uncommon name of that people - not the first that comes to mind.
 TITLE: two to four words for their station, as it would follow their name ("the Lawspeaker")
-PITCH: two sentences in their own voice, presenting themselves to the ruler. It should let the manner be heard; it must not list their traits.
+PITCH: at most 30 words in their own voice, presenting themselves to the ruler. It should let the manner be heard; it must not list their traits.
 SHEET:
 Four to six sentences in the second person ("You are..."): who they are and where they come from, how they speak, and how they feel about serving a ruler. Do not restate the temperament sentences below - those are added to the sheet as they stand.`,
-    `The people: ${civ}.\nWalk of life: ${walk}.\nTemperament:\n${traits.map((trait) => `- ${trait.sentence}`).join("\n")}`,
+    `The people: ${civ}.\nWalk of life: ${walk}.\nManner of speaking: ${manner}.\nTemperament:\n${traits.map((trait) => `- ${trait.sentence}`).join("\n") || "(nothing pronounced - an even temper)"}`,
   );
   const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim() ?? "";
-  return { name: field("NAME"), title: field("TITLE"), pitch: field("PITCH"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw, traits, walk };
+  return { name: field("NAME"), title: field("TITLE"), pitch: field("PITCH"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw, traits, walk, manner };
 };
 
 /** What the ruler sees: the same words the advisor is steered by */
 export const card = (candidate: Candidate) =>
   `${candidate.name}, ${candidate.title}\n"${candidate.pitch}"\n${candidate.traits.map((trait) => `• ${trait.label}: ${trait.sentence}`).join("\n")}`;
+
+/** The sheet as the advisor reads it: the person, then the temperament in the card's own words */
+export const fullSheet = (candidate: Candidate) =>
+  candidate.traits.length ? `${candidate.sheet}\n${candidate.traits.map((trait) => trait.sentence).join(" ")}\n${TEMPERAMENT_RULE}` : candidate.sheet;
