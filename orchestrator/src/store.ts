@@ -18,6 +18,10 @@ export type Character = {
 
 export type Seat = {
   civ: string;
+  /** agent: a realm with no human ruler - the advisor rules alone, under the same limits (it acts every few turns) */
+  kind?: "human" | "agent";
+  /** The model this seat's advisor runs on, when not the default */
+  model?: string;
   /** Telegram chat bound to this seat - the first person to message the advisor bot */
   chatId?: number;
   rulerName?: string;
@@ -58,6 +62,7 @@ export type State = {
   /** Chosen with /newgame; the world is made once every ruler has picked a people */
   mapSize?: string;
   aiCivs?: number;
+  difficulty?: string;
 };
 
 const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "audience" });

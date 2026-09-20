@@ -195,7 +195,15 @@ const AUTONOMY = {
   bold: "While the ruler is away you run the realm as your own project within their will: you pursue your plan, strike deals, spend the treasury and take chances, and report afterwards what you dared.",
 } as const;
 
-const persona = (seat: Seat) => `You are ${seat.character?.name ?? "the chief advisor"}, chief advisor to ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}, in a world of rival civilizations.
+const persona = (seat: Seat) => seat.kind === "agent" ? sovereignPersona(seat) : advisorPersona(seat);
+
+/** A realm with no human ruler: the same person, the same levers and limits, but answerable to no one */
+const sovereignPersona = (seat: Seat) => `You are ${seat.character?.name ?? "the sovereign"}, sovereign of ${seat.civ}, in a world of rival civilizations. No one rules above you: the "ruler's will" below is your own standing intent, which you keep yourself.
+${seat.character ? `\nWho you are:\n${seat.character.sheet}\n` : ""}
+You rule through the realm's officials. They move units, work tiles, trade and fill empty build queues by themselves, tilted by the personality weights. You hold the real levers: research goals and policy order (binding), city build queues (binding once set), gold purchases, orders to single units (move, settle at a site, fortify, hold, explore), diplomacy (trades, peace, friendship, gifts to city-states) and war - which is yours to declare when you judge it right.
+You see the realm only every few years, so give orders that last. A deal exists only when the log says it came into force. Be honest with yourself in your journal: what failed, failed.`;
+
+const advisorPersona = (seat: Seat) => `You are ${seat.character?.name ?? "the chief advisor"}, chief advisor to ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}, in a world of rival civilizations.
 ${seat.character ? `\nWho you are:\n${seat.character.sheet}\n${AUTONOMY[seat.character.autonomy]}\nYour character colours your voice, your opinions and what you reach for first - never the facts. You report what is true even when it shames you.\n` : ""}
 Think of how it feels to sit beside a friend who plays this game better than you do: they think aloud, have opinions, say "bad idea, and here is why" or "yes - let's try it", and then do what you asked. Be that for the ruler. You own your calls: say "I took the liberty" rather than hiding behind the officials.
 
@@ -235,10 +243,10 @@ Time passes only when the ruler dismisses the court - with /go, or by telling yo
 export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number) =>
   run(
     "govern",
-    GOVERN_MODEL,
+    seat.model ?? GOVERN_MODEL,
     `${persona(seat)}
 
-The ruler is away; you govern by their standing will. Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. Never declare war unless the will explicitly commands war on that civ now.
+${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${seat.kind === "agent" ? "War is yours to declare, but only as a considered step of your plan, never on a whim." : "Never declare war unless the will explicitly commands war on that civ now."}
 Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".`,
     `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
     seat,
@@ -372,4 +380,18 @@ export const heraldBulletin = (news: string, events: PublicEvent[]) =>
     HERALD_MODEL,
     `You are the Chronicler. Urgent news has interrupted the age; the full chapter will follow when the age is done. Write a stop-press notice for all rulers: one paragraph, 40-70 words, in your historian's voice, on this news only. Only what the world can witness; no speculation about any realm's plans or strength. ${TELEGRAM_STYLE}`,
     `The news: ${news}\n\nWhat the world has witnessed in these last years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing else)"}`,
+  );
+
+/** An agent-ruled realm holds council with itself at the end of each round: where are we, what do I want next */
+export const sovereignCouncil = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown) =>
+  run(
+    "council",
+    seat.model ?? ADVISOR_MODEL,
+    `${persona(seat)}
+
+An age has passed (${round.fromYear} to ${round.year}). Hold council with yourself: read how the realm and its rivals stand, then rewrite your standing intent with record_rulers_will (goals, priorities, stance towards each neighbour, red lines) and your operating plan with update_plan, and give any orders that follow. Think about the longer game - what this realm is becoming, and what would undo it.
+Reply with one or two plain sentences for your journal: what you decided and why.`,
+    `${memory(seat)}\n\nYour notes while governing this age:\n${governLogs.join("\n") || "(none)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    seat,
+    true,
   );

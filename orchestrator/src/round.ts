@@ -1,7 +1,7 @@
 // One round of play, shared by the Telegram bots and the test harness:
 // the advisors govern every few turns, time passes, then dispatches and the Chronicler's chapter go out.
 
-import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, type Dispatch } from "./agents.ts";
+import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, sovereignCouncil, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
@@ -72,7 +72,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     const news = finished.stoppedEarly;
     const remaining = length - (finished.turn - fromTurn);
     if (news && !/has won/.test(news) && remaining > 0) {
-      const concerned = seats.filter((seat) => news.startsWith(seat.civ));
+      const concerned = seats.filter((seat) => news.startsWith(seat.civ) && seat.kind !== "agent"); // an agent realm deals with its own crises at its next look-in
       state.pendingRound = { fromTurn, fromYear: finished.fromYear, remaining, publicEvents: finished.publicEvents };
       await Promise.all([
         ...concerned.map(async (seat) => {
@@ -82,7 +82,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
           await io.dispatch(seat, dispatch);
         }),
-        ...seats.filter((seat) => !concerned.includes(seat)).map((seat) => io.notice(seat, `News from abroad has stopped the clocks: ${news}. Our realm is untouched; I carry on as we agreed, and time resumes once the rulers concerned have held council.`)),
+        ...seats.filter((seat) => !concerned.includes(seat) && seat.kind !== "agent").map((seat) => io.notice(seat, `News from abroad has stopped the clocks: ${news}. Our realm is untouched; I carry on as we agreed, and time resumes once the rulers concerned have held council.`)),
         heraldBulletin(news, finished.publicEvents.slice(-8)).then((bulletin) => io.chronicle(bulletin, [], finished)),
       ]);
       urgentFor = concerned;
@@ -93,6 +93,11 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       ...seats.map(async (seat) => {
         const governLogs = notes.get(seat.civ)!;
         const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
+        if (seat.kind === "agent") {
+          const entry = await sovereignCouncil(seat, finished, governLogs, briefing).catch((error) => `(council failed: ${error.message})`);
+          seat.journal.push(`${finished.fromYear} to ${finished.year}: ${entry}`);
+          return;
+        }
         const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
         seat.choices = undefined;

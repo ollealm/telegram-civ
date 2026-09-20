@@ -79,8 +79,43 @@ index ebb116c..f8234e7 100644
          if (constructionQueue.isEmpty()) constructionQueue.add(value) else constructionQueue[0] = value
      }
  
+diff --git a/core/src/com/unciv/logic/city/CityStats.kt b/core/src/com/unciv/logic/city/CityStats.kt
+index 9bb1be2..84564d3 100644
+--- a/core/src/com/unciv/logic/city/CityStats.kt
++++ b/core/src/com/unciv/logic/city/CityStats.kt
+@@ -343,7 +343,7 @@ class CityStats(val city: City) {
+     private fun getBuildingMaintenanceCosts(): Float {
+         // Same here - will have a different UI display.
+         var buildingsMaintenance = city.cityConstructions.getMaintenanceCosts() // this is AFTER the bonus calculation!
+-        if (!city.civ.isHuman()) {
++        if (!city.civ.hasPlayerStanding()) {
+             buildingsMaintenance *= city.civ.gameInfo.getDifficulty().aiBuildingMaintenanceModifier
+         }
+ 
+@@ -392,7 +392,7 @@ class CityStats(val city: City) {
+         // I don't know enough about the original whether they do something similar or not and can't be bothered to find where
+         // in the source code this calculation takes place, but it would surprise me if they also did this double multiplication thing. ~xlenstra
+         var unhappinessModifier = civInfo.getDifficulty().unhappinessModifier
+-        if (!civInfo.isHuman())
++        if (!civInfo.hasPlayerStanding())
+             unhappinessModifier *= civInfo.gameInfo.getDifficulty().aiUnhappinessModifier
+ 
+         var unhappinessFromCity = -3f // -3 happiness per city
+diff --git a/core/src/com/unciv/logic/city/managers/CityPopulationManager.kt b/core/src/com/unciv/logic/city/managers/CityPopulationManager.kt
+index 7005930..142c92a 100644
+--- a/core/src/com/unciv/logic/city/managers/CityPopulationManager.kt
++++ b/core/src/com/unciv/logic/city/managers/CityPopulationManager.kt
+@@ -56,7 +56,7 @@ class CityPopulationManager : IsPartOfGameInfoSerialization {
+ 
+         if (city.civ.isCityState)
+             foodRequired *= 1.5f
+-        if (!city.civ.isHuman())
++        if (!city.civ.hasPlayerStanding())
+             foodRequired *= city.civ.gameInfo.getDifficulty().aiCityGrowthModifier
+         return foodRequired.toInt()
+     }
 diff --git a/core/src/com/unciv/logic/civilization/Civilization.kt b/core/src/com/unciv/logic/civilization/Civilization.kt
-index 049029c..1a6e731 100644
+index 049029c..5526736 100644
 --- a/core/src/com/unciv/logic/civilization/Civilization.kt
 +++ b/core/src/com/unciv/logic/civilization/Civilization.kt
 @@ -4,6 +4,7 @@ import com.unciv.Constants
@@ -91,7 +126,21 @@ index 049029c..1a6e731 100644
  import com.unciv.logic.automation.unit.WorkerAutomation
  import com.unciv.logic.city.City
  import com.unciv.logic.city.managers.CityFounder
-@@ -469,6 +470,7 @@ class Civilization : IsPartOfGameInfoSerialization {
+@@ -361,9 +362,12 @@ class Civilization : IsPartOfGameInfoSerialization {
+ 
+ 
+     //region pure functions
++    /** Humans, and AI civs steered by a ruler: the difficulty level treats both as "the player", so lowering it handicaps only the game's own AI */
++    @Readonly fun hasPlayerStanding() = isHuman() || civID in RulerOverrides.ruledCivs
++
+     @Readonly
+     fun getDifficulty(): Difficulty {
+-        if (isHuman()) return gameInfo.getDifficulty()
++        if (hasPlayerStanding()) return gameInfo.getDifficulty()
+         if (gameInfo.ruleset.difficulties.containsKey(gameInfo.getDifficulty().aiDifficultyLevel)) {
+             return gameInfo.ruleset.difficulties[gameInfo.getDifficulty().aiDifficultyLevel]!!
+         }
+@@ -469,6 +473,7 @@ class Civilization : IsPartOfGameInfoSerialization {
  
      @Readonly
      fun getPersonality(): Personality {
@@ -99,7 +148,7 @@ index 049029c..1a6e731 100644
          return if (isAIOrAutoPlaying()) gameInfo.ruleset.personalities[nation.personality] ?: Personality.neutralPersonality
          else Personality.neutralPersonality
      }
-@@ -1159,7 +1161,8 @@ class Civilization : IsPartOfGameInfoSerialization {
+@@ -1159,7 +1164,8 @@ class Civilization : IsPartOfGameInfoSerialization {
       *  @param notificationIcons Zero or more icons to decorate the notification with - see [NotificationIcon]
       */
      fun addNotification(text: String, actions: Iterable<NotificationAction>?, category: NotificationCategory, vararg notificationIcons: String) {
@@ -109,6 +158,45 @@ index 049029c..1a6e731 100644
          notifications.add(Notification(text, notificationIcons, actions, category))
      }
      // endregion
+diff --git a/core/src/com/unciv/logic/civilization/transients/CivInfoStatsForNextTurn.kt b/core/src/com/unciv/logic/civilization/transients/CivInfoStatsForNextTurn.kt
+index b7c8d98..616f4d6 100644
+--- a/core/src/com/unciv/logic/civilization/transients/CivInfoStatsForNextTurn.kt
++++ b/core/src/com/unciv/logic/civilization/transients/CivInfoStatsForNextTurn.kt
+@@ -80,7 +80,7 @@ class CivInfoStatsForNextTurn(val civInfo: Civilization) {
+         var cost = baseUnitCost * numberOfUnitsToPayFor * (1 + gameProgress)
+         cost = cost.pow(1 + gameProgress / 3) // Why 3? To spread 1 to 1.33
+ 
+-        if (!civInfo.isHuman())
++        if (!civInfo.hasPlayerStanding())
+             cost *= civInfo.gameInfo.getDifficulty().aiUnitMaintenanceModifier
+ 
+         return cost.toInt()
+diff --git a/core/src/com/unciv/models/ruleset/Building.kt b/core/src/com/unciv/models/ruleset/Building.kt
+index d636187..f56b156 100644
+--- a/core/src/com/unciv/models/ruleset/Building.kt
++++ b/core/src/com/unciv/models/ruleset/Building.kt
+@@ -142,7 +142,7 @@ class Building : RulesetStatsObject(), INonPerpetualConstruction {
+ 
+         if (civInfo.isCityState)
+             productionCost *= 1.5f
+-        else if (civInfo.isHuman()) {
++        else if (civInfo.hasPlayerStanding()) {
+             if (!isWonder)
+                 productionCost *= civInfo.getDifficulty().buildingCostModifier
+         } else {
+diff --git a/core/src/com/unciv/models/ruleset/unit/BaseUnitCost.kt b/core/src/com/unciv/models/ruleset/unit/BaseUnitCost.kt
+index a0ea252..655aae8 100644
+--- a/core/src/com/unciv/models/ruleset/unit/BaseUnitCost.kt
++++ b/core/src/com/unciv/models/ruleset/unit/BaseUnitCost.kt
+@@ -25,7 +25,7 @@ class BaseUnitCost(val baseUnit: BaseUnit) {
+ 
+         productionCost *= if (civInfo.isCityState)
+             1.5f
+-        else if (civInfo.isHuman())
++        else if (civInfo.hasPlayerStanding())
+             civInfo.getDifficulty().unitCostModifier
+         else
+             civInfo.gameInfo.getDifficulty().aiUnitCostModifier
 diff --git a/desktop/build.gradle.kts b/desktop/build.gradle.kts
 index d1a6cb1..8c78f54 100644
 --- a/desktop/build.gradle.kts

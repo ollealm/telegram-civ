@@ -57,7 +57,7 @@ export type Orders = {
 
 export const host = {
   state: () => call<GameState>("GET", "/state"),
-  newGame: (setup: { ruled: string[]; others: string[]; mapSize?: string; cityStates?: number }) =>
+  newGame: (setup: { ruled: string[]; others: string[]; mapSize?: string; cityStates?: number; difficulty?: string }) =>
     call<GameState>("POST", "/new", setup),
   advance: (turns: number) => call<RoundResult>("POST", "/advance", { turns }),
   briefing: (civ: string, logSince?: number) =>
