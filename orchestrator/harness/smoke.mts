@@ -104,6 +104,9 @@ if (cityState && rome.gold >= 20) {
 // trade direction: a gift of gold must move gold FROM us TO them (this is the check that catches a reversed trade)
 const greeceKnown = rome.knownCivs.find((known: any) => known.civ === "Greece");
 if (greeceKnown) {
+  // both purses are fenced for the turn, so the only gold that moves is the gift
+  await order("Rome", { goldReserve: 100000 });
+  await order("Greece", { goldReserve: 100000 });
   rome = await briefing("Rome");
   const greeceBefore = await briefing("Greece");
   if (rome.gold >= 15) {
