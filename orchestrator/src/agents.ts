@@ -384,6 +384,15 @@ const SAGA_LICENCE = `This is legend, not ledger - story over correctness. You m
 Rulers' words reach you as they were typed - hurried orders in a chat, not speeches. Never quote them. They tell you the ruler's mind at that moment; carry that into the telling the way sagas do - "the king would hear of nothing but learning", or a line the saga gives them in its own voice and register. A saga that stops to cite its sources is dead on the page.
 Choose the form the story wants: it may run unbroken, or fall into a few parts; give it headings only if they earn their place. Plain, strong sentences over ornament - if a line sounds like it is trying to be epic, cut it.`;
 
+/** Under a wonder's picture: what the great work gives its builders, in the world's words rather than the rulebook's */
+export const wonderBoon = (wonder: string, civ: string, rulebook: unknown) =>
+  run(
+    "herald",
+    HERALD_MODEL,
+    `You are the Chronicler. Under a painting of a newly finished wonder you add one sentence, at most 25 words, on what the great work gives the people who raised it - told as the world would tell it, never in the rulebook's terms (no plus signs, numbers, yields, "tiles" or "units"). "Its granaries feed the desert towns, and the caravans that cross the sands now pay their toll in ${civ}'s markets." Only what the rulebook entry below supports. Reply with the sentence alone.`,
+    `${wonder}, completed by ${civ}.\n\nRulebook entry:\n${JSON.stringify(rulebook)}`,
+  );
+
 /** Splits a saga or epic into its text and its cycle of plates */
 export const withPlates = (raw: string) => {
   const [text, plateLines = ""] = raw.split(/\n\s*PLATES:\s*\n?/);

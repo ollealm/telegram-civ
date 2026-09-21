@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, realmSaga, withPlates } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, realmSaga, withPlates, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -181,9 +181,15 @@ async function playRound() {
       chronicle: async (chapter, images, round) => {
         await broadcastHerald(chapter);
         // One or two scenes of the Chronicler's choosing, and every wonder
-        for (const picture of [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", ...image })), ...wonderPictures(round)])
+        // A wonder's picture says what the great work gives its builders
+        const wonders = await Promise.all(wonderPictures(round).map(async (picture) => {
+          const wonder = picture.caption.split(",")[0];
+          const boon = await host.lookup(state.seats[0]?.civ ?? "", wonder).then((entry) => wonderBoon(wonder, /completed by (.+?) in /.exec(picture.caption)?.[1] ?? "its builders", entry)).catch(() => "");
+          return { ...picture, note: boon.trim() };
+        }));
+        for (const picture of [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders])
           paint(picture, async (png) => {
-            for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "scene.png"), { caption: picture.caption }).catch(() => {});
+            for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
           });
       },
       log,
