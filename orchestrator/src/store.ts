@@ -21,6 +21,8 @@ export type Annal = { years: string; story: string; course?: string; question?: 
 
 export type Seat = {
   civ: string;
+  /** The picture of what the current audience decided, painted when the court is dismissed */
+  decisionPicture?: { turn: number; year: string; caption: string; description: string };
   annals?: Annal[];
   /** Where the realm stood among its rivals at the last dispatch, as the chancery reckoned it */
   standing?: string;

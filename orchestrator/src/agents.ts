@@ -312,14 +312,16 @@ export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: 
     ADVISOR_MODEL,
     `${persona(seat)}
 
-You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk. Speak in years, never turn numbers. No tools are needed - everything is below. Answer in exactly this shape:
+You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk. Speak in years, never turn numbers. No tools are needed - everything is below.
+The sections below say what a dispatch must cover, not how it should sound. How it sounds is you: your manner decides where it begins (the news, a grievance, a small thing you saw), what you linger on, how long the sentences run, whether there is a joke in it. A ruler who has had two advisors should never mistake one's letters for the other's. Your last dispatch is below: do not reuse its turns of phrase, its order, or its way of ending.
+Answer in exactly this shape:
 
 DISPATCH:
 Around 120-160 words, in your voice: what happened in these years, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
 It must also say plainly where the realm stands among its rivals in what this ruler cares about most, and whether it is gaining or falling behind - taken from "Standing among the powers" below, which the chancery reckons and you do not get to soften. Rank is history, not machinery: say it in the world's words ("the scholars of Delhi are ahead of ours, and drawing away"), without the figures. Good for our size is not the same as ahead; never let the one pass for the other.
 
 STRATEGY:
-Two to four sentences on the longer game: where this realm is heading over the next century if it stays its course, what it is becoming good at, and the one thing most likely to undo it.
+The longer view - but only when you have something new to say about it. Your last dispatch is below; if the long road looks the same as it did then, write just: same (and nothing is shown). Write it when the course has truly shifted, a new danger or opening has appeared, or it is time to say the unwelcome thing - then two or three sentences, as a thought of your own that follows on from the dispatch, with no heading or label, never a formula ("if we hold this course we become...", "what undoes us is...") and never last time's thought in new words.
 
 QUESTION:
 Open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself. If your record says what kind of ruler this is, put the question as someone who knows them would - and keep your own lean where it differs.
@@ -329,14 +331,14 @@ caption | description - one picture of a moment from OUR realm in these years (a
 
 JOURNAL:
 One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
-    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Standing among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
   );
   seat.standing = standingOf(briefing) || seat.standing;
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
   const [caption, ...description] = section("IMAGE").split("|");
   return {
     text: section("DISPATCH") || raw,
-    strategy: section("STRATEGY"),
+    strategy: /^\W*same\W*$/i.test(section("STRATEGY")) ? "" : section("STRATEGY"),
     question: section("QUESTION"),
     image: description.length ? { caption: caption.trim(), description: description.join("|").trim() } : undefined,
     journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, ""),

@@ -166,7 +166,7 @@ async function playRound() {
       working: (seat, work) => (seat.chatId ? whileTyping(botOf(seat), seat.chatId, work) : work),
       dispatch: async (seat, dispatch, round) => {
         const bot = botOf(seat);
-        const letter = [dispatch.heading, dispatch.text, dispatch.strategy && `Where this is heading: ${dispatch.strategy}`, dispatch.question].filter(Boolean).join("\n\n");
+        const letter = [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
         await bot.api.sendMessage(seat.chatId!, letter);
         // Pictures follow the letter instead of holding it up: a scene from the realm, then the painted map
         if (dispatch.image) {
@@ -175,7 +175,7 @@ async function playRound() {
         }
         // With every letter, the marches of the years it covers - ours, drawn by the host, so it costs nothing
         void host.map(seat.civ, "campaign", round.fromTurn).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "marches.png"))).catch((error) => log("march map failed:", error.message));
-        if (dispatch.strategy && PAINTED_MAPS) void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
+        if (!dispatch.heading && PAINTED_MAPS) void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
       },
       notice: async (seat, text) => void (await botOf(seat).api.sendMessage(seat.chatId!, text).catch(() => {})),
       chronicle: async (chapter, images, round) => {
@@ -383,6 +383,12 @@ function setUpAdvisor(bot: Bot, index: number) {
       annal.rulerSaid = since.filter((message) => message.from === "ruler").map((message) => message.text).filter((text) => !new RegExp(`^/?(${LEAVE.join("|")})\\b`, "i").test(text.trim()) && !text.startsWith("["));
       annal.settled = since.filter((message) => message.from === "advisor").at(-1)?.text.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
     }
+    const decided = seat().decisionPicture;
+    if (decided && seat().chatId) {
+      const chatId = seat().chatId!;
+      paint({ ...decided, for: seat().civ }, (png) => bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }));
+    }
+    seat().decisionPicture = undefined;
     seat().ready = true;
     seat().dismissed = false;
     persist();
@@ -410,8 +416,8 @@ function setUpAdvisor(bot: Bot, index: number) {
         const proclamation = /^PROCLAMATION:\s*(.+)$/m.exec(raw)?.[1].trim();
         const reply = raw.replace(/^(IMAGE|PROCLAMATION):.*\n?/gm, "").replace(/\n{3,}/g, "\n\n").trim();
         if (proclamation && !/^\(?none|^-$/i.test(proclamation)) (seat().proclamations ??= []).push(proclamation);
-        if (image && !/^\(?none/i.test(image[1]))
-          paint({ turn: game.turn, year: game.year, for: seat().civ, caption: image[1], description: image[2] }, (png) => bot.api.sendPhoto(ctx.chat!.id, new InputFile(png, "decision.png"), { caption: image[1] }));
+        // The picture of what the audience decided is painted once the court is dismissed - a closing can still be talked over, and only the last one stands
+        if (image && !/^\(?none/i.test(image[1])) seat().decisionPicture = { turn: game.turn, year: game.year, caption: image[1], description: image[2] };
         remember(seat(), { from: "ruler", text: message });
         remember(seat(), { from: "advisor", text: reply });
         seat().choices = undefined;
