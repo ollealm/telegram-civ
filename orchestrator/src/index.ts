@@ -391,14 +391,17 @@ function setUpAdvisor(bot: Bot, index: number) {
     void playRound();
   };
 
-  bot.command("go", (ctx) => dismiss((text) => ctx.reply(text), true));
+  // "/go" alone dismisses the court; "/go and buy the library first" (or a message that ends in /go) is answered and acted on, then time passes
+  const canHoldAudience = () => !seat().fallen && state.phase === "audience" && !!seat().character;
+  bot.command("go", (ctx) => (ctx.match.trim() && canHoldAudience() ? audience(ctx, ctx.match.trim(), true) : dismiss((text) => ctx.reply(text), true)));
 
   /** One audience at a time per seat, so replies stay in order */
-  const audience = (ctx: Context, message: string) => {
+  /** thenGo: the ruler ended their message with /go - answer it, act on it, and let time pass without another word from them */
+  const audience = (ctx: Context, message: string, thenGo = false) => {
     queue = queue.then(async () => {
       try {
         const game = await host.state();
-        const raw = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), message, roundLength(game.turn)));
+        const raw = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /go: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further.]` : message, roundLength(game.turn)));
         // The closing carries two lines meant for us, not the ruler: a picture of the decision, and words for the Chronicler
         const image = /^IMAGE:\s*(.+?)\s*\|\s*(.+)$/m.exec(raw);
         const proclamation = /^PROCLAMATION:\s*(.+)$/m.exec(raw)?.[1].trim();
@@ -411,7 +414,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         seat().choices = undefined;
         await ctx.reply(reply);
         await flushDevFeed(herald, `Audience - ${seat().civ}`);
-        if (seat().dismissed) await dismiss((text) => ctx.reply(text));
+        if (seat().dismissed || thenGo) await dismiss((text) => ctx.reply(text));
       } catch (error) {
         log("advisor failed:", error);
         await ctx.reply("Forgive me, Majesty, I lost my train of thought. Could you say that again?");
@@ -524,7 +527,8 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().setup) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
     if (state.phase === "setup") return seat().character ? ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.") : beginSetup(ctx);
     if (!seat().character && seat().chat.length === 0) return beginSetup(ctx);
-    audience(ctx, ctx.message.text);
+    const closing = /^([\s\S]*\S)\s+\/go\s*$/i.exec(ctx.message.text);
+    closing ? audience(ctx, closing[1], true) : audience(ctx, ctx.message.text);
   });
 
   bot.catch((error) => log(`advisor ${index + 1} error:`, error.message));
