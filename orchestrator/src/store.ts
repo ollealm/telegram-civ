@@ -77,6 +77,8 @@ export type State = {
   proclaimed?: { turn: number; year: string; text: string }[];
   /** The Chronicler's chapters as they were published - the world epic is written from these */
   chapters?: { years: string; text: string }[];
+  /** The name the world-history bot currently shows */
+  heraldName?: string;
   /** The closing epic has been told: the game is over */
   epicTold?: boolean;
   /** Pictures painted lately, so that nobody is shown the same scene twice */

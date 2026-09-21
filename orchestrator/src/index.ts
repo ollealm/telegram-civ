@@ -572,7 +572,7 @@ function setUpHerald() {
     state.heraldChats.push(ctx.chat.id);
     persist();
     log("Herald now publishes to chat", ctx.chat.id);
-    await ctx.reply("The Herald will deliver every edition of the world's news here.");
+    await ctx.reply("The Chronicler will set down every chapter of the world's history here.");
   };
   herald.command("epic", async (ctx) => {
     await subscribe(ctx);
@@ -581,6 +581,9 @@ function setUpHerald() {
   });
   herald.on("my_chat_member", subscribe);
   herald.on("message", subscribe);
+  // The one voice all rulers read is the Chronicler; the bot carries that name (renames are rationed by Telegram, so only once)
+  if (state.heraldName !== "The Chronicler")
+    void herald.api.setMyName("The Chronicler").then(() => { state.heraldName = "The Chronicler"; persist(); }).catch((error) => log("renaming the Chronicler failed:", error.message));
   herald.catch((error) => log("herald error:", error.message));
 }
 
