@@ -87,7 +87,7 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
           give: z.array(z.object({ item: z.string(), amount: z.number().optional() })).optional(),
           want: z.array(z.object({ item: z.string(), amount: z.number().optional() })).optional(),
         })).optional().describe("Propose a trade to a major civ; see get_options.diplomacy for tradeable items. They answer on their turn."),
-        peace: z.array(z.string()).optional().describe("Propose peace to civs we are at war with."),
+        peace: z.array(z.string()).optional().describe("Peace with civs we are at war with. If their offer is waiting (briefing.peaceOffers) this ACCEPTS it on the terms shown; otherwise it proposes a plain peace. War and peace are never decided by the officials: an offer of peace waits some turns for your answer, and lapses if you give none - which is how you refuse."),
         friendship: z.array(z.string()).optional().describe("Propose a declaration of friendship."),
         gift: z.array(z.object({ cityState: z.string(), gold: z.number() })).optional().describe("Give gold to a city-state for influence."),
         cityFocus: z.array(z.object({ city: z.string(), focus: z.enum(["NoFocus", "Food", "Production", "Gold", "Science", "Culture", "Happiness", "Faith", "GoldGrowth", "ProductionGrowth"]) })).optional().describe("What a city's citizens work its tiles for. NoFocus lets the officials balance."),
