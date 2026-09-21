@@ -77,7 +77,7 @@ async function createWorld() {
   const overview = `A new world has been made: a ${mapSize.toLowerCase()} one, home to ${ruled.length + others.length} great peoples and ${CITY_STATES[mapSize] ?? 6} lesser cities. ${state.seats.filter((seat) => seat.kind !== "agent").map((seat) => seat.civ).join(" and ")} answer to rulers at this table${state.seats.some((seat) => seat.kind === "agent") ? `; ${state.seats.filter((seat) => seat.kind === "agent").map((seat) => `${seat.civ} is ruled by ${seat.character?.name}`).join(", ")}, who answer to no one` : ""}${others.length ? `; ${others.length} more peoples keep their own counsel, somewhere beyond the horizon` : ""}. History begins in 4000 BC.`;
   await broadcastHerald(overview);
   for (const seat of state.seats)
-    if (seat.chatId) await advisors[state.seats.indexOf(seat)].api.sendMessage(seat.chatId, `The world is made, Majesty, and ${seat.civ} stands at its beginning. Tell me what you want this realm to become - and when we are done, /go.`).catch(() => {});
+    if (seat.chatId) await advisors[state.seats.indexOf(seat)].api.sendMessage(seat.chatId, `The world is made, Majesty, and ${seat.civ} stands at its beginning. Tell me what you want this realm to become; we have all the time we need, for no year passes until you give the word.`).catch(() => {});
 }
 
 onImageLog((message) => log(message));
@@ -287,7 +287,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       persist();
       const greeting = await whileTyping(bot, ctx.chat!.id, advisorGreeting(seat(), replaced));
       remember(seat(), { from: "advisor", text: greeting });
-      await ctx.reply(`${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely; time only passes when you say so or send /go.  /status  /map  /will  /usage`);
+      await ctx.reply(`${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely - nothing in the world moves while we speak.`);
       await flushDevFeed(herald, `Character for ${seat().civ}: ${seat().character!.name}, ${chosen.title}`, [chosen.sheet]);
       if (state.phase === "setup") {
         const missing = state.seats.filter((other) => other.kind !== "agent" && (!other.civ || !other.character)).length;
