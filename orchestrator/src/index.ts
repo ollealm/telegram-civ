@@ -237,7 +237,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     const keyboard = new InlineKeyboard();
     drawn.forEach((nation) => keyboard.text(`${nation.name} (${nation.leader})`, `people:${nation.name}`).row());
     keyboard.text("Let fate decide", "people:?");
-    await ctx.reply("Which people will you lead?\n\n(Pick one, or name any people you like - Persia, the Aztecs, Sweden... Send "list" to see them all.)", { reply_markup: keyboard });
+    await ctx.reply("Which people will you lead?\n\n(Pick one, or name any people you like - Persia, the Aztecs, Sweden... Send the word list to see them all.)", { reply_markup: keyboard });
   };
 
   const choosePeople = async (ctx: Context, wish: string) => {
