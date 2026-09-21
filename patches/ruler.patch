@@ -880,10 +880,10 @@ index 0000000..99fa0ff
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..356de62
+index 0000000..834c518
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,912 @@
+@@ -0,0 +1,915 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1631,6 +1631,9 @@ index 0000000..356de62
 +            "civ" to civ.civName,
 +            "turn" to turn,
 +            "year" to yearText(turn),
++            // Advisors speak in years, but everything here counts turns - and early on a turn is decades long
++            "calendar" to (civ.gameInfo.getYear(1) - civ.gameInfo.getYear(0)).let { years ->
++                "One turn is now about $years year${if (years == 1) "" else "s"}. Every figure of turns in this briefing (turnsLeft, deal durations, 'about N turns away') counts turns, not years: ${if (years > 1) "3 turns is about ${3 * years} years. " else ""}Reckon it over before you speak of time, and prefer a loose span ('within a generation', 'a century's work') to an exact count." },
 +            "era" to civ.getEra().name,
 +            "waysToWin" to civ.gameInfo.gameParameters.victoryTypes.toList().ifEmpty { listOf("none - this world was made without victory conditions; nobody can build a spaceship or win a vote") },
 +            "score" to civ.calculateTotalScore().toInt(),
