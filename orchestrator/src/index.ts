@@ -134,7 +134,7 @@ async function playRound() {
       working: (seat, work) => (seat.chatId ? whileTyping(botOf(seat), seat.chatId, work) : work),
       dispatch: async (seat, dispatch, round) => {
         const bot = botOf(seat);
-        const letter = [dispatch.text, dispatch.strategy && `Where this is heading: ${dispatch.strategy}`, dispatch.question].filter(Boolean).join("\n\n");
+        const letter = [dispatch.heading, dispatch.text, dispatch.strategy && `Where this is heading: ${dispatch.strategy}`, dispatch.question].filter(Boolean).join("\n\n");
         await bot.api.sendMessage(seat.chatId!, letter);
         // Pictures follow the letter instead of holding it up: a scene from the realm, then the painted map
         if (dispatch.image) {

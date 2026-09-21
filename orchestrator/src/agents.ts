@@ -303,7 +303,7 @@ export const standingOf = (briefing: any): string => {
   return [line("Learning", "techs"), line("Arms", "militaryStrength"), line("Cities", "cities"), line("Overall", "score")].join("; ") + ".";
 };
 
-export type Dispatch = { text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
+export type Dispatch = { /** A line above the letter, set by the round itself: why this audience is happening */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
 
 /** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
 export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown): Promise<Dispatch> => {

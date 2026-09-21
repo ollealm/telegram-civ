@@ -90,6 +90,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         ...concerned.map(async (seat) => {
           const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
           const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing));
+          // The ruler must see at a glance that this is not the regular audience: the age was cut short, and why
+          dispatch.heading = `Urgent council, ${finished.year} - the age was interrupted: ${news.replace(/[.!]+$/, "")}.\nThe rest of it plays out once you dismiss the court.`;
           notes.get(seat.civ)!.push(dispatch.journal);
           remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
           await io.dispatch(seat, dispatch, finished);
