@@ -231,6 +231,12 @@ function usageSummary() {
 
 function setUpAdvisor(bot: Bot, index: number) {
   const seat = (): Seat => state.seats[index];
+  /** The chat carries the advisor's name, so the ruler always knows who is speaking. Telegram allows only a few renames a day, hence only when it changes. */
+  const wearName = async () => {
+    const wanted = seat()?.character ? `${seat().character!.name} · ${seat().civ}`.slice(0, 64) : undefined;
+    if (!wanted || seat().botName === wanted) return;
+    await bot.api.setMyName(wanted).then(() => { seat().botName = wanted; persist(); }).catch((error) => log("renaming the bot failed:", error.message));
+  };
   let queue: Promise<unknown> = Promise.resolve();
 
   /** First of all: which people? Four drawn at random, fate, or any people named in the ruler's own words */
@@ -284,6 +290,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     const replaced = seat().character?.name;
     try {
       seat().character = { name: chosen.name, title: chosen.title, sheet: chosen.sheet };
+      void wearName();
       seat().setup = undefined;
       seat().candidates = undefined;
       seat().rerolled = undefined;
@@ -545,6 +552,8 @@ function setUpAdvisor(bot: Bot, index: number) {
     const closing = new RegExp(`^([\\s\\S]*\\S)\\s+/(${LEAVE.join("|")})\\s*$`, "i").exec(ctx.message.text);
     closing ? audience(ctx, closing[1], true) : audience(ctx, ctx.message.text);
   });
+
+  void wearName();
 
   // Words the ruler sent just before a restart: answer them now, as if nothing had happened
   const left = seat()?.unanswered;
