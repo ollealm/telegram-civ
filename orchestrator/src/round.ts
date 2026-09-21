@@ -54,7 +54,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     for (let played = opening.turn - fromTurn; played < length; ) {
       const now = fromTurn + played;
       const scheduled = Object.keys(woken).length === 0;
-      const due = scheduled ? seats : seats.filter((seat) => woken[seat.civ]);
+      const standing = (seat: Seat) => !round || round.rankings.some((rank) => rank.civ === seat.civ); // a realm that fell during this age has no one left to look in
+      const due = (scheduled ? seats : seats.filter((seat) => woken[seat.civ])).filter(standing);
       await Promise.all(
         due.map((seat) =>
           io

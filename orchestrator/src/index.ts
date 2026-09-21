@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, realmSaga } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, realmSaga, withPlates } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -118,14 +118,30 @@ async function standing() {
   return state.seats.filter((seat) => seat.chatId && alive.has(seat.civ));
 }
 
+/** A saga's plates: one cycle in one medium, made one after the other with the last plate as reference so they read as one work */
+async function sendPlates(medium: string, plates: { caption: string; description: string }[], send: (png: Buffer, caption: string) => Promise<unknown>) {
+  let previous: Buffer | undefined;
+  for (const [index, plate] of plates.entries()) {
+    const png = await generateImage(`${plate.description}\n\nMedium, palette and border: ${medium}. It is plate ${index + 1} of a cycle of ${plates.length}${previous ? "; the attached plate is the one before it - same hand, same medium, same border" : ""}. Stylised and symbolic as that medium is, not a realistic painting. No text or lettering.`, previous ? [{ name: "previous-plate.png", png: previous }] : []).catch(() => null);
+    if (!png) continue;
+    previous = png;
+    await send(png, `${["I", "II", "III"][index]}. ${plate.caption}`).catch(() => {});
+  }
+}
+
 /** One realm's saga, for its ruler (and for the world to read): when it falls, or when the game ends with it standing */
 async function sendSaga(seat: Seat, outcome: string, publicly = true) {
   const events = await host.events();
   const spoken = (state.proclaimed ?? []).filter((entry) => entry.text.includes(seat.civ)).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
   const history = [...events.filter((event) => event.text.includes(seat.civ)), ...spoken].sort((a, b) => a.turn - b.turn);
-  const saga = await realmSaga(seat, history, outcome);
-  if (seat.chatId) await advisors[state.seats.indexOf(seat)].api.sendMessage(seat.chatId, saga).catch((error: Error) => log("saga send failed", error.message));
+  const { text: saga, medium, plates } = withPlates(await realmSaga(seat, history, outcome));
+  const bot = advisors[state.seats.indexOf(seat)];
+  if (seat.chatId) await bot.api.sendMessage(seat.chatId, saga).catch((error: Error) => log("saga send failed", error.message));
   if (publicly) await broadcastHerald(saga); // a living realm's saga draws on its private journal, so it stays with its ruler
+  void sendPlates(medium, plates, async (png, caption) => {
+    if (seat.chatId) await bot.api.sendPhoto(seat.chatId, new InputFile(png, "plate.png"), { caption });
+    if (publicly) for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
+  });
 }
 
 async function sendEpic(occasion: string) {
@@ -133,7 +149,11 @@ async function sendEpic(occasion: string) {
   const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
   const spoken = (state.proclaimed ?? []).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
   const history = [...events, ...spoken].sort((a, b) => a.turn - b.turn);
-  await broadcastHerald(await chroniclerEpic(history, standings, occasion));
+  const { text, medium, plates } = withPlates(await chroniclerEpic(history, standings, occasion));
+  await broadcastHerald(text);
+  void sendPlates(medium, plates, async (png, caption) => {
+    for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
+  });
 }
 
 async function playRound() {

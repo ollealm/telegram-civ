@@ -880,10 +880,10 @@ index 0000000..99fa0ff
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..99ba550
+index 0000000..bf907b5
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,900 @@
+@@ -0,0 +1,899 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1594,14 +1594,13 @@ index 0000000..99ba550
 +    }
 +
 +    /** Something a ruler must hear about right away, ending the round early */
++    /** What stops the clocks for everyone: only a war with a major power - the one thing that needs the ruler's change of course.
++     *  A lost city wakes the advisor (there is little a ruler can do in that hour, and the dispatch tells it); a fallen realm is dealt with when the age is done. */
 +    private fun councilEvent(ruled: String, roundStart: WorldSnapshot, now: WorldSnapshot): String? {
-+        if (ruled !in now.alive) return if (ruled in roundStart.alive) "$ruled has been destroyed" else null // a realm falls only once
++        if (ruled !in now.alive) return null
 +        val newEnemies = (now.wars - roundStart.wars).filter { ruled in it }.flatten().filter { it != ruled }
 +            .filter { enemy -> game().civilizations.first { it.civName == enemy }.isMajorCiv() }
-+        if (newEnemies.isNotEmpty()) return "$ruled is now at war with ${newEnemies.joinToString()}"
-+        val lost = roundStart.cityOwners.filter { it.value == ruled && now.cityOwners[it.key] != ruled }.keys
-+        if (lost.isNotEmpty()) return "$ruled lost ${lost.joinToString()}"
-+        return null
++        return if (newEnemies.isNotEmpty()) "$ruled is now at war with ${newEnemies.joinToString()}" else null
 +    }
 +
 +    private fun rankings() = game().majorCivs().filter { it.isAlive() }

@@ -376,16 +376,27 @@ After the chapter, add a line "IMAGES:" and then one or two lines, each "- capti
   );
 
 /** The whole history so far as one epic - the sweep of ages, not the ledger */
-const SAGA_LICENCE = `This is legend, not ledger - story over correctness. You may imagine what no record holds: the weather on the day, a face in the crowd, what the old men said afterwards, the silence in a hall, an omen, a song. Give people and places their moment; let a single scene carry an age. What you may not change is the spine: which realms existed, who fought whom, which cities and wonders rose and fell and to whom, who stands at the end - and a ruler's quoted words stay exactly as spoken. No sums, no trade goods, no routine buildings, no lists of years.`;
+const SAGA_LICENCE = `This is legend, not ledger - story over correctness. You may imagine what no record holds: the weather on the day, a face in the crowd, what the old men said afterwards, the silence in a hall, an omen, a song. Give people and places their moment; let a single scene carry an age. What you may not change is the spine: which realms existed, who fought whom, which cities and wonders rose and fell and to whom, who stands at the end - and a ruler's words keep their meaning and their speaker: you may give them the saga's cadence, as epics always have, but never put a sentiment in a ruler's mouth that they did not voice. No sums, no trade goods, no routine buildings, no lists of years.`;
 
 /** The epic of the whole world: told once, when the game is over */
+/** Splits a saga or epic into its text and its cycle of plates */
+export const withPlates = (raw: string) => {
+  const [text, plateLines = ""] = raw.split(/\n\s*PLATES:\s*\n?/);
+  const lines = plateLines.split("\n").map((line) => line.replace(/^[-*\s]+/, "").trim()).filter(Boolean);
+  const medium = lines.find((line) => /^medium:/i.test(line))?.replace(/^medium:\s*/i, "") ?? "";
+  const plates = lines.filter((line) => !/^medium:/i.test(line)).map((line) => line.split("|")).filter((parts) => parts.length >= 2)
+    .map(([caption, ...rest]) => ({ caption: caption.trim(), description: rest.join("|").trim() })).slice(0, 3);
+  return { text: text.trim(), medium, plates };
+};
+
 export const chroniclerEpic = (events: PublicEvent[], standings: string, occasion: string) =>
   run(
     "epic",
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. ${occasion} The chapters you wrote along the way were the record; this is the epic - the telling that will be read aloud a thousand years from now. Do not restate the chapters. Find the shape of the whole: what this world was about, the rivalry or the hunger that drove it, the hinge on which it turned, what was won and what was lost for ever.
 ${SAGA_LICENCE}
-Three to five movements, each with a short title, rising to an ending that lands. 450-600 words: grand, unhurried, with a historian's dry eye kept for the last line. ${TELEGRAM_STYLE}`,
+Three to five movements, each with a short title, rising to an ending that lands. 450-600 words: grand, unhurried, with a historian's dry eye kept for the last line. ${TELEGRAM_STYLE}
+After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere.`,
     `Everything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
   );
 
@@ -396,8 +407,9 @@ export const realmSaga = (seat: Seat, events: PublicEvent[], outcome: string) =>
     HERALD_MODEL,
     `You are the Chronicler. ${outcome} Write the saga of ${seat.civ} under ${seat.rulerName ?? "its ruler"} - one realm's whole life, from its first city to this day, for the ruler who lived it. It is not the world's history: other realms enter only as they touched this one. Find what this reign was: what it wanted, what it built, where it was brave or blind, the moment its fate turned, and how it ended. ${seat.character ? `The ruler's advisor, ${seat.character.name}, belongs in it as a figure at their side.` : ""} The ruler's own words, where they were proclaimed, are the saga's best lines - use them.
 ${SAGA_LICENCE}
-The advisor's private journal is below for the inner story of the reign - what was hoped and feared in the council chamber. Draw on it freely; the realm's secrets no longer need keeping.
-Three or four movements with short titles. 350-500 words. If the realm fell, let it fall with dignity; if it won, do not gloat. ${TELEGRAM_STYLE}`,
+The advisor's private journal is below for the inner story of the reign - what was hoped and feared in the council chamber. Draw on it freely; the realm's secrets no longer need keeping. Take its hopes, fears and turning points - not its bookkeeping: no lists of deals, purchases or buildings, and at most one figure in the whole saga, only if that figure is the point of the story.
+Three or four movements with short titles. 350-500 words. If the realm fell, let it fall with dignity; if it won, do not gloat. ${TELEGRAM_STYLE}
+After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere.`,
     `What the world witnessed of ${seat.civ}, and around it:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe advisor's journal of the reign:\n${seat.journal.join("\n") || "(none kept)"}`,
   );
 
