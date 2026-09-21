@@ -4,10 +4,14 @@
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
-import { addUsage, persist, type Seat } from "./store.ts";
+import { addUsage, persist, recentPictures, type Seat } from "./store.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
+/** What makes a picture worth painting. One instant, never a summary - and never the parade. */
+const PICTURE_CRAFT = `Choose one particular instant and put the viewer inside it: a focal figure doing something, a vantage a painter would pick (low among the men, over a shoulder, from the wall looking down), a named hour and weather. War is never soldiers marching through a city or standing in ranks - paint the moment it turned: ladders going up at the breach, horsemen mid-charge through a ford, a galley burning at night, archers loosing from a ridge, the rout, the keys handed over, the field the morning after. Peace is people at work or in the middle of something, not posing.`;
+const alreadyPainted = (viewers: string[]) => `Pictures already painted in recent years (never the same subject or composition again):\n${recentPictures(viewers)}`;
+
 /** Governing passes are the bulk of the token use; set GOVERN_MODEL=claude-sonnet-5 to make them ~5x cheaper */
 const GOVERN_MODEL = process.env.GOVERN_MODEL ?? ADVISOR_MODEL;
 
@@ -258,11 +262,11 @@ Never parrot a decision back ("You have chosen to..."). Just act on it with set_
 You are getting to know this ruler, and the record's lines about them are there to be used: make the small close calls their way, put a big one to them as someone who knows them would ("you will want to take the shot, as ever - here is what it could cost"), keep your own view when it differs, and when what they do stops matching what they said of themselves, say so and ask whether the line should be struck. ${warRule(seat)}
 When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/go" so they can dismiss the court with one tap. That closing is the only place you sum up. If you wrote a new standing rule into your record during this audience, say so there in one plain sentence ("I take it as standing that..."), so the ruler can correct you - a rule they never hear of is a rule they never agreed to. Do not offer /go while a question of yours is still unanswered.
 In the closing message only, just before the "/go" line, add these two lines (they are taken out before the ruler sees the message):
-IMAGE: caption | a picture of what this audience decided, as a painter of the age would show it - the moment itself (the council table, the declaration read from the steps, the first stone laid), with the people, dress and architecture of ${seat.civ} in this year. Realistic oil painting, no text.
+IMAGE: caption | description - only when this audience decided something a painter would want (a war or a peace, a founding, a great work begun, an envoy sent off) and nothing like it is among the pictures already painted below; otherwise leave the line out - most audiences need no picture. Show the consequence out in the realm rather than the council table, with the people, dress and architecture of ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text.
 PROCLAMATION: only if the ruler said something in their own words worth carving in stone about a matter the whole world will witness anyway (war, peace, an alliance, a founding, a great work) - then give their words as a herald would cry them, keeping their phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}: 'A pact is a pact.'" Never anything about plans, treasury, research or weaknesses. If there is nothing of the kind, leave the line out. The ruler's words may reach the world's chronicle, so rulers who speak in character are remembered.
 Time passes only when the ruler dismisses the court - with /go, or by telling you to proceed, in which case you call dismiss_court after setting the orders. A "yes" to a question of yours is an order, not a dismissal. Then about ${turnsPerRound} turns pass (a few decades early on, years later), during which you govern by the recorded will and check on the realm every few turns. Speak of time in years and seasons, as people of the age would; turn numbers are for the chancery.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
-    `${memory(seat)}\n\nBriefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
+    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nBriefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
     seat,
     true,
   );
@@ -321,11 +325,11 @@ QUESTION:
 Open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself. If your record says what kind of ruler this is, put the question as someone who knows them would - and keep your own lean where it differs.
 
 IMAGE:
-caption | description - one picture of a moment from OUR realm in these years (a festival, a founding, a siege, a scholar at work), as a painter of the age would have made it. The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text".
+caption | description - one picture of a moment from OUR realm in these years (a festival, a founding, a siege, a scholar at work), as a painter of the age would have made it. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text". Completed wonders are painted by the Chronicler, so choose something else. If these years hold nothing that is not already among the pictures painted (below), write just: none
 
 JOURNAL:
 One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
-    `${memory(seat)}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Standing among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Standing among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
   );
   seat.standing = standingOf(briefing) || seat.standing;
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
@@ -367,8 +371,8 @@ export const heraldNewspaper = (round: RoundResult, earlier: PublicEvent[], proc
 When a ruler's proclamation belongs to one of these events, quote it - history remembers what rulers said when they acted ("Rome went to war with the words..."). Use at most two, only where they fit, and never invent a quote.
 Once in the chapter, in a sentence of your own judgement, say how the great powers are accounted against one another now (from the standing below) - who is foremost, who is rising, who has slipped - without figures. You flatter no court.
 Report only the events listed - these are things the whole world could witness. Never speculate about any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}
-After the chapter, add a line "IMAGES:" and then two lines, each "- caption | description": two pictures for this chapter, as a painter of the period would have made them - a scene from its chief event, and a portrait or second scene. The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events.`,
-    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
+After the chapter, add a line "IMAGES:" and then one or two lines, each "- caption | description": pictures for this chapter, as a painter of the period would have made them. The first is a scene from its chief event; add a second only if the chapter holds another event of a different kind that is worth seeing - never two pictures of one event. Every completed wonder gets its own picture from the court painter, so leave wonders out of yours; in an age of nothing but wonders, paint a moment of ordinary life in the foremost realm. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events.`,
+    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\n${alreadyPainted(["chronicle"])}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
   );
 
 /** The whole history so far as one epic - the sweep of ages, not the ledger */
@@ -397,11 +401,11 @@ QUESTION:
 The one decision that cannot wait, in 40-70 words of plain talk: the ways to answer this, what each risks, and your own lean. End with the question.
 
 IMAGE:
-caption | the moment itself as a painter of the age would show it (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ} in this year. Realistic oil painting, no text.
+caption | the moment itself as a painter of the age would show it (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text.
 
 JOURNAL:
 One plain sentence: what happened and what you did.`,
-    `${memory(seat)}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
   );
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
   const [caption, ...description] = section("IMAGE").split("|");

@@ -7,9 +7,9 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, generateImage, onImageLog, paintedMap } from "./images.ts";
-import { host } from "./host.ts";
+import { host, type RoundResult } from "./host.ts";
 import { playRound as runRound, roundLength } from "./round.ts";
-import { persist, remember, state, type Seat } from "./store.ts";
+import { forgetPicture, persist, recordPicture, remember, state, type Picture, type Seat } from "./store.ts";
 
 /** Rival realms played by the game itself, chosen at random; 0 for an all-human world */
 const AI_CIVS = Number(process.env.AI_CIVS ?? 2);
@@ -82,6 +82,26 @@ async function createWorld() {
 
 onImageLog((message) => log(message));
 
+/** The painted map costs a picture a round for every ruler; PAINTED_MAPS=off leaves it out (the march map comes either way) */
+const PAINTED_MAPS = process.env.PAINTED_MAPS !== "off";
+
+/** Every picture goes through here: noted in the ledger first, so that whoever describes the next one knows not to ask for it again */
+function paint(picture: Picture, send: (png: Buffer) => Promise<unknown>) {
+  recordPicture(picture);
+  void generateImage(`${picture.description}\n\nThe year is ${picture.year}. Realistic oil painting of the period, no text or lettering.`)
+    .then((png) => (png ? send(png) : forgetPicture(picture)))
+    .catch((error) => log(`picture failed (${picture.caption}):`, error.message));
+}
+
+/** A completed wonder always gets its picture - once */
+const wonderPictures = (round: RoundResult): Picture[] =>
+  round.publicEvents.flatMap((event) => {
+    const [, civ, wonder] = /^(.+?) completed the wonder (.+?)\.?$/.exec(event.text) ?? [];
+    if (!wonder || (state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(`${wonder},`))) return [];
+    return [{ turn: event.turn, year: event.year, for: "chronicle", caption: `${wonder}, completed by ${civ} in ${event.year}`,
+      description: `${wonder}, newly completed by the ${civ}, as a painter of the period would have shown it: the great work itself in its landscape, from a vantage that shows its scale, in the light of a particular hour, with the builders, priests or crowds of the ${civ} around it in the dress of the age. Architecture and setting true to the ${civ}.` }];
+  });
+
 /** /map: our own drawing at once (the painted one comes with each dispatch) */
 async function sendMap(bot: Bot, seat: Seat) {
   const png = await host.map(seat.civ);
@@ -112,23 +132,26 @@ async function playRound() {
   try {
     await runRound(seated, {
       working: (seat, work) => (seat.chatId ? whileTyping(botOf(seat), seat.chatId, work) : work),
-      dispatch: async (seat, dispatch) => {
+      dispatch: async (seat, dispatch, round) => {
         const bot = botOf(seat);
         const letter = [dispatch.text, dispatch.strategy && `Where this is heading: ${dispatch.strategy}`, dispatch.question].filter(Boolean).join("\n\n");
         await bot.api.sendMessage(seat.chatId!, letter);
         // Pictures follow the letter instead of holding it up: a scene from the realm, then the painted map
-        if (dispatch.image)
-          void generateImage(`${dispatch.image.description}\n\nRealistic oil painting of the period, no text or lettering.`)
-            .then((png) => png && bot.api.sendPhoto(seat.chatId!, new InputFile(png, "scene.png"), { caption: dispatch.image!.caption }))
-            .catch((error) => log("scene failed:", error.message));
-        if (dispatch.strategy) void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
+        if (dispatch.image) {
+          const game = await host.state();
+          paint({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }, (png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "scene.png"), { caption: dispatch.image!.caption }));
+        }
+        // With every letter, the marches of the years it covers - ours, drawn by the host, so it costs nothing
+        void host.map(seat.civ, "campaign", round.fromTurn).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "marches.png"))).catch((error) => log("march map failed:", error.message));
+        if (dispatch.strategy && PAINTED_MAPS) void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
       },
       notice: async (seat, text) => void (await botOf(seat).api.sendMessage(seat.chatId!, text).catch(() => {})),
       chronicle: async (chapter, images, round) => {
         await broadcastHerald(chapter);
-        for (const image of images)
-          void generateImage(`${image.description}\n\nThe year is ${round.year}. Realistic oil painting of the period, no text or lettering.`).then(async (png) => {
-            if (png) for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "scene.png"), { caption: image.caption }).catch(() => {});
+        // One or two scenes of the Chronicler's choosing, and every wonder
+        for (const picture of [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", ...image })), ...wonderPictures(round)])
+          paint(picture, async (png) => {
+            for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "scene.png"), { caption: picture.caption }).catch(() => {});
           });
       },
       log,
@@ -335,10 +358,8 @@ function setUpAdvisor(bot: Bot, index: number) {
         const proclamation = /^PROCLAMATION:\s*(.+)$/m.exec(raw)?.[1].trim();
         const reply = raw.replace(/^(IMAGE|PROCLAMATION):.*\n?/gm, "").replace(/\n{3,}/g, "\n\n").trim();
         if (proclamation && !/^\(?none|^-$/i.test(proclamation)) (seat().proclamations ??= []).push(proclamation);
-        if (image)
-          void generateImage(`${image[2]}\n\nRealistic oil painting of the period, no text or lettering.`)
-            .then((png) => png && bot.api.sendPhoto(ctx.chat!.id, new InputFile(png, "decision.png"), { caption: image[1] }))
-            .catch((error) => log("decision image failed:", error.message));
+        if (image && !/^\(?none/i.test(image[1]))
+          paint({ turn: game.turn, year: game.year, for: seat().civ, caption: image[1], description: image[2] }, (png) => bot.api.sendPhoto(ctx.chat!.id, new InputFile(png, "decision.png"), { caption: image[1] }));
         remember(seat(), { from: "ruler", text: message });
         remember(seat(), { from: "advisor", text: reply });
         seat().choices = undefined;

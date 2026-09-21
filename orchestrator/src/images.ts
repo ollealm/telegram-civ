@@ -3,8 +3,8 @@
 // A picture is never worth waiting for: callers send their text first and the image when (and if) it arrives.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { host } from "./host.ts";
 
@@ -93,23 +93,33 @@ export async function generateImage(prompt: string, references: Reference[] = []
   }
 }
 
+// A Codex run is a chat agent around the image tool, and the agent is where the tokens go: left to itself it reads its
+// imagegen skill, looks at the reference, and copies the result about - six model calls on a context full of the user's
+// plugins. So: no user config, low effort, the reference by path (not attached), the one tool call written out for it,
+// and we fetch the file from Codex's own output folder instead of asking for a copy. ~28k tokens an image, from ~140k.
 async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer> {
-  {
-    const dir = mkdtempSync(join(tmpdir(), "ruler-image-"));
-    for (const reference of references) writeFileSync(join(dir, reference.name), reference.png);
-    const instruction = `${references.length ? `Use your built-in image generation tool in image-to-image (edit) mode with the attached ${references.map((r) => r.name).join(", ")} as input.` : "Use your built-in image generation tool."}\n\n${prompt}\n\nSave the result as out.png in the current directory. Do nothing else. Reply only DONE or FAILED: reason.`;
-    const args = ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", ...(process.env.CODEX_IMAGE_MODEL ? ["-m", process.env.CODEX_IMAGE_MODEL] : []), ...references.flatMap((r) => ["-i", r.name]), "-"];
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn("codex", args, { cwd: dir, stdio: ["pipe", "ignore", "ignore"] });
-      const timer = setTimeout(() => { child.kill(); reject(new Error("timed out")); }, TIMEOUT_MS);
-      child.on("error", reject);
-      child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`codex exited ${code}`)); });
-      child.stdin.end(instruction);
-    });
-    const out = join(dir, "out.png");
-    if (!existsSync(out)) throw new Error("no image produced");
-    return readFileSync(out);
-  }
+  const dir = mkdtempSync(join(tmpdir(), "ruler-image-"));
+  for (const reference of references) writeFileSync(join(dir, reference.name), reference.png);
+  const call = JSON.stringify({ prompt, ...(references.length ? { referenced_image_paths: references.map((reference) => join(dir, reference.name)) } : {}) });
+  const instruction = `Your first and only tool call is your exec tool with exactly this script (if you have no such tool, call the image generation tool once directly with the same arguments). Do not read the imagegen skill or any file, and do not view or copy any image - the script is complete.\n\n// @exec: {"yield_time_ms": 300000, "max_output_tokens": 100}\nawait tools.image_gen__imagegen(${call});\ntext("DONE");\n\nThen reply only DONE or FAILED: reason.`;
+  const args = ["exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "workspace-write", "-c", 'model_reasoning_effort="low"', ...(process.env.CODEX_IMAGE_MODEL ? ["-m", process.env.CODEX_IMAGE_MODEL] : []), "--json", "-"];
+  let events = "";
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("codex", args, { cwd: dir, stdio: ["pipe", "pipe", "ignore"] });
+    const timer = setTimeout(() => { child.kill(); reject(new Error("timed out")); }, TIMEOUT_MS);
+    child.stdout.on("data", (chunk) => (events += chunk));
+    child.on("error", reject);
+    child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`codex exited ${code}`)); });
+    child.stdin.end(instruction);
+  });
+  const thread = /"thread_id":"([\w-]+)"/.exec(events)?.[1];
+  const usage = /"usage":\{"input_tokens":(\d+),"cached_input_tokens":(\d+)/.exec(events);
+  if (usage) log(`codex image used ${usage[1]} input tokens (${usage[2]} cached)`);
+  const made = thread ? join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "generated_images", thread) : "";
+  const newest = made && existsSync(made) ? readdirSync(made).filter((name) => name.endsWith(".png")).map((name) => join(made, name)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] : undefined;
+  const out = newest ?? join(dir, "out.png"); // an agent that copied it anyway still counts
+  if (!existsSync(out)) throw new Error("no image produced");
+  return readFileSync(out);
 }
 
 /** How a mapmaker of the age would have drawn it */

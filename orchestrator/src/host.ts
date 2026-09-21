@@ -69,8 +69,9 @@ export const host = {
   options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
-  map: async (civ: string, style: "atlas" | "reference" = "atlas") =>
-    Buffer.from(await (await fetch(`${HOST}/map.png${civQuery(civ)}&style=${style}`)).arrayBuffer()),
+  /** campaign: the atlas with every march since that turn traced on it, and where units fell and cities were taken */
+  map: async (civ: string, style: "atlas" | "reference" | "campaign" = "atlas", since?: number) =>
+    Buffer.from(await (await fetch(`${HOST}/map.png${civQuery(civ)}&style=${style}${since === undefined ? "" : `&since=${since}`}`)).arrayBuffer()),
   /** Draw names, borders and units onto a repaint of the reference map */
   mapOverlay: async (civ: string, repaint: Buffer) => {
     const response = await fetch(`${HOST}/map/overlay${civQuery(civ)}`, { method: "POST", body: new Uint8Array(repaint) });

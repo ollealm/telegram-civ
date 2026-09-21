@@ -17,7 +17,7 @@ export const roundLength = (turn: number) => (turn < EARLY_GAME_UNTIL_TURN ? EAR
 export type RoundIO = {
   /** Wraps slow work for one seat, e.g. to show "typing…" */
   working: <T>(seat: Seat, work: Promise<T>) => Promise<T>;
-  dispatch: (seat: Seat, dispatch: Dispatch) => Promise<void>;
+  dispatch: (seat: Seat, dispatch: Dispatch, round: RoundResult) => Promise<void>;
   /** A two-line note to a ruler whom the urgent news does not concern */
   notice: (seat: Seat, text: string) => Promise<void>;
   chronicle: (chapter: string, images: { caption: string; description: string }[], round: RoundResult) => Promise<void>;
@@ -92,7 +92,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing));
           notes.get(seat.civ)!.push(dispatch.journal);
           remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
-          await io.dispatch(seat, dispatch);
+          await io.dispatch(seat, dispatch, finished);
         }),
         ...seats.filter((seat) => !concerned.includes(seat) && seat.kind !== "agent").map((seat) => io.notice(seat, `News from abroad has stopped the clocks: ${news}. Our realm is untouched; I carry on as we agreed, and time resumes once the rulers concerned have held council.`)),
         heraldBulletin(news, finished.publicEvents.slice(-8)).then((bulletin) => io.chronicle(bulletin, [], finished)),
@@ -115,7 +115,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
         seat.choices = undefined;
         remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n") });
-        await io.dispatch(seat, dispatch);
+        await io.dispatch(seat, dispatch, finished);
       }),
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
       host

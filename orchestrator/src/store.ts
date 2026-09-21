@@ -53,6 +53,9 @@ export type Seat = {
   dismissed?: boolean;
 };
 
+/** A picture that was asked for: who saw it ("chronicle" for the whole world, else the civ) and what it showed */
+export type Picture = { turn: number; year: string; for: string; caption: string; description: string };
+
 export type Usage = { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
 
 export type State = {
@@ -62,6 +65,8 @@ export type State = {
   usage: Record<string, Usage>;
   /** Every ruler's proclamation so far, for the Chronicler's epic */
   proclaimed?: { turn: number; year: string; text: string }[];
+  /** Pictures painted lately, so that nobody is shown the same scene twice */
+  pictures?: Picture[];
   /** A round interrupted by urgent news: what is left of it is played after the urgent audience */
   pendingRound?: { fromTurn: number; fromYear: string; remaining: number; publicEvents: { turn: number; year: string; text: string }[] };
   /** audience: rulers talk with their advisors; passing: a round is being played */
@@ -99,3 +104,22 @@ export function remember(seat: Seat, message: ChatMessage) {
   if (seat.chat.length > CHAT_MEMORY) seat.chat.splice(0, seat.chat.length - CHAT_MEMORY);
   persist();
 }
+
+const PICTURE_MEMORY = 60;
+
+export function recordPicture(picture: Picture) {
+  (state.pictures ??= []).push(picture);
+  if (state.pictures.length > PICTURE_MEMORY) state.pictures.splice(0, state.pictures.length - PICTURE_MEMORY);
+  persist();
+}
+
+/** A picture that never arrived was never seen */
+export function forgetPicture(picture: Picture) {
+  state.pictures = (state.pictures ?? []).filter((other) => other !== picture);
+  persist();
+}
+
+/** What these viewers have been shown lately, for whoever describes the next picture */
+export const recentPictures = (viewers: string[], count = 8) =>
+  (state.pictures ?? []).filter((picture) => viewers.includes(picture.for)).slice(-count)
+    .map((picture) => `${picture.year}: ${picture.caption} - ${picture.description.slice(0, 180)}`).join("\n") || "(none yet)";
