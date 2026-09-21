@@ -16,7 +16,7 @@ const AI_CIVS = Number(process.env.AI_CIVS ?? 2);
 const MAP_SIZES = ["Tiny", "Small", "Medium", "Large", "Huge"];
 const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
 /** Models for agent-ruled realms, dealt in turn */
-const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-opus-5,claude-sonnet-5").split(",").map((model) => model.trim());
+const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-sonnet-5").split(",").map((model) => model.trim());
 /** How the game's own peoples are handicapped; rulers' realms always get the player's side of the scale */
 const DIFFICULTIES: Record<string, string> = { Even: "Prince", Easy: "Warlord", Gentle: "Chieftain", Hard: "King" };
 const CITY_STATES: Record<string, number> = { Tiny: 2, Small: 4, Medium: 6, Large: 8, Huge: 10 };
@@ -237,11 +237,19 @@ function usageSummary() {
 
 function setUpAdvisor(bot: Bot, index: number) {
   const seat = (): Seat => state.seats[index];
+  // A bot beyond the number of human rulers has no seat in this game: its slot in the list may belong to an advisor-ruled realm, which no one may sit down in
+  bot.use(async (ctx, next) => {
+    if (seat() && seat().kind !== "agent") return next();
+    if (ctx.chat?.type === "private" && ctx.message) await ctx.reply("There is no ruler's seat behind this door in the present game. (A new game with more rulers would open it.)").catch(() => {});
+  });
+
   /** The chat carries the advisor's name, so the ruler always knows who is speaking. Telegram allows only a few renames a day, hence only when it changes. */
   const wearName = async () => {
-    const wanted = seat()?.character ? `${seat().character!.name} · ${seat().civ}`.slice(0, 64) : undefined;
-    if (!wanted || seat().botName === wanted) return;
-    await bot.api.setMyName(wanted).then(() => { seat().botName = wanted; persist(); }).catch((error) => log("renaming the bot failed:", error.message));
+    // A bot with no ruler's seat goes back to a plain name
+    const wanted = seat()?.character && seat().kind !== "agent" ? `${seat().character!.name} · ${seat().civ}`.slice(0, 64) : seat()?.kind === "agent" || !seat() ? `Advisor ${index + 1} · no seat this game` : undefined;
+    const worn = seat() ? seat().botName : undefined;
+    if (!wanted || worn === wanted) return;
+    await bot.api.setMyName(wanted).then(() => { if (seat()) { seat().botName = wanted; persist(); } }).catch((error) => log("renaming the bot failed:", error.message));
   };
   let queue: Promise<unknown> = Promise.resolve();
 
