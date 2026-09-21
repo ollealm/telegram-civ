@@ -108,8 +108,8 @@ async function sendMap(bot: Bot, seat: Seat) {
   await bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"));
 }
 
-/** The words that end an audience and let the years pass. The advisors offer /onward; the others are for rulers who like them better (and /go for old habits). */
-const LEAVE = ["onward", "godspeed", "untilnext", "makeitso", "go"];
+/** The word that ends an audience and lets the years pass */
+const LEAVE = ["onward"];
 
 async function broadcastHerald(text: string) {
   for (const chatId of state.heraldChats) await herald.api.sendMessage(chatId, text).catch((error) => log("herald send failed", error.message));
