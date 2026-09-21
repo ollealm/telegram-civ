@@ -387,10 +387,10 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().dismissed = false;
     persist();
     const waiting = (await standing()).filter((other) => !other.ready).map((other) => other.civ);
-    if (waiting.length) return reply(`The court rises. The years will not move until the ruler of ${waiting.join(", ")} has risen too.`);
-    await reply("The court rises, and the years roll on…");
+    if (waiting.length) return reply(`The court is dismissed. Waiting for the ruler of ${waiting.join(", ")}.`);
+    await reply("The court is dismissed. Until next time.");
     for (const other of state.seats)
-      if (other !== seat() && other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, "Every court has risen. The years roll on…");
+      if (other !== seat() && other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, "All rulers have dismissed their courts. Until next time.");
     void playRound();
   };
 
