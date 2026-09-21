@@ -438,6 +438,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         remember(seat(), { from: "advisor", text: reply });
         seat().unanswered = undefined;
         seat().choices = undefined;
+        persist(); // or the file still says "unanswered" and a restart answers it a second time
         await ctx.reply(reply);
         await flushDevFeed(herald, `Audience - ${seat().civ}`);
         if (seat().dismissed || thenGo) await dismiss((text) => ctx.reply(text));
