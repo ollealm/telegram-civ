@@ -65,6 +65,8 @@ export type State = {
   usage: Record<string, Usage>;
   /** Every ruler's proclamation so far, for the Chronicler's epic */
   proclaimed?: { turn: number; year: string; text: string }[];
+  /** The closing epic has been told: the game is over */
+  epicTold?: boolean;
   /** Pictures painted lately, so that nobody is shown the same scene twice */
   pictures?: Picture[];
   /** A round interrupted by urgent news: what is left of it is played after the urgent audience */

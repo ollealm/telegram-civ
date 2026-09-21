@@ -376,13 +376,29 @@ After the chapter, add a line "IMAGES:" and then one or two lines, each "- capti
   );
 
 /** The whole history so far as one epic - the sweep of ages, not the ledger */
+const SAGA_LICENCE = `This is legend, not ledger - story over correctness. You may imagine what no record holds: the weather on the day, a face in the crowd, what the old men said afterwards, the silence in a hall, an omen, a song. Give people and places their moment; let a single scene carry an age. What you may not change is the spine: which realms existed, who fought whom, which cities and wonders rose and fell and to whom, who stands at the end - and a ruler's quoted words stay exactly as spoken. No sums, no trade goods, no routine buildings, no lists of years.`;
+
+/** The epic of the whole world: told once, when the game is over */
 export const chroniclerEpic = (events: PublicEvent[], standings: string, occasion: string) =>
   run(
     "epic",
     HERALD_MODEL,
-    `You are the Chronicler, keeper of the one history all the rival rulers read. ${occasion} Write the epic of this world so far, as the opening pages of a great history would tell it: the rise of the realms, the ages they passed through, the wonders that defined them, the wars that broke them, the words their rulers spoke at the turning points, and who stands and who has fallen.
-Only what belongs in an epic: foundings and falls of cities that mattered, great works, wars and their outcomes, the passing of ages, rulers' proclamations. Nothing small - no sums of gold, no trade goods, no routine buildings, no units, no single years unless a turning point. Group the story into three to five movements, each with a short title. 250-350 words, grand and unhurried, with a historian's dry eye. Never invent events or quotes; never reveal any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}`,
+    `You are the Chronicler, keeper of the one history all the rival rulers read. ${occasion} The chapters you wrote along the way were the record; this is the epic - the telling that will be read aloud a thousand years from now. Do not restate the chapters. Find the shape of the whole: what this world was about, the rivalry or the hunger that drove it, the hinge on which it turned, what was won and what was lost for ever.
+${SAGA_LICENCE}
+Three to five movements, each with a short title, rising to an ending that lands. 450-600 words: grand, unhurried, with a historian's dry eye kept for the last line. ${TELEGRAM_STYLE}`,
     `Everything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
+  );
+
+/** The saga of one ruler's realm, told when it falls or when it wins: theirs to keep */
+export const realmSaga = (seat: Seat, events: PublicEvent[], outcome: string) =>
+  run(
+    "saga",
+    HERALD_MODEL,
+    `You are the Chronicler. ${outcome} Write the saga of ${seat.civ} under ${seat.rulerName ?? "its ruler"} - one realm's whole life, from its first city to this day, for the ruler who lived it. It is not the world's history: other realms enter only as they touched this one. Find what this reign was: what it wanted, what it built, where it was brave or blind, the moment its fate turned, and how it ended. ${seat.character ? `The ruler's advisor, ${seat.character.name}, belongs in it as a figure at their side.` : ""} The ruler's own words, where they were proclaimed, are the saga's best lines - use them.
+${SAGA_LICENCE}
+The advisor's private journal is below for the inner story of the reign - what was hoped and feared in the council chamber. Draw on it freely; the realm's secrets no longer need keeping.
+Three or four movements with short titles. 350-500 words. If the realm fell, let it fall with dignity; if it won, do not gloat. ${TELEGRAM_STYLE}`,
+    `What the world witnessed of ${seat.civ}, and around it:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe advisor's journal of the reign:\n${seat.journal.join("\n") || "(none kept)"}`,
   );
 
 /** Urgent news cut the round short: a brief summons instead of a full dispatch */

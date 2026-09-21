@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, realmSaga } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -118,6 +118,16 @@ async function standing() {
   return state.seats.filter((seat) => seat.chatId && alive.has(seat.civ));
 }
 
+/** One realm's saga, for its ruler (and for the world to read): when it falls, or when the game ends with it standing */
+async function sendSaga(seat: Seat, outcome: string, publicly = true) {
+  const events = await host.events();
+  const spoken = (state.proclaimed ?? []).filter((entry) => entry.text.includes(seat.civ)).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
+  const history = [...events.filter((event) => event.text.includes(seat.civ)), ...spoken].sort((a, b) => a.turn - b.turn);
+  const saga = await realmSaga(seat, history, outcome);
+  if (seat.chatId) await advisors[state.seats.indexOf(seat)].api.sendMessage(seat.chatId, saga).catch((error: Error) => log("saga send failed", error.message));
+  if (publicly) await broadcastHerald(saga); // a living realm's saga draws on its private journal, so it stays with its ruler
+}
+
 async function sendEpic(occasion: string) {
   const [events, game] = await Promise.all([host.events(), host.state()]);
   const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
@@ -157,20 +167,30 @@ async function playRound() {
       log,
     });
     const game = await host.state();
-    // A realm that fell this round: its ruler is told once, and the world gets the epic so far
+    // A realm that fell this round: its ruler is told once, and gets the saga of their reign
     for (const seat of seated) {
       const fell = !game.majorCivs.find((civ) => civ.civ === seat.civ)?.alive;
       if (fell && !seat.fallen) {
         seat.fallen = true;
-        if (seat.chatId) await botOf(seat).api.sendMessage(seat.chatId!, `${seat.civ} is no more, Majesty. Its cities belong to others now, and I have no realm left to counsel. History will remember what you said and did - the Chronicler's pages are in the other chat. It was an honour.`).catch(() => {});
-        void sendEpic(`${seat.civ} has just fallen, and an age ends with it.`).catch((error) => log("epic failed:", error.message));
+        if (seat.chatId) await botOf(seat).api.sendMessage(seat.chatId!, `${seat.civ} is no more, Majesty. Its cities belong to others now, and I have no realm left to counsel. History will remember what you said and did - the Chronicler is writing the saga of your reign now.`).catch(() => {});
+        if (seat.kind !== "agent") await sendSaga(seat, `${seat.civ} has fallen.`).catch((error) => log("saga failed:", error.message));
       }
     }
     persist();
     await flushDevFeed(herald, `Round to ${game.year} (turn ${game.turn})${state.pendingRound ? " - interrupted by urgent news" : ""}`);
+    // The game is over when someone has won, or when no ruler is left at the table. Only then, after the last chapter, comes the epic of the whole world.
+    const rulersLeft = (await standing()).filter((seat) => seat.kind !== "agent");
+    const over = !!game.winner || rulersLeft.length === 0;
     // Urgent news that concerns no ruler still at the table (a realm fell): nobody needs to hold council, so time moves on
-    if (state.pendingRound && !game.winner && (await standing()).every((seat) => seat.ready)) return void playRound();
-    if (game.winner) await broadcastHerald(`The game is over: ${game.winner} has won a ${game.victoryType} victory.`);
+    if (state.pendingRound && !over && (await standing()).every((seat) => seat.ready)) return void playRound();
+    if (over && !state.epicTold) {
+      state.epicTold = true;
+      state.pendingRound = undefined;
+      persist();
+      if (game.winner) await broadcastHerald(`The game is over: ${game.winner} has won a ${game.victoryType} victory.`);
+      for (const seat of rulersLeft) await sendSaga(seat, game.winner === seat.civ ? `${seat.civ} has won the world - a ${game.victoryType} victory.` : `The world has been won by ${game.winner}; ${seat.civ} still stands, but not first.`).catch((error) => log("saga failed:", error.message));
+      await sendEpic(game.winner ? `${game.winner} has won a ${game.victoryType} victory, and the story is complete.` : "The last ruler's realm has fallen, and with it the story the rulers were telling ends; the world goes on without them.").catch((error) => log("epic failed:", error.message));
+    }
   } catch (error) {
     log("Round failed:", error);
     for (const seat of seated)
@@ -391,6 +411,13 @@ function setUpAdvisor(bot: Bot, index: number) {
   // The record the advisor governs by while the ruler is away - theirs to read, and to correct by saying so in the audience
   bot.command("will", (ctx) => ctx.reply(`What ${seat().character?.name ?? "your advisor"} has written down as your standing wishes, and governs by while you are away. "My reading" lines are the advisor's guesses - tell them if one is wrong or has had its day.\n\n${seat().will || "(nothing recorded yet)"}`));
 
+  // The saga of this ruler's reign so far, on request (it also comes by itself when the realm falls or the game ends)
+  bot.command("saga", async (ctx) => {
+    if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
+    await ctx.reply("The Chronicler is writing...");
+    await sendSaga(seat(), seat().fallen ? `${seat().civ} has fallen.` : `${seat().civ} still stands; its ruler has asked for the saga so far.`, !!seat().fallen || !!state.epicTold).catch((error) => log("saga failed:", error.message));
+  });
+
   bot.command("usage", (ctx) => ctx.reply(usageSummary()));
 
   bot.command("map", (ctx) => sendMap(bot, seat()).catch(() => ctx.reply("No map to show yet.")));
@@ -451,6 +478,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       ];
       state.difficulty = draft.difficulty;
       state.proclaimed = [];
+      state.epicTold = false;
       state.pendingRound = undefined;
       state.mapSize = draft.size;
       state.aiCivs = draft.ai ?? AI_CIVS;
