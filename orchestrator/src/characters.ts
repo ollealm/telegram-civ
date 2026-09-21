@@ -12,7 +12,7 @@ const MANNERS = ["talkative and warm, thinks aloud", "dry and sparing, with a de
 
 const shuffled = <T>(list: T[]) => list.map((item) => [Math.random(), item] as const).sort((a, b) => a[0] - b[0]).map(([, item]) => item);
 
-export type Candidate = { name: string; title: string; pitch: string; sheet: string };
+export type Candidate = { name: string; title: string; pitch: string; sheet: string; walk?: string; manner?: string };
 
 /** sovereign: a realm with no human ruler - the same kind of person, but ruling alone, so they need an aim of their own */
 export const draftCandidate = async (civ: string, model: string, walk: string, manner: string, takenNames: string[] = [], sovereign = false): Promise<Candidate> => {
@@ -32,7 +32,7 @@ Four to six sentences in the second person ("You are..."): who they are and wher
     `The people: ${civ}.\nWalk of life: ${walk}.\nManner of speaking: ${manner}.`,
   );
   const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim().replace(/^"|"$/g, "") ?? "";
-  return { name: field("NAME") || "your advisor", title: field("TITLE"), pitch: field("PITCH"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw };
+  return { name: field("NAME") || "your advisor", title: field("TITLE"), pitch: field("PITCH"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw, walk, manner };
 };
 
 /** Three people to choose from, each of a different walk of life and manner */
@@ -50,4 +50,6 @@ export const draftCandidates = async (civ: string, model: string, takenNames: st
 
 export const draftSovereign = (civ: string, model: string) => draftCandidate(civ, model, shuffled(WALKS_OF_LIFE)[0], shuffled(MANNERS)[0], [], true);
 
-export const card = (candidate: Candidate) => `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}\n"${candidate.pitch}"`;
+/** The pitch lets the voice be heard; the plain line under it says outright what kind of company this will be for a whole history */
+export const card = (candidate: Candidate) =>
+  `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}\n"${candidate.pitch}"${candidate.manner ? `\nIn short: ${candidate.walk}; ${candidate.manner}.` : ""}`;

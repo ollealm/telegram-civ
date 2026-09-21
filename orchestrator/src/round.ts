@@ -7,7 +7,7 @@ import { persist, remember, state, type Seat } from "./store.ts";
 
 const TURNS_PER_ROUND = Number(process.env.TURNS_PER_ROUND ?? 12);
 const EARLY_ROUND_TURNS = Number(process.env.EARLY_ROUND_TURNS ?? 24);
-const EARLY_GAME_UNTIL_TURN = Number(process.env.EARLY_GAME_UNTIL_TURN ?? 48);
+const EARLY_GAME_UNTIL_TURN = Number(process.env.EARLY_GAME_UNTIL_TURN ?? 24);
 export const GOVERN_EVERY = Number(process.env.GOVERN_EVERY_TURNS ?? 4);
 
 /** Turns in the round that starts at this turn - longer while the early game is slow */
