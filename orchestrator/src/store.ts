@@ -21,6 +21,8 @@ export type Annal = { years: string; story: string; course?: string; question?: 
 
 export type Seat = {
   civ: string;
+  /** The ruler's message that is being answered right now - survives a restart, so it is answered after one */
+  unanswered?: { text: string; thenGo: boolean };
   /** The picture of what the current audience decided, painted when the court is dismissed */
   decisionPicture?: { turn: number; year: string; caption: string; description: string };
   annals?: Annal[];

@@ -406,7 +406,10 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   /** One audience at a time per seat, so replies stay in order */
   /** thenGo: the ruler ended their message with /go - answer it, act on it, and let time pass without another word from them */
-  const audience = (ctx: Context, message: string, thenGo = false) => {
+  const audience = (ctx: Pick<Context, "reply"> & { chat?: { id: number } }, message: string, thenGo = false) => {
+    // Kept on disk until it is answered: a restart in the middle of a reply must not swallow the ruler's words
+    seat().unanswered = { text: message, thenGo };
+    persist();
     queue = queue.then(async () => {
       try {
         const game = await host.state();
@@ -420,12 +423,15 @@ function setUpAdvisor(bot: Bot, index: number) {
         if (image && !/^\(?none/i.test(image[1])) seat().decisionPicture = { turn: game.turn, year: game.year, caption: image[1], description: image[2] };
         remember(seat(), { from: "ruler", text: message });
         remember(seat(), { from: "advisor", text: reply });
+        seat().unanswered = undefined;
         seat().choices = undefined;
         await ctx.reply(reply);
         await flushDevFeed(herald, `Audience - ${seat().civ}`);
         if (seat().dismissed || thenGo) await dismiss((text) => ctx.reply(text));
       } catch (error) {
         log("advisor failed:", error);
+        seat().unanswered = undefined;
+        persist();
         await ctx.reply("Forgive me, Majesty, I lost my train of thought. Could you say that again?");
       }
     });
@@ -539,6 +545,14 @@ function setUpAdvisor(bot: Bot, index: number) {
     const closing = new RegExp(`^([\\s\\S]*\\S)\\s+/(${LEAVE.join("|")})\\s*$`, "i").exec(ctx.message.text);
     closing ? audience(ctx, closing[1], true) : audience(ctx, ctx.message.text);
   });
+
+  // Words the ruler sent just before a restart: answer them now, as if nothing had happened
+  const left = seat()?.unanswered;
+  if (left && seat().chatId && state.phase === "audience") {
+    const chatId = seat().chatId!;
+    log(`${seat().civ}: answering a message left unanswered by the restart`);
+    audience({ chat: { id: chatId }, reply: ((text: string) => bot.api.sendMessage(chatId, text)) as Context["reply"] }, left.text, left.thenGo);
+  }
 
   bot.catch((error) => log(`advisor ${index + 1} error:`, error.message));
 }

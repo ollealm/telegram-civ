@@ -52,4 +52,4 @@ export const draftSovereign = (civ: string, model: string) => draftCandidate(civ
 
 /** The pitch lets the voice be heard; the plain line under it says outright what kind of company this will be for a whole history */
 export const card = (candidate: Candidate) =>
-  `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}\n"${candidate.pitch}"${candidate.manner ? `\nIn short: ${candidate.walk}; ${candidate.manner}.` : ""}`;
+  `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}\n"${candidate.pitch}"${candidate.manner ? `\n${candidate.walk![0].toUpperCase()}${candidate.walk!.slice(1)} - ${candidate.manner}.` : ""}`;

@@ -3,7 +3,11 @@
 
 import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import { persist, remember, state, type Seat } from "./store.ts";
+
+const WISHES = join(process.env.RULER_STATE_FILE ? join(process.env.RULER_STATE_FILE, "..") : "../data/game", "wished-to-ask.md");
 
 const TURNS_PER_ROUND = Number(process.env.TURNS_PER_ROUND ?? 12);
 const EARLY_ROUND_TURNS = Number(process.env.EARLY_ROUND_TURNS ?? 24);
@@ -60,7 +64,13 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         due.map((seat) =>
           io
             .working(seat, governPass(seat, lookedAt.get(seat.civ)!, GOVERN_EVERY, woken[seat.civ], seat.kind === "agent" && scheduled && played === 0))
-            .then((entry) => { notes.get(seat.civ)!.push(`T${now}: ${entry}`); lookedAt.set(seat.civ, now); })
+            .then((entry) => {
+              notes.get(seat.civ)!.push(`T${now}: ${entry}`);
+              lookedAt.set(seat.civ, now);
+              // Collected to learn whether advisors should ever be able to send for the ruler
+              const wished = /WISHED TO ASK:\s*(.+)/.exec(entry)?.[1];
+              if (wished) appendFileSync(WISHES, `- ${seat.civ}, turn ${now}: ${wished}\n`);
+            })
             .catch((error) => io.log(`govern pass for ${seat.civ} failed:`, error.message)),
         ),
       );
