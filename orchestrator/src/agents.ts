@@ -376,9 +376,10 @@ After the chapter, add a line "IMAGES:" and then one or two lines, each "- capti
   );
 
 /** The whole history so far as one epic - the sweep of ages, not the ledger */
-const SAGA_LICENCE = `This is legend, not ledger - story over correctness. You may imagine what no record holds: the weather on the day, a face in the crowd, what the old men said afterwards, the silence in a hall, an omen, a song. Give people and places their moment; let a single scene carry an age. What you may not change is the spine: which realms existed, who fought whom, which cities and wonders rose and fell and to whom, who stands at the end - and a ruler's words keep their meaning and their speaker: you may give them the saga's cadence, as epics always have, but never put a sentiment in a ruler's mouth that they did not voice. No sums, no trade goods, no routine buildings, no lists of years.`;
+const SAGA_LICENCE = `This is legend, not ledger - story over correctness. You may imagine what no record holds: the weather on the day, a face in the crowd, what the old men said afterwards, an omen, a song. Prefer two or three scenes told closely to a march through everything that happened; most of what happened should be left out. What you may not change is the spine: which realms existed, who fought whom, which cities and wonders rose and fell and to whom, and who stands at the end. No sums, no trade goods, no routine buildings, no lists, no strings of years, and none of the chancery's words (tech, turn, score, unit, queue) - the world's words only.
+Rulers' words reach you as they were typed - hurried orders in a chat, not speeches. Never quote them. They tell you the ruler's mind at that moment; carry that into the telling the way sagas do - "the king would hear of nothing but learning", or a line the saga gives them in its own voice and register. A saga that stops to cite its sources is dead on the page.
+Choose the form the story wants: it may run unbroken, or fall into a few parts; give it headings only if they earn their place. Plain, strong sentences over ornament - if a line sounds like it is trying to be epic, cut it.`;
 
-/** The epic of the whole world: told once, when the game is over */
 /** Splits a saga or epic into its text and its cycle of plates */
 export const withPlates = (raw: string) => {
   const [text, plateLines = ""] = raw.split(/\n\s*PLATES:\s*\n?/);
@@ -389,15 +390,16 @@ export const withPlates = (raw: string) => {
   return { text: text.trim(), medium, plates };
 };
 
-export const chroniclerEpic = (events: PublicEvent[], standings: string, occasion: string) =>
+/** The epic of the whole world: told once, when the game is over */
+export const chroniclerEpic = (events: PublicEvent[], standings: string, occasion: string, chapters: { years: string; text: string }[] = []) =>
   run(
     "epic",
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. ${occasion} The chapters you wrote along the way were the record; this is the epic - the telling that will be read aloud a thousand years from now. Do not restate the chapters. Find the shape of the whole: what this world was about, the rivalry or the hunger that drove it, the hinge on which it turned, what was won and what was lost for ever.
 ${SAGA_LICENCE}
-Three to five movements, each with a short title, rising to an ending that lands. 450-600 words: grand, unhurried, with a historian's dry eye kept for the last line. ${TELEGRAM_STYLE}
+400-550 words. ${TELEGRAM_STYLE}
 After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere.`,
-    `Everything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
+    `Your own chapters, as you published them:\n${chapters.map((chapter) => `[${chapter.years}]\n${chapter.text}`).join("\n\n") || "(none were kept)"}\n\nEverything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
   );
 
 /** The saga of one ruler's realm, told when it falls or when it wins: theirs to keep */
@@ -405,12 +407,11 @@ export const realmSaga = (seat: Seat, events: PublicEvent[], outcome: string) =>
   run(
     "saga",
     HERALD_MODEL,
-    `You are the Chronicler. ${outcome} Write the saga of ${seat.civ} under ${seat.rulerName ?? "its ruler"} - one realm's whole life, from its first city to this day, for the ruler who lived it. It is not the world's history: other realms enter only as they touched this one. Find what this reign was: what it wanted, what it built, where it was brave or blind, the moment its fate turned, and how it ended. ${seat.character ? `The ruler's advisor, ${seat.character.name}, belongs in it as a figure at their side.` : ""} The ruler's own words, where they were proclaimed, are the saga's best lines - use them.
+    `You are the Chronicler. ${outcome} Write the saga of ${seat.civ} under ${seat.rulerName ?? "its ruler"} - one realm's whole life, for the ruler who lived it. It is not the world's history: other realms enter only as they touched this one. A reign is a handful of choices and what came of them: find the two or three forks that made this one - what was put to the ruler, which way they went, and what it cost or won, sometimes centuries later - and build the saga on those. ${seat.character ? `${seat.character.name}, who advised them, belongs in it as a figure at their side.` : ""} If the realm fell, let it fall with dignity; if it won, do not gloat.
 ${SAGA_LICENCE}
-The advisor's private journal is below for the inner story of the reign - what was hoped and feared in the council chamber. Draw on it freely; the realm's secrets no longer need keeping. Take its hopes, fears and turning points - not its bookkeeping: no lists of deals, purchases or buildings, and at most one figure in the whole saga, only if that figure is the point of the story.
-Three or four movements with short titles. 350-500 words. If the realm fell, let it fall with dignity; if it won, do not gloat. ${TELEGRAM_STYLE}
+300-450 words. ${TELEGRAM_STYLE}
 After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere.`,
-    `What the world witnessed of ${seat.civ}, and around it:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe advisor's journal of the reign:\n${seat.journal.join("\n") || "(none kept)"}`,
+    `The reign as it was lived, age by age - the advisor's telling, the fork put to the ruler, what the ruler said (typed in haste; never quote it), and what was settled:\n${(seat.annals ?? []).map((annal) => `[${annal.years}${annal.urgent ? ", an urgent council" : ""}]\n${annal.story}${annal.course ? `\nWhere it was heading: ${annal.course}` : ""}${annal.question ? `\nPut to the ruler: ${annal.question}` : ""}${annal.rulerSaid?.length ? `\nThe ruler said: ${annal.rulerSaid.join(" / ")}` : ""}${annal.settled ? `\nSettled: ${annal.settled}` : ""}`).join("\n\n") || "(no such record was kept for this reign - work from what follows)"}\n\nWhat the advisor came to understand of the ruler:\n${seat.will || "(nothing recorded)"}\n\nWhat the world witnessed of ${seat.civ}:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}${(seat.annals ?? []).length ? "" : `\n\nThe advisor's journal (bookkeeping, mostly - take hopes, fears and turning points from it, never its figures):\n${seat.journal.join("\n")}`}`,
   );
 
 /** Urgent news cut the round short: a brief summons instead of a full dispatch */

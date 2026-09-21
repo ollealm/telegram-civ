@@ -132,8 +132,7 @@ async function sendPlates(medium: string, plates: { caption: string; description
 /** One realm's saga, for its ruler (and for the world to read): when it falls, or when the game ends with it standing */
 async function sendSaga(seat: Seat, outcome: string, publicly = true) {
   const events = await host.events();
-  const spoken = (state.proclaimed ?? []).filter((entry) => entry.text.includes(seat.civ)).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
-  const history = [...events.filter((event) => event.text.includes(seat.civ)), ...spoken].sort((a, b) => a.turn - b.turn);
+  const history = events.filter((event) => event.text.includes(seat.civ));
   const { text: saga, medium, plates } = withPlates(await realmSaga(seat, history, outcome));
   const bot = advisors[state.seats.indexOf(seat)];
   if (seat.chatId) await bot.api.sendMessage(seat.chatId, saga).catch((error: Error) => log("saga send failed", error.message));
@@ -149,7 +148,7 @@ async function sendEpic(occasion: string) {
   const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
   const spoken = (state.proclaimed ?? []).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
   const history = [...events, ...spoken].sort((a, b) => a.turn - b.turn);
-  const { text, medium, plates } = withPlates(await chroniclerEpic(history, standings, occasion));
+  const { text, medium, plates } = withPlates(await chroniclerEpic(history, standings, occasion, state.chapters ?? []));
   await broadcastHerald(text);
   void sendPlates(medium, plates, async (png, caption) => {
     for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
@@ -374,6 +373,13 @@ function setUpAdvisor(bot: Bot, index: number) {
         log("closing pass failed:", error);
       }
     }
+    // What this audience came to, for the saga: the ruler's own words since the dispatch, and the advisor's closing
+    const annal = seat().annals?.at(-1);
+    if (annal && !annal.settled) {
+      const since = seat().chat.slice(seat().chat.findLastIndex((message) => message.from === "advisor" && message.text.startsWith(annal.story.slice(0, 40))) + 1);
+      annal.rulerSaid = since.filter((message) => message.from === "ruler").map((message) => message.text).filter((text) => !/^\/?go\b/i.test(text.trim()) && !text.startsWith("["));
+      annal.settled = since.filter((message) => message.from === "advisor").at(-1)?.text.replace(/\n*\/go\s*$/, "");
+    }
     seat().ready = true;
     seat().dismissed = false;
     persist();
@@ -499,6 +505,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       state.difficulty = draft.difficulty;
       state.proclaimed = [];
       state.epicTold = false;
+      state.chapters = [];
       state.pendingRound = undefined;
       state.mapSize = draft.size;
       state.aiCivs = draft.ai ?? AI_CIVS;

@@ -16,8 +16,12 @@ export type Character = {
   sheet: string;
 };
 
+/** One age of a reign as it was lived: the advisor's telling, the fork put to the ruler, what the ruler said and what was settled. The saga is written from these. */
+export type Annal = { years: string; story: string; course?: string; question?: string; rulerSaid?: string[]; settled?: string; urgent?: boolean };
+
 export type Seat = {
   civ: string;
+  annals?: Annal[];
   /** Where the realm stood among its rivals at the last dispatch, as the chancery reckoned it */
   standing?: string;
   /** agent: a realm with no human ruler - the advisor rules alone, under the same limits (it acts every few turns) */
@@ -65,6 +69,8 @@ export type State = {
   usage: Record<string, Usage>;
   /** Every ruler's proclamation so far, for the Chronicler's epic */
   proclaimed?: { turn: number; year: string; text: string }[];
+  /** The Chronicler's chapters as they were published - the world epic is written from these */
+  chapters?: { years: string; text: string }[];
   /** The closing epic has been told: the game is over */
   epicTold?: boolean;
   /** Pictures painted lately, so that nobody is shown the same scene twice */

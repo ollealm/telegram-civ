@@ -94,6 +94,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           // The ruler must see at a glance that this is not the regular audience: the age was cut short, and why
           dispatch.heading = `Urgent council, ${finished.year} - the age was interrupted: ${news.replace(/[.!]+$/, "")}.\nThe rest of it plays out once you dismiss the court.`;
           notes.get(seat.civ)!.push(dispatch.journal);
+          (seat.annals ??= []).push({ years: finished.year, story: dispatch.text, question: dispatch.question, urgent: true });
           remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
           await io.dispatch(seat, dispatch, finished);
         }),
@@ -117,6 +118,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
         seat.choices = undefined;
+        (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, story: dispatch.text, course: dispatch.strategy, question: dispatch.question });
         remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n") });
         await io.dispatch(seat, dispatch, finished);
       }),
@@ -128,6 +130,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           const [chapter, imageLines = ""] = raw.split(/\n\s*IMAGES:\s*\n?/);
           const images = imageLines.split("\n").map((line) => line.replace(/^[-*\s]+/, "").split("|")).filter((parts) => parts.length >= 2)
             .map(([caption, ...rest]) => ({ caption: caption.trim(), description: rest.join("|").trim() })).slice(0, 2);
+          (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter.trim() });
           return io.chronicle(chapter.trim(), images, finished);
         }),
     ]);
