@@ -237,7 +237,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     const keyboard = new InlineKeyboard();
     drawn.forEach((nation) => keyboard.text(`${nation.name} (${nation.leader})`, `people:${nation.name}`).row());
     keyboard.text("Let fate decide", "people:?");
-    await ctx.reply("Which people will you lead?\n\n(Pick one, or name any people you like - Persia, the Aztecs, Sweden...)", { reply_markup: keyboard });
+    await ctx.reply("Which people will you lead?\n\n(Pick one, or name any people you like - Persia, the Aztecs, Sweden... Send "list" to see them all.)", { reply_markup: keyboard });
   };
 
   const choosePeople = async (ctx: Context, wish: string) => {
@@ -246,7 +246,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     const clean = wish.trim().toLowerCase().replace(/^the\s+/, "");
     const chosen = wish === "?" ? shuffled(nations)[0]
       : nations.find((nation) => nation.name.toLowerCase() === clean) ?? nations.find((nation) => nation.name.toLowerCase().startsWith(clean.slice(0, 4)) || nation.leader.toLowerCase().includes(clean));
-    if (!chosen) return ctx.reply(`I know of no free people by that name. Try one of: ${shuffled(nations).slice(0, 8).map((nation) => nation.name).join(", ")}...`);
+    if (!chosen) return ctx.reply(`I know of no free people by that name. These are all who are still without a ruler - name one, or tap a button above:\n\n${nations.map((nation) => `${nation.name} (${nation.leader})`).sort().join("\n")}`);
     seat().civ = chosen.name;
     persist();
     await ctx.reply(`${chosen.name} it is - the people of ${chosen.leader}.`);
