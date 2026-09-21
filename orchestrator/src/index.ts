@@ -108,6 +108,9 @@ async function sendMap(bot: Bot, seat: Seat) {
   await bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"));
 }
 
+/** The words that end an audience and let the years pass. The advisors offer /onward; the others are for rulers who like them better (and /go for old habits). */
+const LEAVE = ["onward", "godspeed", "untilnext", "makeitso", "go"];
+
 async function broadcastHerald(text: string) {
   for (const chatId of state.heraldChats) await herald.api.sendMessage(chatId, text).catch((error) => log("herald send failed", error.message));
 }
@@ -213,7 +216,7 @@ async function playRound() {
   } catch (error) {
     log("Round failed:", error);
     for (const seat of seated)
-      if (seat.chatId) await botOf(seat).api.sendMessage(seat.chatId, "Something went wrong while time was passing. Send /go to try again.").catch(() => {});
+      if (seat.chatId) await botOf(seat).api.sendMessage(seat.chatId, "Something went wrong while time was passing. Send /onward to try again.").catch(() => {});
   }
 }
 
@@ -333,7 +336,7 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.command("start", (ctx) =>
     seat().character
-      ? ctx.reply(`${seat().character!.name} is at your side, Majesty. Talk freely; time only passes when you say so or send /go.\n\n/status  /map  /will  /usage  /character`)
+      ? ctx.reply(`${seat().character!.name} is at your side, Majesty. Talk freely; time only passes when you say so or send /onward.\n\n/status  /map  /will  /usage  /character`)
       : beginSetup(ctx),
   );
 
@@ -377,8 +380,8 @@ function setUpAdvisor(bot: Bot, index: number) {
     const annal = seat().annals?.at(-1);
     if (annal && !annal.settled) {
       const since = seat().chat.slice(seat().chat.findLastIndex((message) => message.from === "advisor" && message.text.startsWith(annal.story.slice(0, 40))) + 1);
-      annal.rulerSaid = since.filter((message) => message.from === "ruler").map((message) => message.text).filter((text) => !/^\/?go\b/i.test(text.trim()) && !text.startsWith("["));
-      annal.settled = since.filter((message) => message.from === "advisor").at(-1)?.text.replace(/\n*\/go\s*$/, "");
+      annal.rulerSaid = since.filter((message) => message.from === "ruler").map((message) => message.text).filter((text) => !new RegExp(`^/?(${LEAVE.join("|")})\\b`, "i").test(text.trim()) && !text.startsWith("["));
+      annal.settled = since.filter((message) => message.from === "advisor").at(-1)?.text.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
     }
     seat().ready = true;
     seat().dismissed = false;
@@ -393,7 +396,7 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   // "/go" alone dismisses the court; "/go and buy the library first" (or a message that ends in /go) is answered and acted on, then time passes
   const canHoldAudience = () => !seat().fallen && state.phase === "audience" && !!seat().character;
-  bot.command("go", (ctx) => (ctx.match.trim() && canHoldAudience() ? audience(ctx, ctx.match.trim(), true) : dismiss((text) => ctx.reply(text), true)));
+  bot.command(LEAVE, (ctx) => (ctx.match.trim() && canHoldAudience() ? audience(ctx, ctx.match.trim(), true) : dismiss((text) => ctx.reply(text), true)));
 
   /** One audience at a time per seat, so replies stay in order */
   /** thenGo: the ruler ended their message with /go - answer it, act on it, and let time pass without another word from them */
@@ -401,7 +404,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     queue = queue.then(async () => {
       try {
         const game = await host.state();
-        const raw = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /go: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further.]` : message, roundLength(game.turn)));
+        const raw = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further.]` : message, roundLength(game.turn)));
         // The closing carries two lines meant for us, not the ruler: a picture of the decision, and words for the Chronicler
         const image = /^IMAGE:\s*(.+?)\s*\|\s*(.+)$/m.exec(raw);
         const proclamation = /^PROCLAMATION:\s*(.+)$/m.exec(raw)?.[1].trim();
@@ -527,7 +530,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().setup) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
     if (state.phase === "setup") return seat().character ? ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.") : beginSetup(ctx);
     if (!seat().character && seat().chat.length === 0) return beginSetup(ctx);
-    const closing = /^([\s\S]*\S)\s+\/go\s*$/i.exec(ctx.message.text);
+    const closing = new RegExp(`^([\\s\\S]*\\S)\\s+/(${LEAVE.join("|")})\\s*$`, "i").exec(ctx.message.text);
     closing ? audience(ctx, closing[1], true) : audience(ctx, ctx.message.text);
   });
 
