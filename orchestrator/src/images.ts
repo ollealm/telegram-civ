@@ -3,7 +3,7 @@
 // A picture is never worth waiting for: callers send their text first and the image when (and if) it arrives.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { host } from "./host.ts";
@@ -122,8 +122,12 @@ async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer
   const made = thread ? join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "generated_images", thread) : "";
   const newest = made && existsSync(made) ? readdirSync(made).filter((name) => name.endsWith(".png")).map((name) => join(made, name)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] : undefined;
   const out = newest ?? join(dir, "out.png"); // an agent that copied it anyway still counts
-  if (!existsSync(out)) throw new Error("no image produced");
-  return readFileSync(out);
+  try {
+    if (!existsSync(out)) throw new Error("no image produced");
+    return readFileSync(out);
+  } finally {
+    rmSync(dir, { recursive: true, force: true }); // the scratch folder and its reference copies are not kept
+  }
 }
 
 /** How a mapmaker of the age would have drawn it */

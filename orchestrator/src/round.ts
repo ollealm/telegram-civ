@@ -117,7 +117,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       return finished;
     }
 
-    await Promise.all([
+    // One realm's failed letter must not cost the others theirs
+    const settled = await Promise.allSettled([
       ...seats.map(async (seat) => {
         const governLogs = notes.get(seat.civ)!;
         const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
@@ -150,6 +151,12 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           return io.chronicle(chapter.trim(), images, finished);
         }),
     ]);
+    settled.forEach((result, index) => {
+      if (result.status !== "rejected") return;
+      const seat = seats[index];
+      io.log(`dispatch failed for ${seat?.civ ?? "the chronicle"}:`, result.reason?.message ?? result.reason);
+      if (seat && seat.kind !== "agent") void io.notice(seat, `My letter for ${finished.fromYear} to ${finished.year} was lost on the road, Majesty - the realm ran on your standing wishes meanwhile. Ask me anything of these years, and /onward when you are ready.`);
+    });
     return finished;
   } finally {
     // After urgent news only the rulers concerned are waited for; everyone else stays dismissed

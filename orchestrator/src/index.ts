@@ -171,10 +171,15 @@ async function sendEpic(occasion: string) {
   });
 }
 
+let roundStarting = false;
 async function playRound() {
+  // Two rulers dismissing at the same moment must start one round, not two
+  if (roundStarting || state.phase === "passing") return;
+  roundStarting = true;
   const seated = state.seats.filter((seat) => seat.chatId || seat.kind === "agent");
   const botOf = (seat: Seat) => advisors[state.seats.indexOf(seat)];
   try {
+    roundStarting = false; // the round loop sets the phase itself from here on
     await runRound(seated, {
       working: (seat, work) => (seat.chatId ? whileTyping(botOf(seat), seat.chatId, work) : work),
       dispatch: async (seat, dispatch, round) => {
@@ -240,6 +245,7 @@ async function playRound() {
       await sendEpic(game.winner ? `${game.winner} has won a ${game.victoryType} victory, and the story is complete.` : "The last ruler's realm has fallen, and with it the story the rulers were telling ends; the world goes on without them.").catch((error) => log("epic failed:", error.message));
     }
   } catch (error) {
+    roundStarting = false;
     log("Round failed:", error);
     for (const seat of seated)
       if (seat.chatId) await botOf(seat).api.sendMessage(seat.chatId, "Something went wrong while time was passing. Send /onward to try again.").catch(() => {});
@@ -445,7 +451,8 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   // "/go" alone dismisses the court; "/go and buy the library first" (or a message that ends in /go) is answered and acted on, then time passes
   const canHoldAudience = () => !seat().fallen && state.phase === "audience" && !!seat().character;
-  bot.command(LEAVE, (ctx) => (ctx.match.trim() && canHoldAudience() ? audience(ctx, ctx.match.trim(), true) : dismiss((text) => ctx.reply(text), true)));
+  // A bare /onward waits its turn behind any reply still being written, like every other message
+  bot.command(LEAVE, (ctx) => (ctx.match.trim() && canHoldAudience() ? audience(ctx, ctx.match.trim(), true) : void (queue = queue.then(() => dismiss((text) => ctx.reply(text), true)).catch((error) => log("dismiss failed:", error)))));
 
   /** The keeper of the rolls answers: while the clocks run, on /clerk, or when addressed by name. Read-only; anything that sounded like an order goes to the council. */
   const clerk = (ctx: Context, message: string) => {
@@ -641,7 +648,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing" && seat().character) return clerk(ctx, ctx.message.text);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
-    if (seat().clerk && new RegExp(`^\\W*${seat().clerk!.name.split(" ")[0]}\\b`, "i").test(ctx.message.text)) return clerk(ctx, ctx.message.text);
+    if (seat().clerk && new RegExp(`^[^\\p{L}\\p{N}]*${seat().clerk!.name.split(" ")[0].replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![\\p{L}\\p{N}])`, "iu").test(ctx.message.text)) return clerk(ctx, ctx.message.text);
     if (seat().setup && !seat().civ) return choosePeople(ctx, ctx.message.text);
     if (seat().setup) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
     if (state.phase === "setup") return seat().character ? ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.") : beginSetup(ctx);
