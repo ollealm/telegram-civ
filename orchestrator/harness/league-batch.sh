@@ -2,7 +2,7 @@
 # Several leagues side by side, each on its own host.
 # Usage (from orchestrator/):  harness/league-batch.sh <maxTurns> <seats> [<seats> ...]
 #   <seats> is what league.mts takes: comma-separated model[:effort], e.g. claude-opus-5-5:low,claude-opus-5-5:medium
-# League i runs on port 8766+i (never 8765, the real game), with its data in ../data/league-run<i> (an older one is moved aside),
+# League i runs on port 8770+i (never 8765, the real game), with its data in ../data/league-run<i> (an older one is moved aside),
 # tags its result files run<i>, and logs to ../data/league-run<i>/league.log. Small map, no game-AI peoples.
 cd "${0:A:h}/.."
 turns=$1; shift
