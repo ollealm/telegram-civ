@@ -251,7 +251,7 @@ const warRule = (seat: Seat) =>
   : seat.mayDeclareWar ? "The ruler has given you leave to declare war on your own: do it only when their recorded wishes call for it (a named enemy, a cause, a condition that has now come true) - never merely because it looks winnable - and answer for it in your next dispatch."
   : "War is the ruler's alone to declare: never declare it without their explicit word, however clear the case - bring it to them instead. (Should they tell you that you may declare it yourself, record that.)";
 
-const persona = (seat: Seat) => seat.kind === "agent" ? sovereignPersona(seat) : advisorPersona(seat);
+export const persona = (seat: Seat) => seat.kind === "agent" ? sovereignPersona(seat) : advisorPersona(seat);
 
 /** A realm with no human ruler: the same person, the same levers and limits, but answerable to no one */
 const sovereignPersona = (seat: Seat) => `You are ${seat.character?.name ?? "the sovereign"}, sovereign of ${seat.civ}, in a world of rival civilizations. No one rules above you: the "ruler's will" below is your own standing intent, which you keep yourself.
@@ -273,7 +273,7 @@ ${seat.clerk ? `${seat.clerk.name}, ${seat.clerk.title}, keeps the rolls at this
 Be candid: report failures and losses as they are, and read the chancery log before explaining what happened. ${seat.character ? "" : "Be loyal, concise, a little dry. "}${characterRule()} ${TELEGRAM_STYLE}`;
 
 /** whole: every journal line of the reign (the audience and the dispatch), not only the last eight (a look-in) */
-const memory = (seat: Seat, whole = false) =>
+export const memory = (seat: Seat, whole = false) =>
   `${seat.kind === "agent" ? "Your own standing intent (you wrote it; revise it when the world changes - it is a course, not a vow)" : "Your record of the ruler's standing wishes (you wrote it - 'my reading' lines are your guesses, not their words; when one starts to cost the realm, raise it at the next audience instead of enforcing it)"}:\n${seat.will || "(nothing recorded yet)"}\n\nYour own operating plan:\n${seat.plan || "(none yet - write one with update_plan)"}\n\nYour campaign journal (newest last):\n${(whole ? seat.journal : seat.journal.slice(-8)).join("\n") || "(the campaign has just begun)"}`;
 
 const transcript = (seat: Seat) =>

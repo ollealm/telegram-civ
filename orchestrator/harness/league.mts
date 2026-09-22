@@ -1,7 +1,8 @@
 // A world with no humans: advisor-ruled realms on different models play a whole game against each other.
 // Needs its own host:  ../host.sh /tmp/league-data 8767
 // Run:  RULER_HOST_URL=http://127.0.0.1:8767 RULER_STATE_FILE=/tmp/league-data/state.json IMAGES=off \
-//       npx tsx harness/league.mts claude-opus-5,claude-sonnet-5 [maxTurns=300] [gameAiCivs=0] [mapSize=Small]
+//       npx tsx harness/league.mts claude-opus-5,claude-sonnet-5 [maxTurns=300] [gameAiCivs=0] [mapSize=Small] [wonders=all|advised]
+// wonders=advised leaves the world's wonders to the sovereigns: the game's own peoples raise none.
 // Results: ../data/harness/league-<date>.csv (score per realm per round), the Chronicler's chapters and a closing epic on the console.
 
 import { appendFileSync, mkdirSync } from "node:fs";
@@ -15,6 +16,7 @@ const models = (process.argv[2] ?? "claude-opus-5,claude-sonnet-5").split(",");
 const maxTurns = Number(process.argv[3] ?? 300);
 const gameAi = Number(process.argv[4] ?? 0);
 const mapSize = process.argv[5] ?? "Small";
+const wonders = process.argv[6] ?? "all";
 const say = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args);
 
 // Every order that failed, and every call that errored, for the bug hunt afterwards
@@ -43,7 +45,8 @@ for (const seat of state.seats) {
   seat.character = await draftSovereign(seat.civ, seat.model!).then(({ name, title, sheet }) => ({ name, title, sheet }));
   say(`${seat.civ}: ${seat.character.name} on ${seat.model}`);
 }
-await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others: nations.slice(models.length, models.length + gameAi), mapSize, cityStates: 4 });
+const others = nations.slice(models.length, models.length + gameAi);
+await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, cityStates: 4 });
 persist();
 
 const csv = `../data/harness/league-${stamp}.csv`;
