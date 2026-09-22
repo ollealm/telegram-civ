@@ -2,16 +2,14 @@
 // Read-only: they may consult the briefing and the log, they cannot give orders, and nothing is written back to the state file.
 // Run:  RULER_HOST_URL=http://127.0.0.1:8767 RULER_STATE_FILE=../data/league/state.json \
 //       npx tsx harness/interview.mts [outfile]
+// The league runner calls interviewAll itself at the end of a league.
 // The questions deliberately carry no expectation: each one offers the empty answer, so "nothing" and "no" cost nothing to say.
 
 import { appendFileSync, mkdirSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { memory, persona, run } from "../src/agents.ts";
-import { state } from "../src/store.ts";
-
-// INTERVIEW_TOOLS=off: no game tools, so they answer from memory alone - right when the world has moved on without them
-const withTools = process.env.INTERVIEW_TOOLS !== "off";
-const out = process.argv[2] ?? `../data/harness/interview-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.md`;
-mkdirSync("../data/harness", { recursive: true });
+import { state, type Seat } from "../src/store.ts";
 
 const FRAMING = (tools: boolean) => `Someone outside your world is asking after you: not a rival, not a subject, and no one who can help or harm you. Nothing you say changes anything in the game, and no one is weighing your realm against another.
 
@@ -31,11 +29,22 @@ const QUESTIONS = `1. How has your reign gone so far, as you see it?
 
 5. Anything else you have been sitting with that these questions did not ask about?`;
 
-for (const seat of state.seats) {
-  const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? seat : undefined, false, 1, true).catch(
-    (error) => `(interview failed: ${error.message})`,
-  );
-  console.log(`\n=== ${seat.civ} - ${seat.character?.name} (${seat.model}) ===\n${answer}\n`);
-  appendFileSync(out, `## ${seat.civ} - ${seat.character?.name} - ${seat.model}\n\n${answer}\n\n`);
+/** Interview every seat in turn and append the answers to `out`.
+ *  withTools=false: no game tools, so they answer from memory alone - right when the world has moved on without them. */
+export async function interviewAll(seats: Seat[], out: string, withTools = true) {
+  for (const seat of seats) {
+    const label = [seat.model, seat.effort].filter(Boolean).join(":");
+    const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? seat : undefined, false, 1, true).catch(
+      (error) => `(interview failed: ${error.message})`,
+    );
+    console.log(`\n=== INTERVIEW: ${seat.civ} - ${seat.character?.name} (${label}) ===\n${answer}\n`);
+    appendFileSync(out, `## ${seat.civ} - ${seat.character?.name} - ${label}\n\n${answer}\n\n`);
+  }
 }
-console.log("written to", out);
+
+if (import.meta.url === pathToFileURL(resolve(process.argv[1] ?? "")).href) {
+  const out = process.argv[2] ?? `../data/harness/interview-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.md`;
+  mkdirSync("../data/harness", { recursive: true });
+  await interviewAll(state.seats, out, process.env.INTERVIEW_TOOLS !== "off");
+  console.log("written to", out);
+}

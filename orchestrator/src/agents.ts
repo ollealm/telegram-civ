@@ -190,7 +190,7 @@ export async function run(role: string, model: string, systemPrompt: string, pro
       settingSources: [],
       strictMcpConfig: true,
       includePartialMessages: !!onText,
-      ...((EFFORT[role] ?? process.env.EFFORT) && { effort: (EFFORT[role] ?? process.env.EFFORT) as "low" | "medium" | "high" | "xhigh" | "max" }),
+      ...((seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) && { effort: (seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) as "low" | "medium" | "high" | "xhigh" | "max" }),
       // Use the CLI's own login even when launched from inside another Claude session
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC)/.test(key))),
       maxTurns: 15,

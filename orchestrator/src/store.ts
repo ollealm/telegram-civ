@@ -44,6 +44,8 @@ export type Seat = {
   kind?: "human" | "agent";
   /** The model this seat's advisor runs on, when not the default */
   model?: string;
+  /** Reasoning effort for every call made for this seat; overrides the per-role setting */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Telegram chat bound to this seat - the first person to message the advisor bot */
   chatId?: number;
   rulerName?: string;
