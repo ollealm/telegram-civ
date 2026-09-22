@@ -132,7 +132,7 @@ index b997da7..67527d7 100644
                          .none { unique -> it.matchesFilter(unique.params[0], civInfo.state) } }
          if (settlerUnits.isEmpty()) return
 diff --git a/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt b/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt
-index 9eea632..ddf11ba 100644
+index 9eea632..a5d4ec9 100644
 --- a/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt
 @@ -17,7 +17,13 @@ object TradeAutomation {
@@ -140,9 +140,9 @@ index 9eea632..ddf11ba 100644
  
      fun respondToTradeRequests(civInfo: Civilization, tradeAndChangeState: Boolean) {
 +        // War and peace are a ruler's own: for a ruled civ an offer of peace is neither taken nor refused by the automation, it waits for the ruler's answer
++        // Every peace request, not one per power: a second request from the same power must never fall through to the automation and be accepted unasked
 +        val heldForRuler = if (civInfo.civID in com.unciv.logic.automation.RulerOverrides.ruledCivs)
 +            civInfo.tradeRequests.filter { request -> (request.trade.ourOffers + request.trade.theirOffers).any { it.name == com.unciv.Constants.peaceTreaty } }
-+                .groupBy { it.requestingCiv }.values.map { it.first() } // a power that asks every turn is asking once
 +            else emptyList()
          for (tradeRequest in civInfo.tradeRequests.toList()) {
 +            if (tradeRequest in heldForRuler) continue
@@ -153,7 +153,7 @@ index 9eea632..ddf11ba 100644
              }
          }
          civInfo.tradeRequests.clear()
-+        civInfo.tradeRequests.addAll(heldForRuler)
++        civInfo.tradeRequests.addAll(heldForRuler.groupBy { it.requestingCiv }.values.map { it.first() }) // kept once per power - a power that asks every turn is asking once
      }
  
      /** @return a TradeRequest with the same ourOffers as [tradeRequest] but with enough theirOffers
@@ -822,10 +822,10 @@ index 0000000..c5710f2
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
 new file mode 100644
-index 0000000..7c4d1f1
+index 0000000..997b21f
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,265 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -932,6 +932,10 @@ index 0000000..7c4d1f1
 +        val diplomacy = civ.getDiplomacyManager(other)!!
 +        if (diplomacy.hasFlag(DiplomacyFlags.DeclaredWar)) throw IllegalArgumentException("Too soon: ${diplomacy.getFlag(DiplomacyFlags.DeclaredWar)} more turns of war before peace can be discussed")
 +        if (diplomacy.hasFlag(DiplomacyFlags.DeclinedPeace)) throw IllegalArgumentException("$name declined peace recently; wait ${diplomacy.getFlag(DiplomacyFlags.DeclinedPeace)} turns")
++        // One offer of peace at a time: a repeat replaces the one still waiting, so a ruled power never holds two of ours
++        val ours = other.tradeRequests.filter { request -> request.requestingCiv == civ.civID && (request.trade.ourOffers + request.trade.theirOffers).any { it.name == Constants.peaceTreaty } }
++        if (ours.isNotEmpty() && other.civID in com.unciv.logic.automation.RulerOverrides.ruledCivs) return "Our offer of peace is already before ${other.civName}'s court; they have not answered yet. Wait, or sweeten it."
++        other.tradeRequests.removeAll(ours.toSet())
 +        val trade = Trade()
 +        val treaty = TradeOffer(Constants.peaceTreaty, TradeOfferType.Treaty, speed = civ.gameInfo.speed)
 +        trade.ourOffers.add(treaty)
