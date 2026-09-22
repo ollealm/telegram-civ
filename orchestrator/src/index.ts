@@ -19,7 +19,7 @@ const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
 const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-sonnet-5").split(",").map((model) => model.trim());
 /** How the game's own peoples are handicapped; rulers' realms always get the player's side of the scale */
 const DIFFICULTIES: Record<string, string> = { Even: "Prince", Easy: "Warlord", Gentle: "Chieftain", Hard: "King" };
-const WONDERS: Record<string, "all" | "rulers" | "advised"> = { Everyone: "all", "Rulers only": "rulers", "Advised realms": "advised" };
+const WONDERS: Record<string, "all" | "rulers" | "advised"> = { Everyone: "all", "Rulers only": "rulers", "Rulers and sovereigns": "advised" };
 const CITY_STATES: Record<string, number> = { Tiny: 2, Small: 4, Medium: 6, Large: 8, Huge: 10 };
 
 const advisorTokens = Object.keys(process.env)
@@ -260,7 +260,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   // A bot beyond the number of human rulers has no seat in this game: its slot in the list may belong to an advisor-ruled realm, which no one may sit down in
   bot.use(async (ctx, next) => {
     if (seat() && seat().kind !== "agent") return next();
-    if (ctx.chat?.type === "private" && ctx.message) await ctx.reply("There is no ruler's seat behind this door in the present game. (A new game with more rulers would open it.)").catch(() => {});
+    if (ctx.chat?.type === "private" && ctx.message) await ctx.reply("There is no ruler's seat behind this door in the present game - this realm is a sovereign's, ruled with no human above it. (A new game with more rulers would open it.)").catch(() => {});
   });
 
   /** The chat carries the advisor's name, so the ruler always knows who is speaking. Telegram allows only a few renames a day, hence only when it changes. */
@@ -580,13 +580,13 @@ function setUpAdvisor(bot: Bot, index: number) {
         draft.humans = Number(value);
         const keyboard = new InlineKeyboard();
         row(keyboard, "agents", [0, 1, 2, 3, 4]);
-        return void ctx.editMessageText(`${draft.humans} ruler${draft.humans === 1 ? "" : "s"}. How many realms should be ruled by an advisor alone, with no human above them? They play under the same limits as yours. (Models, in turn: ${AGENT_MODELS.join(", ")})`, { reply_markup: keyboard });
+        return void ctx.editMessageText(`${draft.humans} ruler${draft.humans === 1 ? "" : "s"}. How many sovereigns - realms ruled by an advisor alone, with no human above them? They play under the same limits as yours. (Models, in turn: ${AGENT_MODELS.join(", ")})`, { reply_markup: keyboard });
       }
       if (step === "agents") {
         draft.agents = Number(value);
         const keyboard = new InlineKeyboard();
         row(keyboard, "ai", [0, 1, 2, 3, 4, 5, 6]);
-        return void ctx.editMessageText(`${draft.agents} advisor-ruled realm${draft.agents === 1 ? "" : "s"}. How many peoples should the game itself play? (0 for none)`, { reply_markup: keyboard });
+        return void ctx.editMessageText(`${draft.agents} sovereign${draft.agents === 1 ? "" : "s"}. How many of the game's own peoples - played by the game's AI, with no advisor at all? (0 for none)`, { reply_markup: keyboard });
       }
       if (step === "ai") {
         draft.ai = Number(value);
@@ -607,12 +607,12 @@ function setUpAdvisor(bot: Bot, index: number) {
         draft.size = value;
         const keyboard = new InlineKeyboard();
         row(keyboard, "wonders", Object.keys(WONDERS));
-        return void ctx.editMessageText("Who may raise the world's wonders? Everyone is the usual game. Rulers only leaves them to the human-ruled realms - the game's peoples and the advisor-ruled realms build none, so every wonder is one of yours. Advised realms lets the advisor-ruled realms compete too.", { reply_markup: keyboard });
+        return void ctx.editMessageText("Who may raise the world's wonders? Everyone is the usual game. Rulers only leaves them to the rulers' realms - sovereigns and the game's peoples build none, so every wonder is one of yours. Rulers and sovereigns bars only the game's peoples.", { reply_markup: keyboard });
       }
       if (step === "wonders") {
         draft.wonders = WONDERS[value];
         const keyboard = new InlineKeyboard().text("Make it so", "ng:confirm").text("Keep the old world", "ng:cancel");
-        return void ctx.editMessageText(`A ${draft.size!.toLowerCase()} world with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.agents ?? 0} advisor-ruled realm${draft.agents === 1 ? "" : "s"}, ${draft.ai} people${draft.ai === 1 ? "" : "s"} played by the game and ${CITY_STATES[draft.size!] ?? 6} lesser cities${draft.wonders === "rulers" ? "; wonders are for the rulers' realms alone" : draft.wonders === "advised" ? "; the game's peoples raise no wonders" : ""}. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
+        return void ctx.editMessageText(`A ${draft.size!.toLowerCase()} world with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.agents ?? 0} sovereign${draft.agents === 1 ? "" : "s"}, ${draft.ai} of the game's own people${draft.ai === 1 ? "" : "s"} played by the game and ${CITY_STATES[draft.size!] ?? 6} lesser cities${draft.wonders === "rulers" ? "; wonders are for the rulers' realms alone" : draft.wonders === "advised" ? "; the game's peoples raise no wonders" : ""}. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
       }
       if (state.phase === "passing" || !draft.humans || !draft.size) return void ctx.editMessageText("Send /newgame to begin again.");
       const before = state.seats;
