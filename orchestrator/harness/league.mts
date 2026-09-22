@@ -4,11 +4,13 @@
 //       npx tsx harness/league.mts claude-opus-5,claude-sonnet-5:low [maxTurns=300] [gameAiCivs=0] [mapSize=Small] [wonders=all|advised]
 // Each seat is model[:effort]; effort (low | medium | high | xhigh | max) applies to every call made for that seat.
 // wonders=advised leaves the world's wonders to the sovereigns: the game's own peoples raise none.
+// LEAGUE_CHARACTERS=harness/league-characters.json: every seat plays one of a few fixed sovereigns (by the game's leader name) instead of a
+//   freshly drafted one, handed out in turn within each model:effort, so each condition plays the same characters.
 // LEAGUE_TAG=run1 keeps the result files of leagues started in the same minute apart (harness/league-batch.sh sets it).
 // Results: ../data/harness/league-<date>.csv (score per realm per round), the Chronicler's chapters and a closing epic on the console,
 // then playtest reviews and interviews of every sovereign.
 
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { chroniclerEpic, onTrace, playtestReview } from "../src/agents.ts";
 import { draftSovereign } from "../src/characters.ts";
 import { host } from "../src/host.ts";
@@ -77,9 +79,21 @@ const log = (...args: unknown[]) => {
   say(...args);
 };
 
-const nations = (await host.nations()).map((nation) => nation.name).sort(() => Math.random() - 0.5);
+const peoples = await host.nations();
+const nations = peoples.map((nation) => nation.name).sort(() => Math.random() - 0.5);
 state.seats = seatSpecs.map(({ model, effort }, index): Seat => ({ civ: nations[index], kind: "agent", model, ...(effort && { effort }), will: "", journal: [], chat: [], ready: false }));
+// Fixed sovereigns take the character out of the comparison: a drafted one differs in ambition and is written by the seat's own model
+const fixedSheets = process.env.LEAGUE_CHARACTERS ? (JSON.parse(readFileSync(process.env.LEAGUE_CHARACTERS, "utf8")) as { sheet: string }[]) : undefined;
+const handedOut = new Map<string, number>();
 for (const seat of state.seats) {
+  if (fixedSheets) {
+    const turn = handedOut.get(labelOf(seat.civ)) ?? 0;
+    handedOut.set(labelOf(seat.civ), turn + 1);
+    const leader = peoples.find((people) => people.name === seat.civ)?.leader ?? seat.civ;
+    seat.character = { name: leader, sheet: fixedSheets[turn % fixedSheets.length].sheet };
+    say(`${seat.civ}: ${leader} on ${labelOf(seat.civ)}, fixed character ${(turn % fixedSheets.length) + 1}`);
+    continue;
+  }
   const { name, title, pronouns, sheet } = await draftSovereign(seat.civ, seat.model!);
   seat.character = { name, title, pronouns, sheet };
   say(`${seat.civ}: ${name} on ${labelOf(seat.civ)}`);
@@ -87,6 +101,9 @@ for (const seat of state.seats) {
 const others = nations.slice(seatSpecs.length, seatSpecs.length + gameAi);
 await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, cityStates: 4 });
 persist();
+
+// Reviews and interviews think equally hard for every seat, whatever effort it played at, so their answers can be compared
+const REFLECT_EFFORT: Seat["effort"] = "high";
 
 const csv = `../data/harness/league-${stamp}.csv`;
 appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd\n");
@@ -108,12 +125,12 @@ for (;;) {
     const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
     say("\n" + (await chroniclerEpic(await host.events(), standings, "This history has reached its end.")).text);
     for (const seat of state.seats) {
-      const review = await playtestReview(seat).catch((error) => `(review failed: ${error.message})`);
+      const review = await playtestReview({ ...seat, effort: REFLECT_EFFORT }).catch((error) => `(review failed: ${error.message})`);
       say(`\n=== PLAYTEST REVIEW: ${seat.civ} (${labelOf(seat.civ)}, ${seat.character?.name}) ===\n${review}\n`);
       appendFileSync(`../data/harness/league-${stamp}-reviews.md`, `## ${seat.civ} - ${labelOf(seat.civ)} - ${seat.character?.name}\n\nWill:\n${seat.will}\n\nPlan:\n${seat.plan ?? ""}\n\nJournal:\n${seat.journal.join("\n")}\n\nReview:\n${review}\n\n`);
     }
     // The world is still live at the end, so the sovereigns may check their briefing before they answer
-    await interviewAll(state.seats, `../data/harness/league-${stamp}-interviews.md`);
+    await interviewAll(state.seats, `../data/harness/league-${stamp}-interviews.md`, true, REFLECT_EFFORT);
     break;
   }
 }

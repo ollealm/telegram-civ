@@ -30,10 +30,12 @@ const QUESTIONS = `1. How has your reign gone so far, as you see it?
 5. Anything else you have been sitting with that these questions did not ask about?`;
 
 /** Interview every seat in turn and append the answers to `out`.
- *  withTools=false: no game tools, so they answer from memory alone - right when the world has moved on without them. */
-export async function interviewAll(seats: Seat[], out: string, withTools = true) {
-  for (const seat of seats) {
-    const label = [seat.model, seat.effort].filter(Boolean).join(":");
+ *  withTools=false: no game tools, so they answer from memory alone - right when the world has moved on without them.
+ *  effort: think this hard in the interview whatever effort the seat played at, so answers can be compared across seats. */
+export async function interviewAll(seats: Seat[], out: string, withTools = true, effort?: Seat["effort"]) {
+  for (const played of seats) {
+    const label = [played.model, played.effort].filter(Boolean).join(":");
+    const seat = effort ? { ...played, effort } : played;
     const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? { seat, readOnly: true } : {}).catch(
       (error) => `(interview failed: ${error.message})`,
     );
