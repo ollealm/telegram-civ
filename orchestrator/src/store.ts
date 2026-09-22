@@ -99,6 +99,8 @@ export type State = {
   difficulty?: string;
   /** Who may raise world wonders: everyone, only the rulers' realms, or every realm with an advisor (rulers' and agents') */
   wonders?: "all" | "rulers" | "advised";
+  /** The workshop door: when open, a ruler may ask the advisor or clerk to speak out of character (for testing). Closed in a real game. */
+  workshop?: boolean;
 };
 
 const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "audience" });

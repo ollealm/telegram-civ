@@ -521,6 +521,14 @@ function setUpAdvisor(bot: Bot, index: number) {
     const draft: { humans?: number; agents?: number; ai?: number; difficulty?: string; size?: string; wonders?: "all" | "rulers" | "advised" } = {};
     const row = (keyboard: InlineKeyboard, prefix: string, values: (string | number)[]) => values.forEach((value) => keyboard.text(String(value), `ng:${prefix}:${value}`));
 
+    // The workshop door: out-of-character talk with the advisor and clerk, for testing. First seat only; announced to every ruler.
+    bot.command("workshop", async (ctx) => {
+      state.workshop = !state.workshop;
+      persist();
+      const word = state.workshop ? "The workshop door is open: you may ask your advisor or clerk to speak out of character (\"out of character: ...\")." : "The workshop door is closed: the court stays in character whatever is asked.";
+      for (const other of state.seats) if (other.chatId) await advisors[state.seats.indexOf(other)].api.sendMessage(other.chatId, word).catch(() => {});
+    });
+
     bot.command("newgame", async (ctx) => {
       if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
       const keyboard = new InlineKeyboard();
@@ -578,6 +586,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       ];
       state.difficulty = draft.difficulty;
       state.wonders = draft.wonders ?? "all";
+      state.workshop = false; // a new game is a real one: no out-of-character talk unless /workshop opens the door
       state.proclaimed = [];
       state.epicTold = false;
       state.chapters = [];
