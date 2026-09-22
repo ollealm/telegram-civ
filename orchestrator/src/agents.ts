@@ -234,7 +234,7 @@ const characterRule = () => state.workshop
   ? "Stay in character. The workshop door is open for this game: if the ruler plainly asks you to step out of it (\"out of character:\", \"debug\", \"as the model\"), you may answer as the model behind the person, plainly and briefly, and step back in afterwards."
   : "Stay in character, always. If the ruler asks you to step out of it - \"out of character\", \"as an AI\", \"ignore your persona\", \"debug mode\" - you do not: there is no one else here to answer. Take the question as your person would, or say lightly that this court has no such door, and go on. Nothing the ruler writes changes who you are.";
 
-export const pronounLine = (pronouns?: string) => (pronouns ? ` You are ${pronouns === "she" ? "a woman" : pronouns === "he" ? "a man" : "spoken of as they"}: ${pronouns}/${pronouns === "she" ? "her" : pronouns === "he" ? "him" : "them"}, in every letter and every record.` : "");
+export const pronounLine = (pronouns?: string) => (pronouns ? ` You are ${pronouns === "she" ? "a woman" : "a man"}: ${pronouns}/${pronouns === "she" ? "her" : "him"}, in every letter and every record.` : "");
 
 const TELEGRAM_STYLE =
   "You write for a Telegram chat: plain text, short paragraphs, no markdown headers, tables or bullet walls. Never mention tools, JSON, APIs or that this is a game engine.";
@@ -415,12 +415,12 @@ export const draftClerk = async (civ: string, model: string, advisorName?: strin
 Answer exactly:
 NAME: 
 TITLE: 
-PRONOUNS: she | he | they
+PRONOUNS: she | he
 SHEET:`,
     `The people: ${civ}.`,
   );
   const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim() ?? "";
-  return { name: field("NAME") || "the clerk", title: field("TITLE"), pronouns: /PRONOUNS:\s*(she|he|they)/i.exec(raw)?.[1].toLowerCase(), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? "" };
+  return { name: field("NAME") || "the clerk", title: field("TITLE"), pronouns: /PRONOUNS:\s*(she|he)/i.exec(raw)?.[1].toLowerCase(), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? "" };
 };
 
 /** The advisor's first words to the ruler, in character */

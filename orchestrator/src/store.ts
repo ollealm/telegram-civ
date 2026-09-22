@@ -12,7 +12,7 @@ export type Character = {
   name: string;
   /** Their station, as it follows the name ("the Lawspeaker") */
   title?: string;
-  /** she | he | they - fixed at creation so every portrait, letter and saga agrees */
+  /** she | he - fixed at creation so every portrait, letter and saga agrees */
   pronouns?: string;
   /** Who they are and how they speak. Voice and background only: nothing in it bends their judgement. */
   sheet: string;
