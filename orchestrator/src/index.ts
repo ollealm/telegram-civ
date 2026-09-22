@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, draftClerk, realmSaga, withPlates, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, draftClerk, pronounLine, realmSaga, withPlates, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -87,8 +87,17 @@ onImageLog((message) => log(message));
 
 /** The painted map costs a picture a round for every ruler; PAINTED_MAPS=off leaves it out (the march map comes either way) */
 const PAINTED_MAPS = process.env.PAINTED_MAPS !== "off";
+const HOLD_FOR_PICTURES = process.env.HOLD_FOR_PICTURES === "on";
 
 /** Every picture goes through here: noted in the ledger first, so that whoever describes the next one knows not to ask for it again */
+/** Paints and returns the picture (or null), keeping the ledger honest either way */
+async function paintAndKeep(picture: Picture): Promise<Buffer | null> {
+  recordPicture(picture);
+  const png = await generateImage(`${picture.description}\n\nThe year is ${picture.year}. Realistic oil painting of the period, no text or lettering.`).catch((error) => { log(`picture failed (${picture.caption}):`, error.message); return null; });
+  if (!png) forgetPicture(picture);
+  return png;
+}
+
 function paint(picture: Picture, send: (png: Buffer) => Promise<unknown>) {
   recordPicture(picture);
   void generateImage(`${picture.description}\n\nThe year is ${picture.year}. Realistic oil painting of the period, no text or lettering.`)
@@ -139,7 +148,8 @@ async function sendPlates(medium: string, plates: { caption: string; description
 async function sendSaga(seat: Seat, outcome: string, publicly = true) {
   const events = await host.events();
   const history = events.filter((event) => event.text.includes(seat.civ));
-  const { text: saga, medium, plates } = withPlates(await realmSaga(seat, history, outcome));
+  const { text: rawSaga, medium, plates } = withPlates(await realmSaga(seat, history, outcome));
+  const saga = `THE SAGA OF ${seat.civ.toUpperCase()}${seat.rulerName ? ` UNDER ${seat.rulerName.toUpperCase()}` : ""}\nas the Chronicler tells it\n\n${rawSaga}`;
   const bot = advisors[state.seats.indexOf(seat)];
   if (seat.chatId) await bot.api.sendMessage(seat.chatId, saga).catch((error: Error) => log("saga send failed", error.message));
   if (publicly) await broadcastHerald(saga); // a living realm's saga draws on its private journal, so it stays with its ruler
@@ -155,7 +165,7 @@ async function sendEpic(occasion: string) {
   const spoken = (state.proclaimed ?? []).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
   const history = [...events, ...spoken].sort((a, b) => a.turn - b.turn);
   const { text, medium, plates } = withPlates(await chroniclerEpic(history, standings, occasion, state.chapters ?? []));
-  await broadcastHerald(text);
+  await broadcastHerald(`THE EPIC OF THE WORLD\nas the Chronicler tells it\n\n${text}`);
   await sendPlates(medium, plates, async (png, caption) => {
     for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
   });
@@ -182,7 +192,8 @@ async function playRound() {
       },
       notice: async (seat, text) => void (await botOf(seat).api.sendMessage(seat.chatId!, text).catch(() => {})),
       chronicle: async (chapter, images, round) => {
-        await broadcastHerald(chapter);
+        // With HOLD_FOR_PICTURES=on the chapter waits for its pictures (a real game, one round a day); otherwise the text goes first
+        if (!HOLD_FOR_PICTURES) await broadcastHerald(chapter);
         // One or two scenes of the Chronicler's choosing, and every wonder
         // A wonder's picture says what the great work gives its builders
         const wonders = await Promise.all(wonderPictures(round).map(async (picture) => {
@@ -190,10 +201,13 @@ async function playRound() {
           const boon = await host.lookup(state.seats[0]?.civ ?? "", wonder).then((entry) => wonderBoon(wonder, /completed by (.+?) in /.exec(picture.caption)?.[1] ?? "its builders", entry)).catch(() => "");
           return { ...picture, note: boon.trim() };
         }));
-        for (const picture of [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders])
-          paint(picture, async (png) => {
-            for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
-          });
+        // All of the age's pictures are painted together and then sent in the order of the years they show
+        const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders];
+        const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
+        const painted = await Promise.all(pictures.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
+        if (HOLD_FOR_PICTURES) await broadcastHerald(chapter);
+        for (const { picture, png } of painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn))
+          for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
       },
       log,
     });
@@ -309,7 +323,8 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (!chosen) return;
     const replaced = seat().character?.name;
     try {
-      seat().character = { name: chosen.name, title: chosen.title, sheet: chosen.sheet };
+      if (seat().character) (seat().formerAdvisors ??= []).push({ name: seat().character!.name, title: seat().character!.title, pronouns: seat().character!.pronouns, until: (await host.state()).year });
+      seat().character = { name: chosen.name, title: chosen.title, pronouns: chosen.pronouns, sheet: chosen.sheet };
       void wearName();
       if (!seat().clerk) draftClerk(seat().civ, ADVISOR_MODEL, chosen.name).then((made) => { seat().clerk = made; persist(); }).catch((error) => log("clerk drafting failed:", error.message));
       seat().setup = undefined;
@@ -326,7 +341,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         else await ctx.reply(`The world will be made once every ruler has assembled a court - ${missing} still to come.`);
       }
       const era = String((await host.briefing(seat().civ).catch(() => ({ era: "Ancient era" }))).era);
-      void advisorPortrait(seat().civ, seat().character!.sheet, era).then((png) => png && ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name })).catch(() => {});
+      void advisorPortrait(seat().civ, seat().character!.sheet + pronounLine(seat().character!.pronouns), era).then((png) => png && ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name })).catch(() => {});
     } catch (error) {
       log("taking on the advisor failed:", error);
       await ctx.reply("Your advisor is delayed on the road. Send /start to try again.");

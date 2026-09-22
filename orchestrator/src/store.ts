@@ -12,6 +12,8 @@ export type Character = {
   name: string;
   /** Their station, as it follows the name ("the Lawspeaker") */
   title?: string;
+  /** she | he | they - fixed at creation so every portrait, letter and saga agrees */
+  pronouns?: string;
   /** Who they are and how they speak. Voice and background only: nothing in it bends their judgement. */
   sheet: string;
 };
@@ -21,8 +23,10 @@ export type Annal = { years: string; story: string; course?: string; question?: 
 
 export type Seat = {
   civ: string;
+  /** Advisors who served before the present one, for the saga */
+  formerAdvisors?: { name: string; title?: string; pronouns?: string; until: string }[];
   /** The keeper of the rolls: answers questions of fact while time passes (and on /clerk). One per realm per game. */
-  clerk?: { name: string; title: string; sheet: string };
+  clerk?: { name: string; title: string; sheet: string; pronouns?: string };
   /** The last few exchanges with the clerk */
   clerkChat?: { from: "ruler" | "clerk"; text: string }[];
   /** Things said to the clerk that sounded like orders: handed to the advisor at the next dispatch */
@@ -49,7 +53,7 @@ export type Seat = {
   plan?: string;
   character?: Character;
   /** Advisors to choose from during setup, and whether the ruler has already sent for a second three */
-  candidates?: { name: string; title: string; pitch: string; sheet: string }[];
+  candidates?: { name: string; title: string; pitch: string; sheet: string; pronouns?: string }[];
   rerolled?: boolean;
   /** War is the ruler's alone unless they have said, in plain words, that the advisor may declare it */
   mayDeclareWar?: boolean;

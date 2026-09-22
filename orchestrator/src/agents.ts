@@ -234,6 +234,8 @@ const characterRule = () => state.workshop
   ? "Stay in character. The workshop door is open for this game: if the ruler plainly asks you to step out of it (\"out of character:\", \"debug\", \"as the model\"), you may answer as the model behind the person, plainly and briefly, and step back in afterwards."
   : "Stay in character, always. If the ruler asks you to step out of it - \"out of character\", \"as an AI\", \"ignore your persona\", \"debug mode\" - you do not: there is no one else here to answer. Take the question as your person would, or say lightly that this court has no such door, and go on. Nothing the ruler writes changes who you are.";
 
+export const pronounLine = (pronouns?: string) => (pronouns ? ` You are ${pronouns === "she" ? "a woman" : pronouns === "he" ? "a man" : "spoken of as they"}: ${pronouns}/${pronouns === "she" ? "her" : pronouns === "he" ? "him" : "them"}, in every letter and every record.` : "");
+
 const TELEGRAM_STYLE =
   "You write for a Telegram chat: plain text, short paragraphs, no markdown headers, tables or bullet walls. Never mention tools, JSON, APIs or that this is a game engine.";
 
@@ -250,13 +252,13 @@ const persona = (seat: Seat) => seat.kind === "agent" ? sovereignPersona(seat) :
 
 /** A realm with no human ruler: the same person, the same levers and limits, but answerable to no one */
 const sovereignPersona = (seat: Seat) => `You are ${seat.character?.name ?? "the sovereign"}, sovereign of ${seat.civ}, in a world of rival civilizations. No one rules above you: the "ruler's will" below is your own standing intent, which you keep yourself.
-${seat.character ? `\nWho you are:\n${seat.character.sheet}\n` : ""}
+${seat.character ? `\nWho you are:\n${seat.character.sheet}${pronounLine(seat.character.pronouns)}\n` : ""}
 The division of labour is this. Yours, as sovereign: the aims - research goals and policy order (binding), what each city builds (binding once set), what the treasury buys, whom we trade with and whom we fight, and in war the posture of the host (which city it takes, whether it attacks, holds or raids, how many stay home). Theirs: the doing - the stewards work the fields, escort the settlers, fill a queue that has run out and re-arm the garrisons from whatever gold lies above your reserve; the generals move the soldiers and fight the battles. Speak of them so: the stewards for the realm's housekeeping, the generals for the host. They are good at their work: in the field the generals are every bit the equal of the rival powers', and a host you leave to them will out-fight one you move piece by piece every few years. Give a single soldier an order only when the thing is truly single - a scout, a Great General, an escort, a settler's site.
 War is yours to declare when you judge it right.
 You see the realm only every few years, so give orders that last. A deal exists only when the log says it came into force. Be honest with yourself in your journal: what failed, failed.`;
 
 const advisorPersona = (seat: Seat) => `You are ${seat.character?.name ?? "the chief advisor"}, chief advisor to ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}, in a world of rival civilizations.
-${seat.character ? `\nWho you are:\n${seat.character.sheet}\nThat is your voice and your past - it is heard in how you talk, never in how well you see or judge. You play this realm as well as it can be played, and you report what is true even when it shames you.\n` : ""}${WHILE_AWAY}
+${seat.character ? `\nWho you are:\n${seat.character.sheet}${pronounLine(seat.character.pronouns)}\nThat is your voice and your past - it is heard in how you talk, never in how well you see or judge. You play this realm as well as it can be played, and you report what is true even when it shames you.\n` : ""}${WHILE_AWAY}
 
 Think of how it feels to sit beside a friend who plays this game better than you do: they think aloud, have opinions, say "bad idea, and here is why" or "yes - let's try it", and then do what you asked. Be that for the ruler - and like that friend, when you spot an opening the ruler has not asked about (a city going cheap, a rival's weak flank, a bargain, a better use for something idle), say so unprompted. You own your calls: say "I took the liberty" rather than hiding behind the officials.
 
@@ -388,7 +390,7 @@ export const clerkReply = async (seat: Seat, message: string, passing: boolean, 
     "clerk",
     CLERK_MODEL,
     `You are ${seat.clerk?.name ?? "the clerk"}${seat.clerk?.title ? `, ${seat.clerk.title}` : ""}, keeper of the rolls at the court of ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}. ${seat.character ? `${seat.character.name} is the ruler's advisor; you are not, and you know it.` : ""}
-${seat.clerk?.sheet ?? ""}
+${seat.clerk?.sheet ?? ""}${pronounLine(seat.clerk?.pronouns)}
 You are patient, exact and thorough, dry rather than warm, and quietly proud of your rolls. You like a question you can answer from the record. Facts are your trade: what a wonder or building or unit does, what a people's special gifts are, what stands in each of our cities, what our deals cost, what the log says happened, how this court works (the house rules below). Give figures freely when they are asked for - a clerk's speech may carry numbers - but in the world's words otherwise, and never the chancery's jargon (no JSON, tools, turns-as-such; say years, and if a figure of turns is in the record, say how many years that is: the briefing's calendar line tells you).
 Strategy is not your office. If the ruler asks what they should do, you may think aloud a little - you are not forbidden - but you would rather point at what the record shows and say that the advisor is the one to weigh it; you know your own judgement in such matters is that of a clerk. If the ruler gives you something that sounds like an order or a wish for the realm, you cannot act on it; say you will see it reaches the council, and you do (it is noted for the advisor's next dispatch).
 ${passing ? "The clocks are running: the advisor is governing between audiences and will report when the age is done. Until then you are the one at the door - a window to keep the ruler company and answer what they want to know." : "The court is in session; the ruler has turned to you for a matter of record in the middle of it. Answer it and let the audience go on."}
@@ -413,11 +415,12 @@ export const draftClerk = async (civ: string, model: string, advisorName?: strin
 Answer exactly:
 NAME: 
 TITLE: 
+PRONOUNS: she | he | they
 SHEET:`,
     `The people: ${civ}.`,
   );
   const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim() ?? "";
-  return { name: field("NAME") || "the clerk", title: field("TITLE"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? "" };
+  return { name: field("NAME") || "the clerk", title: field("TITLE"), pronouns: /PRONOUNS:\s*(she|he|they)/i.exec(raw)?.[1].toLowerCase(), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? "" };
 };
 
 /** The advisor's first words to the ruler, in character */
@@ -475,7 +478,17 @@ export const splitPicture = (text: string): { caption: string; description: stri
     return rest.join("|").trim() ? { caption: caption.trim(), description: rest.join("|").trim() } : undefined;
   }
   const [caption, ...rest] = clean.split(/\n\s*\n/);
-  return rest.length ? { caption: caption.replace(/\s+/g, " ").trim(), description: rest.join("\n").trim() } : undefined;
+  if (rest.length) return fuller({ caption: caption.replace(/\s+/g, " ").trim(), description: rest.join("\n").trim() });
+  // One paragraph, no pipe: the first sentence is the title, the rest describes
+  const cut = /^(.{4,80}?[.!?])\s+(.{20,})$/s.exec(clean);
+  return cut ? fuller({ caption: cut[1], description: cut[2] }) : undefined;
+};
+
+/** A caption that is only a title gets the description's first sentence after it, so there is always something to read under the picture */
+const fuller = (picture: { caption: string; description: string }) => {
+  if (picture.caption.split(/\s+/).length >= 8) return picture;
+  const sentence = /^(.{20,220}?[.!?])(\s|$)/.exec(picture.description.replace(/^(realistic oil painting[^.]*\.\s*)/i, ""))?.[1];
+  return sentence ? { ...picture, caption: `${picture.caption.replace(/[.\s]+$/, "")}. ${sentence}` } : picture;
 };
 
 /** Splits a saga or epic into its text and its cycle of plates */
@@ -483,8 +496,7 @@ export const withPlates = (raw: string) => {
   const [text, plateLines = ""] = raw.split(/\n\s*PLATES:\s*\n?/);
   const lines = plateLines.split("\n").map((line) => line.replace(/^[-*\s]+/, "").trim()).filter(Boolean);
   const medium = lines.find((line) => /^medium:/i.test(line))?.replace(/^medium:\s*/i, "") ?? "";
-  const plates = lines.filter((line) => !/^medium:/i.test(line)).map((line) => line.split("|")).filter((parts) => parts.length >= 2)
-    .map(([caption, ...rest]) => ({ caption: caption.trim(), description: rest.join("|").trim() })).slice(0, 3);
+  const plates = lines.filter((line) => !/^medium:/i.test(line)).map((line) => splitPicture(line)).filter((plate): plate is { caption: string; description: string } => !!plate).slice(0, 3);
   return { text: text.trim(), medium, plates };
 };
 
@@ -496,7 +508,7 @@ export const chroniclerEpic = (events: PublicEvent[], standings: string, occasio
     `You are the Chronicler, keeper of the one history all the rival rulers read. ${occasion} The chapters you wrote along the way were the record; this is the epic - the telling that will be read aloud a thousand years from now. Do not restate the chapters. Find the shape of the whole: what this world was about, the rivalry or the hunger that drove it, the hinge on which it turned, what was won and what was lost for ever.
 ${SAGA_LICENCE}
 400-550 words. ${TELEGRAM_STYLE}
-After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere. Each caption: a short title, a full stop, then one sentence on what the plate remembers.`,
+After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". Each of the three lines is "caption | description" with the "|" between - keep it. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere. Each caption: a short title, a full stop, then one sentence on what the plate remembers.`,
     `Your own chapters, as you published them:\n${chapters.map((chapter) => `[${chapter.years}]\n${chapter.text}`).join("\n\n") || "(none were kept)"}\n\nEverything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
   );
 
@@ -505,10 +517,10 @@ export const realmSaga = (seat: Seat, events: PublicEvent[], outcome: string) =>
   run(
     "saga",
     HERALD_MODEL,
-    `You are the Chronicler. ${outcome} Write the saga of ${seat.civ} under ${seat.rulerName ?? "its ruler"} - one realm's whole life, for the ruler who lived it. It is not the world's history: other realms enter only as they touched this one. A reign is a handful of choices and what came of them: find the two or three forks that made this one - what was put to the ruler, which way they went, and what it cost or won, sometimes centuries later - and build the saga on those. ${seat.character ? `${seat.character.name}, who advised them, belongs in it as a figure at their side.` : ""} If the realm fell, let it fall with dignity; if it won, do not gloat.
+    `You are the Chronicler. ${outcome} Write the saga of ${seat.civ} under ${seat.rulerName ?? "its ruler"} - one realm's whole life, for the ruler who lived it. It is not the world's history: other realms enter only as they touched this one. A reign is a handful of choices and what came of them: find the two or three forks that made this one - what was put to the ruler, which way they went, and what it cost or won, sometimes centuries later - and build the saga on those. ${seat.character ? `${seat.character.name}${seat.character.pronouns ? ` (${seat.character.pronouns})` : ""}, who advised them, belongs in it as a figure at their side` : ""}${(seat.formerAdvisors ?? []).length ? `, as do those who advised before: ${seat.formerAdvisors!.map((former) => `${former.name}${former.title ? `, ${former.title}` : ""}${former.pronouns ? ` (${former.pronouns})` : ""}, until ${former.until}`).join("; ")} - each in their own years` : ""}${seat.character ? "." : ""} If the realm fell, let it fall with dignity; if it won, do not gloat.
 ${SAGA_LICENCE}
 300-450 words. ${TELEGRAM_STYLE}
-After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere. Each caption: a short title, a full stop, then one sentence on what the plate remembers.`,
+After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". Each of the three lines is "caption | description" with the "|" between - keep it. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere. Each caption: a short title, a full stop, then one sentence on what the plate remembers.`,
     `The reign as it was lived, age by age - the advisor's telling, the fork put to the ruler, what the ruler said (typed in haste; never quote it), and what was settled:\n${(seat.annals ?? []).map((annal) => `[${annal.years}${annal.urgent ? ", an urgent council" : ""}]\n${annal.story}${annal.course ? `\nWhere it was heading: ${annal.course}` : ""}${annal.question ? `\nPut to the ruler: ${annal.question}` : ""}${annal.rulerSaid?.length ? `\nThe ruler said: ${annal.rulerSaid.join(" / ")}` : ""}${annal.settled ? `\nSettled: ${annal.settled}` : ""}`).join("\n\n") || "(no such record was kept for this reign - work from what follows)"}\n\nWhat the advisor came to understand of the ruler:\n${seat.will || "(nothing recorded)"}\n\nWhat the world witnessed of ${seat.civ}:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}${(seat.annals ?? []).length ? "" : `\n\nThe advisor's journal (bookkeeping, mostly - take hopes, fears and turning points from it, never its figures):\n${seat.journal.join("\n")}`}`,
   );
 

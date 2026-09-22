@@ -12,7 +12,7 @@ const MANNERS = ["talkative and warm, thinks aloud", "dry and sparing, with a de
 
 const shuffled = <T>(list: T[]) => list.map((item) => [Math.random(), item] as const).sort((a, b) => a[0] - b[0]).map(([, item]) => item);
 
-export type Candidate = { name: string; title: string; pitch: string; sheet: string; walk?: string; manner?: string };
+export type Candidate = { name: string; title: string; pitch: string; sheet: string; walk?: string; manner?: string; pronouns?: string };
 
 /** sovereign: a realm with no human ruler - the same kind of person, but ruling alone, so they need an aim of their own */
 export const draftCandidate = async (civ: string, model: string, walk: string, manner: string, takenNames: string[] = [], sovereign = false): Promise<Candidate> => {
@@ -26,13 +26,14 @@ They have sound judgement and no hobby-horse: no pet strategy, no blind spot, no
 Answer in exactly this shape:
 NAME: an attested but uncommon name of that people - not the first that comes to mind${takenNames.length ? `, and none of: ${takenNames.join(", ")}` : ""}
 TITLE: two to four words for their station, as it would follow their name ("the Lawspeaker")
+PRONOUNS: she | he | they - decide it, and keep the sheet consistent with it
 PITCH: at most 30 words in their own voice, ${sovereign ? "as they would announce themselves to the world" : "presenting themselves to the ruler"}. It should let the manner be heard.
 SHEET:
 Four to six sentences in the second person ("You are..."): who they are and where they come from, how they speak, and ${sovereign ? "what they want for their people" : "how they feel about serving a ruler"}.`,
     `The people: ${civ}.\nWalk of life: ${walk}.\nManner of speaking: ${manner}.`,
   );
   const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim().replace(/^"|"$/g, "") ?? "";
-  return { name: field("NAME") || "your advisor", title: field("TITLE"), pitch: field("PITCH"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw, walk, manner };
+  return { name: field("NAME") || "your advisor", title: field("TITLE"), pronouns: /PRONOUNS:\s*(she|he|they)/i.exec(raw)?.[1].toLowerCase(), pitch: field("PITCH"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw, walk, manner };
 };
 
 /** Three people to choose from, each of a different walk of life and manner */
@@ -52,4 +53,4 @@ export const draftSovereign = (civ: string, model: string) => draftCandidate(civ
 
 /** The pitch lets the voice be heard; the plain line under it says outright what kind of company this will be for a whole history */
 export const card = (candidate: Candidate) =>
-  `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}\n"${candidate.pitch}"${candidate.manner ? `\n${candidate.walk![0].toUpperCase()}${candidate.walk!.slice(1)} - ${candidate.manner}.` : ""}`;
+  `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}${candidate.pronouns ? ` (${candidate.pronouns})` : ""}\n"${candidate.pitch}"${candidate.manner ? `\n${candidate.walk![0].toUpperCase()}${candidate.walk!.slice(1)} - ${candidate.manner}.` : ""}`;
