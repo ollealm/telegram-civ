@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..72432b6
+index 0000000..83386de
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,45 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.map.mapunit.MapUnit
@@ -33,6 +33,9 @@ index 0000000..72432b6
 +    /** A ruled civ's posture of arms: the city its army is to take (warAim), how it fights (attack | defend | raid), and how many soldiers stay home */
 +    class Posture(val warAim: String? = null, val stance: String = "attack", val reserve: Int = 0)
 +    val postures = ConcurrentHashMap<String, Posture>()
++
++    /** civIDs that may raise no world wonder at all (a game setting: e.g. only the rulers' realms compete for them) */
++    val noWonders: MutableSet<String> = ConcurrentHashMap.newKeySet()
 +
 +    /** True when a ruled civ's never-build list covers this construction: the automation must not choose it at all */
 +    @Volatile var forbidden: ((com.unciv.logic.civilization.Civilization, com.unciv.models.ruleset.INonPerpetualConstruction) -> Boolean)? = null
@@ -377,7 +380,7 @@ index b7c8d98..616f4d6 100644
  
          return cost.toInt()
 diff --git a/core/src/com/unciv/models/ruleset/Building.kt b/core/src/com/unciv/models/ruleset/Building.kt
-index d636187..f56b156 100644
+index d636187..31b3984 100644
 --- a/core/src/com/unciv/models/ruleset/Building.kt
 +++ b/core/src/com/unciv/models/ruleset/Building.kt
 @@ -142,7 +142,7 @@ class Building : RulesetStatsObject(), INonPerpetualConstruction {
@@ -389,6 +392,16 @@ index d636187..f56b156 100644
              if (!isWonder)
                  productionCost *= civInfo.getDifficulty().buildingCostModifier
          } else {
+@@ -285,6 +285,9 @@ class Building : RulesetStatsObject(), INonPerpetualConstruction {
+         if (cityConstructions.isBuilt(name))
+             yield(RejectionReasonType.AlreadyBuilt.toInstance())
+ 
++        if (isWonder && civ.civID in com.unciv.logic.automation.RulerOverrides.noWonders)
++            yield(RejectionReasonType.DisabledBySetting.toInstance("This people raises no world wonders - a rule of this game", true))
++
+         if (civ.gameInfo.isUnavailableBySettingsCached(this@Building)) {
+             // Repeat the starting era test isHiddenBySettings already did to change the RejectionReasonType
+             if (isHiddenByStartingEra(civ.gameInfo))
 diff --git a/core/src/com/unciv/models/ruleset/unit/BaseUnitCost.kt b/core/src/com/unciv/models/ruleset/unit/BaseUnitCost.kt
 index a0ea252..655aae8 100644
 --- a/core/src/com/unciv/models/ruleset/unit/BaseUnitCost.kt
@@ -1035,10 +1048,10 @@ index 0000000..351f1c7
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..73cdf56
+index 0000000..2a2cbbe
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1023 @@
+@@ -0,0 +1,1037 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1229,6 +1242,7 @@ index 0000000..73cdf56
 +    private fun newGame(json: JsonValue): Any? {
 +        val ruled = json.get("ruled")?.asStringArray()?.toList() ?: throw ApiError(400, "Missing ruled: [nation names]")
 +        val others = json.get("others")?.asStringArray()?.toList() ?: listOf()
++        val noWonders = json.get("noWonders")?.asStringArray()?.toList() ?: listOf()
 +        val newGame = GameStarter.startNewGame(GameSetupInfo(
 +            GameParameters().apply {
 +                speed = json.getString("speed", "Quick")
@@ -1244,6 +1258,8 @@ index 0000000..73cdf56
 +        ))
 +        gameInfo = newGame
 +        UncivGame.Current.gameInfo = newGame
++        wonderless.clear(); wonderless += noWonders
++        applyWonderless()
 +        orders.clear()
 +        publicEvents.clear()
 +        chancery.clear()
@@ -1276,6 +1292,7 @@ index 0000000..73cdf56
 +        File("SaveFiles/Ruler game").writeText(saveData)
 +        File(dataDir, "host.json").writeText(Json.write(mapOf(
 +            "orders" to orders.mapValues { it.value.toMap() },
++            "noWonders" to wonderless.toList(),
 +            "publicEvents" to publicEvents,
 +            "chancery" to chancery,
 +            "unitOrders" to units.toMap(),
@@ -1302,6 +1319,13 @@ index 0000000..73cdf56
 +        return mapOf("gold" to civ.gold)
 +    }
 +
++    /** Nations that may raise no world wonder in this game (a setup choice) */
++    private val wonderless = HashSet<String>()
++    private fun applyWonderless() {
++        RulerOverrides.noWonders.clear()
++        for (civ in game().civilizations) if (civ.civName in wonderless) RulerOverrides.noWonders += civ.civID
++    }
++
 +    private fun load() {
 +        val saveFile = File(dataDir, "save.unciv")
 +        val hostFile = File(dataDir, "host.json")
@@ -1311,6 +1335,8 @@ index 0000000..73cdf56
 +        UncivGame.Current.gameInfo = loaded
 +        val host = JsonReader().parse(hostFile.readText())
 +        for (entry in host.get("orders")) orders[entry.name] = StandingOrders().apply { readFrom(entry) }
++        wonderless.clear(); host.get("noWonders")?.asStringArray()?.let { wonderless += it }
++        applyWonderless()
 +        for (event in host.get("publicEvents"))
 +            publicEvents += mapOf("turn" to event.getInt("turn"), "year" to event.getString("year", ""), "text" to event.getString("text"))
 +        host.get("chancery")?.forEach { civLog ->
@@ -1852,6 +1878,7 @@ index 0000000..73cdf56
 +            "calendar" to (civ.gameInfo.getYear(1) - civ.gameInfo.getYear(0)).let { years ->
 +                "One turn is now about $years year${if (years == 1) "" else "s"}. Every figure of turns in this briefing (turnsLeft, deal durations, 'about N turns away') counts turns, not years: ${if (years > 1) "3 turns is about ${3 * years} years. " else ""}Reckon it over before you speak of time, and prefer a loose span ('within a generation', 'a century's work') to an exact count." },
 +            "era" to civ.getEra().name,
++            "wondersBarredFor" to wonderless.toList().ifEmpty { null },
 +            "waysToWin" to civ.gameInfo.gameParameters.victoryTypes.toList().ifEmpty { listOf("none - this world was made without victory conditions; nobody can build a spaceship or win a vote") },
 +            "score" to civ.calculateTotalScore().toInt(),
 +            "gold" to civ.gold,

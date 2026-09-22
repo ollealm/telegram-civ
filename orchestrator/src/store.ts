@@ -91,6 +91,8 @@ export type State = {
   mapSize?: string;
   aiCivs?: number;
   difficulty?: string;
+  /** Who may raise world wonders: everyone, only the rulers' realms, or every realm with an advisor (rulers' and agents') */
+  wonders?: "all" | "rulers" | "advised";
 };
 
 const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "audience" });

@@ -19,6 +19,7 @@ const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
 const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-sonnet-5").split(",").map((model) => model.trim());
 /** How the game's own peoples are handicapped; rulers' realms always get the player's side of the scale */
 const DIFFICULTIES: Record<string, string> = { Even: "Prince", Easy: "Warlord", Gentle: "Chieftain", Hard: "King" };
+const WONDERS: Record<string, "all" | "rulers" | "advised"> = { Everyone: "all", "Rulers only": "rulers", "Advised realms": "advised" };
 const CITY_STATES: Record<string, number> = { Tiny: 2, Small: 4, Medium: 6, Large: 8, Huge: 10 };
 
 const advisorTokens = Object.keys(process.env)
@@ -70,7 +71,9 @@ async function createWorld() {
   const free = shuffled((await host.nations()).map((nation) => nation.name).filter((name) => !ruled.includes(name)));
   const others = free.slice(0, state.aiCivs ?? AI_CIVS);
   const mapSize = state.mapSize ?? DEFAULT_MAP_SIZE;
-  await host.newGame({ ruled, others, mapSize, cityStates: CITY_STATES[mapSize] ?? 6, difficulty: state.difficulty ?? "Prince" });
+  const noWonders = state.wonders === "rulers" ? [...state.seats.filter((seat) => seat.kind === "agent").map((seat) => seat.civ), ...others]
+    : state.wonders === "advised" ? others : [];
+  await host.newGame({ ruled, others, noWonders, mapSize, cityStates: CITY_STATES[mapSize] ?? 6, difficulty: state.difficulty ?? "Prince" });
   state.phase = "audience";
   persist();
   log(`New world: ${mapSize}; ruled ${ruled.join(", ")}; AI ${others.join(", ") || "none"}`);
@@ -490,7 +493,7 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   // The first seat's ruler may start over: /newgame asks how many rulers, how many rival peoples, how large a world
   if (index === 0) {
-    const draft: { humans?: number; agents?: number; ai?: number; difficulty?: string; size?: string } = {};
+    const draft: { humans?: number; agents?: number; ai?: number; difficulty?: string; size?: string; wonders?: "all" | "rulers" | "advised" } = {};
     const row = (keyboard: InlineKeyboard, prefix: string, values: (string | number)[]) => values.forEach((value) => keyboard.text(String(value), `ng:${prefix}:${value}`));
 
     bot.command("newgame", async (ctx) => {
@@ -533,8 +536,14 @@ function setUpAdvisor(bot: Bot, index: number) {
       }
       if (step === "size") {
         draft.size = value;
+        const keyboard = new InlineKeyboard();
+        row(keyboard, "wonders", Object.keys(WONDERS));
+        return void ctx.editMessageText("Who may raise the world's wonders? Everyone is the usual game. Rulers only leaves them to the human-ruled realms - the game's peoples and the advisor-ruled realms build none, so every wonder is one of yours. Advised realms lets the advisor-ruled realms compete too.", { reply_markup: keyboard });
+      }
+      if (step === "wonders") {
+        draft.wonders = WONDERS[value];
         const keyboard = new InlineKeyboard().text("Make it so", "ng:confirm").text("Keep the old world", "ng:cancel");
-        return void ctx.editMessageText(`A ${value.toLowerCase()} world with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.agents ?? 0} advisor-ruled realm${draft.agents === 1 ? "" : "s"}, ${draft.ai} people${draft.ai === 1 ? "" : "s"} played by the game and ${CITY_STATES[value] ?? 6} lesser cities. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
+        return void ctx.editMessageText(`A ${draft.size!.toLowerCase()} world with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.agents ?? 0} advisor-ruled realm${draft.agents === 1 ? "" : "s"}, ${draft.ai} people${draft.ai === 1 ? "" : "s"} played by the game and ${CITY_STATES[draft.size!] ?? 6} lesser cities${draft.wonders === "rulers" ? "; wonders are for the rulers' realms alone" : draft.wonders === "advised" ? "; the game's peoples raise no wonders" : ""}. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
       }
       if (state.phase === "passing" || !draft.humans || !draft.size) return void ctx.editMessageText("Send /newgame to begin again.");
       const before = state.seats;
@@ -543,6 +552,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         ...Array.from({ length: draft.agents ?? 0 }, (_, agentIndex) => ({ ...blankSeat(), kind: "agent" as const, model: AGENT_MODELS[agentIndex % AGENT_MODELS.length] })),
       ];
       state.difficulty = draft.difficulty;
+      state.wonders = draft.wonders ?? "all";
       state.proclaimed = [];
       state.epicTold = false;
       state.chapters = [];

@@ -60,7 +60,7 @@ export type Orders = {
 
 export const host = {
   state: () => call<GameState>("GET", "/state"),
-  newGame: (setup: { ruled: string[]; others: string[]; mapSize?: string; cityStates?: number; difficulty?: string }) =>
+  newGame: (setup: { ruled: string[]; others: string[]; noWonders?: string[]; mapSize?: string; cityStates?: number; difficulty?: string }) =>
     call<GameState>("POST", "/new", setup),
   advance: (turns: number, wake = false) => call<RoundResult>("POST", "/advance", { turns, wake }),
   lookup: (civ: string, name: string) => call<Record<string, unknown>>("GET", `/lookup${civQuery(civ)}&name=${encodeURIComponent(name)}`),
