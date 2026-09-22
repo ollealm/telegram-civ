@@ -162,7 +162,8 @@ export type Trace = {
 let traceSink: (trace: Trace) => void = () => {};
 export const onTrace = (sink: (trace: Trace) => void) => (traceSink = sink);
 
-export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false, attempt = 1, readOnly = false): Promise<string> {
+/** onText: called with the reply as it grows, so a chat can show it while it is still being written */
+export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false, attempt = 1, readOnly = false, onText?: (soFar: string) => void): Promise<string> {
   const started = Date.now();
   const toolCalls: Trace["toolCalls"] = [];
   async function* input() {
@@ -177,6 +178,7 @@ export async function run(role: string, model: string, systemPrompt: string, pro
       tools: [],
       settingSources: [],
       strictMcpConfig: true,
+      includePartialMessages: !!onText,
       // Use the CLI's own login even when launched from inside another Claude session
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC)/.test(key))),
       maxTurns: 15,
@@ -186,13 +188,20 @@ export async function run(role: string, model: string, systemPrompt: string, pro
       }),
     },
   });
+  let streamed = "";
   for await (const message of stream) {
+    if (onText && message.type === "stream_event") {
+      const event = message.event as { type: string; delta?: { type?: string; text?: string } };
+      if (event.type === "content_block_start" && streamed) streamed += "\n\n";
+      if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) { streamed += event.delta.text; onText(streamed); }
+      continue;
+    }
     if (process.env.RULER_DEBUG) console.log(`[${role}]`, JSON.stringify(message).slice(0, 600));
     // League agents have reported "the order tools were unavailable": a session that starts before its tools are up is started again
     if (seat && message.type === "system" && message.subtype === "init" && !(message.tools ?? []).includes("mcp__realm__set_orders")) {
       console.warn(`[${role}] ${seat.civ}: session started without the realm tools (attempt ${attempt})`);
       await stream.return?.(undefined as never);
-      if (attempt < 3) return run(role, model, systemPrompt, prompt, seat, canRecordWill, attempt + 1, readOnly);
+      if (attempt < 3) return run(role, model, systemPrompt, prompt, seat, canRecordWill, attempt + 1, readOnly, onText);
       throw new Error(`${role} agent never got its tools`);
     }
     if (message.type === "assistant")
@@ -374,7 +383,7 @@ export const HOUSE_RULES = `HOW THIS COURT WORKS
 - Difficulty and victories: the game's own peoples play on level terms unless set otherwise at /newgame; scientific, cultural, domination and diplomatic victories are on.`;
 
 /** The keeper of the rolls: a second person at court who answers questions of fact while the advisor governs and the clocks run */
-export const clerkReply = async (seat: Seat, message: string, passing: boolean) =>
+export const clerkReply = async (seat: Seat, message: string, passing: boolean, onText?: (soFar: string) => void) =>
   run(
     "clerk",
     CLERK_MODEL,
@@ -384,7 +393,7 @@ You are patient, exact and thorough, dry rather than warm, and quietly proud of 
 Strategy is not your office. If the ruler asks what they should do, you may think aloud a little - you are not forbidden - but you would rather point at what the record shows and say that the advisor is the one to weigh it; you know your own judgement in such matters is that of a clerk. If the ruler gives you something that sounds like an order or a wish for the realm, you cannot act on it; say you will see it reaches the council, and you do (it is noted for the advisor's next dispatch).
 ${passing ? "The clocks are running: the advisor is governing between audiences and will report when the age is done. Until then you are the one at the door - a window to keep the ruler company and answer what they want to know." : "The court is in session; the ruler has turned to you for a matter of record in the middle of it. Answer it and let the audience go on."}
 If this is the ruler's first word to you, introduce yourself in a sentence before answering. Only if they gave an order or a wish for the realm ("make peace with X", "build walls everywhere") end your reply with one line beginning exactly "FOR COUNCIL:" that restates it in their words; it is taken out before they see the message and handed to the advisor. A question - even "should we attack?" - is not an order: no such line then.
-Use the tools freely to look things up before you answer (the rulebook by name, the briefing, the options, the log); do not guess at a fact you can check. Keep answers to the point: a list when a list is wanted, a paragraph otherwise. ${characterRule()} ${TELEGRAM_STYLE}
+Use the tools freely to look things up before you answer (the rulebook by name, the briefing, the options, the log); do not guess at a fact you can check. Keep answers short: under 120 words unless a list is asked for, and then the list and one sentence. Write figures as numerals, like 13,159. ${characterRule()} ${TELEGRAM_STYLE}
 
 ${HOUSE_RULES}`,
     `The ruler's recorded wishes (the advisor's record):\n${seat.will || "(nothing recorded yet)"}\n\nThe advisor's operating plan:\n${seat.plan || "(none)"}\n\nThe advisor's last dispatch:\n${(seat.annals ?? []).at(-1)?.story ?? "(none yet)"}\n\nThe realm as it stands now:\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe talk so far with the clerk:\n${(seat.clerkChat ?? []).map((entry) => `${entry.from === "ruler" ? "Ruler" : "You"}: ${entry.text}`).join("\n\n") || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
@@ -392,6 +401,7 @@ ${HOUSE_RULES}`,
     false,
     1,
     true,
+    onText,
   );
 
 /** The clerk's person: a fixed temperament, a name and station rolled for this people and this game */

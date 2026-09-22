@@ -435,14 +435,32 @@ function setUpAdvisor(bot: Bot, index: number) {
       try {
         if (!seat().clerk) { seat().clerk = await draftClerk(seat().civ, ADVISOR_MODEL, seat().character?.name); persist(); }
         const passing = state.phase === "passing";
-        const raw = await whileTyping(bot, ctx.chat!.id, clerkReply(seat(), message, passing));
+        // The answer is shown as it is written: one message, edited as the text grows (Telegram tolerates an edit every second or so)
+        const chatId = ctx.chat!.id;
+        const shown = (text: string) => text.replace(/\n?FOR COUNCIL:[\s\S]*$/m, "").trim();
+        let draft: { message_id: number } | undefined;
+        let lastEdit = 0;
+        let editing: Promise<unknown> = Promise.resolve();
+        const show = (soFar: string) => {
+          if (Date.now() - lastEdit < 1200) return;
+          lastEdit = Date.now();
+          const text = shown(soFar);
+          if (!text) return;
+          editing = editing.then(async () => {
+            if (!draft) draft = await bot.api.sendMessage(chatId, text + " …");
+            else await bot.api.editMessageText(chatId, draft.message_id, text + " …").catch(() => {});
+          });
+        };
+        const raw = await whileTyping(bot, chatId, clerkReply(seat(), message, passing, show));
         const forCouncil = /^FOR COUNCIL:\s*(.+)$/m.exec(raw)?.[1].trim();
-        const reply = raw.replace(/^FOR COUNCIL:.*\n?/gm, "").trim();
+        const reply = shown(raw);
         if (forCouncil && !/^(the ruler )?asked|no order|nothing (was )?(ordered|asked)|none\b/i.test(forCouncil)) (seat().forCouncil ??= []).push(forCouncil);
         (seat().clerkChat ??= []).push({ from: "ruler", text: message }, { from: "clerk", text: reply });
         if (seat().clerkChat!.length > 12) seat().clerkChat!.splice(0, seat().clerkChat!.length - 12);
         persist();
-        await ctx.reply(reply);
+        await editing;
+        if (draft) await bot.api.editMessageText(chatId, draft.message_id, reply || "(the rolls are silent)").catch(() => ctx.reply(reply));
+        else await ctx.reply(reply);
       } catch (error) {
         log("clerk failed:", error);
         await ctx.reply("The clerk has mislaid the roll. Ask again in a moment.").catch(() => {});
