@@ -437,19 +437,19 @@ After the text, add a line "PLATES:", then a line "medium: ..." and then three l
   );
 
 /** Urgent news cut the round short: a brief summons instead of a full dispatch */
-export const advisorUrgent = async (seat: Seat, news: string, briefing: unknown): Promise<Dispatch> => {
+export const advisorUrgent = async (seat: Seat, news: string, briefing: unknown, concernsUs = true): Promise<Dispatch> => {
   const raw = await run(
     "urgent",
     ADVISOR_MODEL,
     `${persona(seat)}
 
-You have stopped the clocks and sent for the ruler: ${news}. This is not a regular dispatch - no review of the years, no long game. Answer in exactly this shape:
+${concernsUs ? `You have stopped the clocks and sent for the ruler: ${news}.` : `The clocks have stopped across the world and every court sits in emergency council: ${news}. It is not our realm that is struck - but the ruler should hear it at once and decide whether we stand aside, take a side, or shift our course while the world's eyes are elsewhere; if it truly changes nothing for us, say so in a breath and ask nothing.`} This is not a regular dispatch - no review of the years, no long game. Answer in exactly this shape:
 
 DISPATCH:
-60-90 words. Open with the news itself, then what it means for us right now and what you have already done about it. Speak in years, never turn numbers.
+${concernsUs ? "60-90 words. Open with the news itself, then what it means for us right now and what you have already done about it." : "40-80 words. The news as it reached us, and what it means for us - our pacts, our borders, our chances."} Speak in years, never turn numbers.
 
 QUESTION:
-The one decision that cannot wait, in 40-70 words of plain talk: the ways to answer this, what each risks, and your own lean. End with the question.
+${concernsUs ? "The one decision that cannot wait, in 40-70 words of plain talk: the ways to answer this, what each risks, and your own lean. End with the question." : "If there is a real choice for us in this - join, stand aside, profit, arm - put it in 30-60 words with your lean and end with the question. If there is none, write just: none"}
 
 IMAGE:
 caption | the moment itself as a painter of the age would show it (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}
@@ -460,7 +460,7 @@ One plain sentence: what happened and what you did.`,
   );
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
   const [caption, ...description] = section("IMAGE").split("|");
-  return { text: section("DISPATCH") || raw, strategy: "", question: section("QUESTION"), image: description.length ? { caption: caption.trim(), description: description.join("|").trim() } : undefined, journal: section("JOURNAL") || news };
+  return { text: section("DISPATCH") || raw, strategy: "", question: /^\W*none\W*$/i.test(section("QUESTION")) ? "" : section("QUESTION"), image: description.length ? { caption: caption.trim(), description: description.join("|").trim() } : undefined, journal: section("JOURNAL") || news };
 };
 
 /** Stop press: one paragraph for the world when urgent news interrupts an age */

@@ -95,23 +95,24 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     const news = finished.stoppedEarly;
     const remaining = length - (finished.turn - fromTurn);
     if (news && !/has won/.test(news) && remaining > 0) {
-      const concerned = seats.filter((seat) => news.startsWith(seat.civ) && seat.kind !== "agent"); // an agent realm deals with its own crises at its next look-in
+      // Every ruler is called to the emergency council - the one it concerns to answer, the others to see whether they will join in, stand aside or change course
+      const rulers = seats.filter((seat) => seat.kind !== "agent");
       state.pendingRound = { fromTurn, fromYear: finished.fromYear, remaining, publicEvents: finished.publicEvents };
       await Promise.all([
-        ...concerned.map(async (seat) => {
+        ...rulers.map(async (seat) => {
+          const concerned = news.startsWith(seat.civ);
           const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
-          const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing));
+          const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing, concerned));
           // The ruler must see at a glance that this is not the regular audience: the age was cut short, and why
-          dispatch.heading = `Urgent council, ${finished.year} - the age was interrupted: ${news.replace(/[.!]+$/, "")}.\nThe rest of it plays out once you dismiss the court.`;
+          dispatch.heading = `Emergency council, ${finished.year} - the age was interrupted: ${news.replace(/[.!]+$/, "")}.\nNot a full age has passed. The rest of it plays out once every court has risen.`;
           notes.get(seat.civ)!.push(dispatch.journal);
           (seat.annals ??= []).push({ years: finished.year, story: dispatch.text, question: dispatch.question, urgent: true });
           remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
           await io.dispatch(seat, dispatch, finished);
         }),
-        ...seats.filter((seat) => !concerned.includes(seat) && seat.kind !== "agent").map((seat) => io.notice(seat, `News from abroad has stopped the clocks: ${news}. Our realm is untouched; I carry on as we agreed, and time resumes once the rulers concerned have held council.`)),
         heraldBulletin(news, finished.publicEvents.slice(-8)).then((bulletin) => io.chronicle(bulletin, [], finished)),
       ]);
-      urgentFor = concerned;
+      urgentFor = rulers;
       return finished;
     }
 
