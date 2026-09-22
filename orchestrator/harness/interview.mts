@@ -34,7 +34,7 @@ const QUESTIONS = `1. How has your reign gone so far, as you see it?
 export async function interviewAll(seats: Seat[], out: string, withTools = true) {
   for (const seat of seats) {
     const label = [seat.model, seat.effort].filter(Boolean).join(":");
-    const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? seat : undefined, false, 1, true).catch(
+    const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? { seat, readOnly: true } : {}).catch(
       (error) => `(interview failed: ${error.message})`,
     );
     console.log(`\n=== INTERVIEW: ${seat.civ} - ${seat.character?.name} (${label}) ===\n${answer}\n`);

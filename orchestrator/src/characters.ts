@@ -3,7 +3,8 @@
 // one advisor who had one turned the ruler's passing remarks into law. The advisor plays as well as it can and asks when a
 // call is not obvious; the temperament is the ruler's, and the advisor learns it (see the record of the ruler's wishes).
 // Walk of life and manner are rolled by dice, and the ruler's goals are never seen here, so the advisor is no echo of the ruler.
-import { run } from "./agents.ts";
+import { z } from "zod";
+import { runStructured } from "./agents.ts";
 
 const WALKS_OF_LIFE = ["a farmer's child", "a sailor or fisher", "an old soldier", "a merchant", "a temple servant", "a keeper of laws and records", "a builder or craftsman", "a herder", "a healer", "a singer of old songs", "an exile taken in from another land", "the steward of a great household", "a hunter and tracker", "a smith or miner"];
 
@@ -16,24 +17,24 @@ export type Candidate = { name: string; title: string; pitch: string; sheet: str
 
 /** sovereign: a realm with no human ruler - the same kind of person, but ruling alone, so they need an aim of their own */
 export const draftCandidate = async (civ: string, model: string, walk: string, manner: string, takenNames: string[] = [], sovereign = false): Promise<Candidate> => {
-  const raw = await run(
+  const drafted = await runStructured(
     "character",
     model,
     `You invent ${sovereign ? "the sovereign of a civilization" : "a candidate for chief advisor to the ruler of a civilization"} at the very beginning of its history. Make a person, not a type.
 Root them in this people's own land and early society - a station, a name and one detail of their life that is true to that people - and stay away from the single most famous cliche about it.
 Their walk of life and manner of speaking were rolled by dice; keep to both, and do not let either become a costume. The manner must survive a thousand messages without turning into a pastiche: it lives in rhythm and choice of words. At most one small habit of speech, which surfaces now and then, never in every message. No dialect spelling, no pile of archaisms, no catchphrase.
 They have sound judgement and no hobby-horse: no pet strategy, no blind spot, no creed about how realms should be run. ${sovereign ? "As they rule alone, give them one ambition for their people, in a sentence - what they want this realm to become." : "What the realm should become is the ruler's to say, and they know it."}
-Answer in exactly this shape:
-NAME: an attested but uncommon name of that people - not the first that comes to mind${takenNames.length ? `, and none of: ${takenNames.join(", ")}` : ""}
-TITLE: two to four words for their station, as it would follow their name ("the Lawspeaker")
-PRONOUNS: she | he - decide it, and keep the sheet consistent with it
-PITCH: at most 30 words in their own voice, ${sovereign ? "as they would announce themselves to the world" : "presenting themselves to the ruler"}. It should let the manner be heard.
-SHEET:
-Four to six sentences in the second person ("You are..."): who they are and where they come from, how they speak, and ${sovereign ? "what they want for their people" : "how they feel about serving a ruler"}.`,
+Decide whether they are a woman or a man, and keep the sheet to it.`,
     `The people: ${civ}.\nWalk of life: ${walk}.\nManner of speaking: ${manner}.`,
+    z.object({
+      name: z.string().describe(`An attested but uncommon name of that people - not the first that comes to mind${takenNames.length ? `, and none of: ${takenNames.join(", ")}` : ""}`),
+      title: z.string().describe('Two to four words for their station, as it would follow their name ("the Lawspeaker")'),
+      pronouns: z.enum(["she", "he"]),
+      pitch: z.string().describe(`At most 30 words in their own voice, ${sovereign ? "as they would announce themselves to the world" : "presenting themselves to the ruler"}, without quotation marks. It should let the manner be heard.`),
+      sheet: z.string().describe(`Four to six sentences in the second person ("You are..."): who they are and where they come from, how they speak, and ${sovereign ? "what they want for their people" : "how they feel about serving a ruler"}.`),
+    }),
   );
-  const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim().replace(/^"|"$/g, "") ?? "";
-  return { name: field("NAME") || "your advisor", title: field("TITLE"), pronouns: /PRONOUNS:\s*(she|he)/i.exec(raw)?.[1].toLowerCase(), pitch: field("PITCH"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? raw, walk, manner };
+  return { ...drafted, walk, manner };
 };
 
 /** Three people to choose from, each of a different walk of life and manner */

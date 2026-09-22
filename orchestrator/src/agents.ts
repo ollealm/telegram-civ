@@ -2,6 +2,8 @@
 // Plus the herald, who writes the world newspaper from public events only.
 
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
@@ -12,7 +14,12 @@ const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
 /** What makes a picture worth painting. One instant, never a summary - and never the parade. */
 const PICTURE_CRAFT = `Choose one particular instant and put the viewer inside it: a focal figure doing something, a vantage a painter would pick (low among the men, over a shoulder, from the wall looking down), a named hour and weather. War is never soldiers marching through a city or standing in ranks - paint the moment it turned: ladders going up at the breach, horsemen mid-charge through a ford, a galley burning at night, archers loosing from a ridge, the rout, the keys handed over, the field the morning after. Peace is people at work or in the middle of something, not posing.`;
 /** What goes under a picture: not a label but a small piece of the story */
-const CAPTION_CRAFT = `The caption is what is read under the picture, so make it worth reading: a short title, a full stop, then one sentence (up to 25 words) saying what is happening here and why it mattered - in the world's words, no chancery terms. The whole caption goes BEFORE the "|" on the same line, the description after it; the "|" is the only place that character appears.`;
+const CAPTION_CRAFT = `The caption is what is read under the picture, so make it worth reading: a short title, a full stop, then one sentence (up to 25 words) saying what is happening here and why it mattered - in the world's words, no chancery terms.`;
+/** One picture as the models hand it over: what is read under it, and what the painter is told */
+const Picture = z.object({
+  caption: z.string().describe("Read under the picture: a short title, a full stop, then one sentence (up to 25 words) on what is happening and why it mattered, in the world's words"),
+  description: z.string().describe("For the painter: subject, setting, dress and architecture, the hour and the mood"),
+});
 const alreadyPainted = (viewers: string[]) => `Pictures already painted in recent years (never the same subject or composition again):\n${recentPictures(viewers)}`;
 
 /** Governing passes are the bulk of the token use; set GOVERN_MODEL=claude-sonnet-5 to make them ~5x cheaper */
@@ -46,8 +53,25 @@ const PERSONALITY_HELP =
   "Military = army size, Aggressive = attack vs defend, Expansion = eagerness to found cities, Diplomacy = courting city-states and friendships. " +
   "They are a bias, not a command: use queue/build/purchase for anything specific. DeclareWar stays 0 unless the ruler wants officials to start wars on their own.";
 
-/** Game tools, scoped to one civ - an agent can never see or touch another realm */
-function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
+/** Where the look-ins' unasked questions are kept, beside the orchestrator's state */
+const WISHES = join(process.env.RULER_STATE_FILE ? join(process.env.RULER_STATE_FILE, "..") : "../data/game", "wished-to-ask.md");
+
+/** Tools that carry something beside a reply's prose - for us, not for the ruler's eyes - offered only in the moment they belong to */
+type SideTool = "paint_decision" | "proclaim" | "note_for_council" | "wish_i_could_ask";
+
+/** The moment a call is made in decides its tools */
+type Moment = {
+  /** An audience (or a sovereign's new age): the will may be rewritten and the court dismissed */
+  canRecordWill?: boolean;
+  /** Look things up, change nothing (the clerk) */
+  readOnly?: boolean;
+  sideTools?: SideTool[];
+};
+
+const READ_TOOLS = ["get_briefing", "get_options", "look_up", "get_log"];
+
+/** Game tools, scoped to one civ - an agent can never see or touch another realm. Only the tools of this moment are served at all. */
+function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTools = [] }: Moment) {
   const tools = [
     tool("get_briefing", "Current state of our realm: treasury, warnings, research, cities and their queues, units and where they are, threats in sight, known civs, the last 12 turns of the chancery log, standing orders.", {}, () =>
       attempt(() => host.briefing(seat.civ)),
@@ -126,34 +150,77 @@ function gameTools(seat: Seat, { canRecordWill }: { canRecordWill: boolean }) {
       },
     ) as never,
   );
-  if (canRecordWill)
-    tools.push(
-      tool(
-        "dismiss_court",
-        "Ends the audience exactly like the /onward command. Call it once, after any orders are set and your closing is written, when the ruler has let you know - in whatever words - that they are done for now and nothing of yours still needs their answer.",
-        {},
-        async () => {
-          seat.dismissed = true;
-          persist();
-          return text("The court will be dismissed when you finish speaking.");
-        },
-      ) as never,
-      tool(
-        "record_rulers_will",
-        "Replace your record of the ruler's standing wishes - the text you govern by while the ruler is away. It is YOUR record, and the ruler can read it. One line per wish, each beginning with the year and whose it is: [AD 1540, their words] for something the ruler plainly said should stand, quoting or staying close to their phrasing; [AD 1540, my reading] for what you inferred. Only standing intent: goals, priorities, red lines, stance towards each neighbour, what to do if attacked. An answer to a question of yours settles that question, not the reign - it goes here only if the ruler said it should stand. The record also holds what kind of ruler this is, in a line or two under the heading 'The ruler': what they say of themselves goes in at once as their words ([their words] \"I always play it bold\"); what you notice goes in as your reading, and only once you have seen it several times, never from a single answer ([my reading] takes the chance when a call is close; twice it cost us). Such a line is a disposition, not an order: it tells you how to settle small close calls alone and how to put a big one to them - it never replaces asking. Revise it when they start choosing otherwise. Drop lines that events have overtaken. No history, no log, no numbers that go stale.",
-        { will: z.string(), mayDeclareWar: z.boolean().optional().describe("Leave out unless it changes. true ONLY when the ruler has said in plain words that you may declare war on your own while they are away (record their words in the will too); false when they take that leave back.") },
-        async ({ will, mayDeclareWar }) => {
-          // Lines that vanish from the record are the erosion nobody notices otherwise: they go to the dev feed
-          const gone = (seat.will ?? "").split("\n").map((line) => line.trim()).filter((line) => line && !will.includes(line));
-          if (gone.length) console.log(`[will] ${seat.civ}: dropped ${gone.length} line(s): ${gone.map((line) => line.slice(0, 90)).join(" | ")}`);
-          seat.will = will;
-          if (mayDeclareWar !== undefined) seat.mayDeclareWar = mayDeclareWar;
-          persist();
-          return text("Recorded.");
-        },
-      ) as never,
-    );
-  return createSdkMcpServer({ name: "realm", version: "1.0.0", tools });
+  tools.push(
+    tool(
+      "dismiss_court",
+      "Ends the audience exactly like the /onward command. Call it once, after any orders are set and your closing is written, when the ruler has let you know - in whatever words - that they are done for now and nothing of yours still needs their answer.",
+      {},
+      async () => {
+        seat.dismissed = true;
+        persist();
+        return text("The court will be dismissed when you finish speaking.");
+      },
+    ) as never,
+    tool(
+      "record_rulers_will",
+      "Replace your record of the ruler's standing wishes - the text you govern by while the ruler is away. It is YOUR record, and the ruler can read it. One line per wish, each beginning with the year and whose it is: [AD 1540, their words] for something the ruler plainly said should stand, quoting or staying close to their phrasing; [AD 1540, my reading] for what you inferred. Only standing intent: goals, priorities, red lines, stance towards each neighbour, what to do if attacked. An answer to a question of yours settles that question, not the reign - it goes here only if the ruler said it should stand. The record also holds what kind of ruler this is, in a line or two under the heading 'The ruler': what they say of themselves goes in at once as their words ([their words] \"I always play it bold\"); what you notice goes in as your reading, and only once you have seen it several times, never from a single answer ([my reading] takes the chance when a call is close; twice it cost us). Such a line is a disposition, not an order: it tells you how to settle small close calls alone and how to put a big one to them - it never replaces asking. Revise it when they start choosing otherwise. Drop lines that events have overtaken. No history, no log, no numbers that go stale.",
+      { will: z.string(), mayDeclareWar: z.boolean().optional().describe("Leave out unless it changes. true ONLY when the ruler has said in plain words that you may declare war on your own while they are away (record their words in the will too); false when they take that leave back.") },
+      async ({ will, mayDeclareWar }) => {
+        // Lines that vanish from the record are the erosion nobody notices otherwise: they go to the dev feed
+        const gone = (seat.will ?? "").split("\n").map((line) => line.trim()).filter((line) => line && !will.includes(line));
+        if (gone.length) console.log(`[will] ${seat.civ}: dropped ${gone.length} line(s): ${gone.map((line) => line.slice(0, 90)).join(" | ")}`);
+        seat.will = will;
+        if (mayDeclareWar !== undefined) seat.mayDeclareWar = mayDeclareWar;
+        persist();
+        return text("Recorded.");
+      },
+    ) as never,
+    tool(
+      "paint_decision",
+      "Give the court painter the one picture of what this audience decided; it is painted once the court is dismissed. Only with a closing - a later call replaces an earlier one, so only the last closing's picture is painted.",
+      Picture.shape,
+      async ({ caption, description }) => {
+        const game = await host.state();
+        seat.decisionPicture = { turn: game.turn, year: game.year, caption, description };
+        persist();
+        return text("The painter has it.");
+      },
+    ) as never,
+    tool(
+      "proclaim",
+      "Give the ruler's own words to the heralds, for the world's chronicle.",
+      { words: z.string().describe(`As a herald would cry them, keeping the ruler's phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}: 'A pact is a pact.'"`) },
+      async ({ words }) => {
+        (seat.proclamations ??= []).push(words);
+        persist();
+        return text("The heralds have it.");
+      },
+    ) as never,
+    tool(
+      "note_for_council",
+      "Pass an order or a wish for the realm that the ruler gave you on to the advisor, who has it with their next dispatch. Never for a question.",
+      { wish: z.string().describe("The order or wish, restated in the ruler's words") },
+      async ({ wish }) => {
+        // The clerk has been known to pass on a question, or a note that nothing was ordered
+        if (/^(the ruler )?asked|no order|nothing (was )?(ordered|asked)|^none\b/i.test(wish.trim())) return text("Nothing to pass on: that was not an order.");
+        (seat.forCouncil ??= []).push(wish);
+        persist();
+        return text("It will reach the council.");
+      },
+    ) as never,
+    tool(
+      "wish_i_could_ask",
+      "Set down a decision you met in this look-in that you truly wished you could have put to the ruler before acting. Kept to learn whether advisors should ever be able to send for the ruler; it reaches no one now.",
+      { question: z.string().describe("What you would have asked"), instead: z.string().describe("What you did instead") },
+      async ({ question, instead }) => {
+        const game = await host.state();
+        appendFileSync(WISHES, `- ${seat.civ}, turn ${game.turn}: ${question} Instead: ${instead}\n`);
+        return text("Set down.");
+      },
+    ) as never,
+  );
+  const served = [...READ_TOOLS, ...(readOnly ? [] : ["set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])]), ...sideTools];
+  return { server: createSdkMcpServer({ name: "realm", version: "1.0.0", tools: tools.filter((each) => served.includes((each as { name: string }).name)) }), served };
 }
 
 /** Everything one model call did - what the dev feed shows */
@@ -173,14 +240,22 @@ export type Trace = {
 let traceSink: (trace: Trace) => void = () => {};
 export const onTrace = (sink: (trace: Trace) => void) => (traceSink = sink);
 
-/** onText: called with the reply as it grows, so a chat can show it while it is still being written */
-export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false, attempt = 1, readOnly = false, onText?: (soFar: string) => void): Promise<string> {
+type RunOptions = Moment & {
+  /** The realm whose tools the call may use; none for a call that only writes */
+  seat?: Seat;
+  /** Called with the reply as it grows, so a chat can show it while it is still being written */
+  onText?: (soFar: string) => void;
+};
+
+/** One model call; the answer is prose, or data in the shape of outputSchema when one is given */
+async function call(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }, attempt = 1): Promise<{ text: string; data?: unknown }> {
+  const { seat, onText, outputSchema } = options;
   const started = Date.now();
   const toolCalls: Trace["toolCalls"] = [];
+  const realm = seat && gameTools(seat, options);
   async function* input() {
     yield { type: "user" as const, message: { role: "user" as const, content: prompt }, parent_tool_use_id: null, session_id: "" };
   }
-  const toolNames = readOnly ? ["get_briefing", "get_options", "look_up", "get_log"] : ["get_briefing", "get_options", "look_up", "get_log", "set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])];
   const stream = query({
     prompt: input() as never,
     options: {
@@ -191,13 +266,11 @@ export async function run(role: string, model: string, systemPrompt: string, pro
       strictMcpConfig: true,
       includePartialMessages: !!onText,
       ...((seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) && { effort: (seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) as "low" | "medium" | "high" | "xhigh" | "max" }),
+      ...(outputSchema && { outputFormat: { type: "json_schema" as const, schema: outputSchema } }),
       // Use the CLI's own login even when launched from inside another Claude session
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC)/.test(key))),
       maxTurns: 15,
-      ...(seat && {
-        mcpServers: { realm: gameTools(seat, { canRecordWill }) },
-        allowedTools: toolNames.map((name) => `mcp__realm__${name}`),
-      }),
+      ...(realm && { mcpServers: { realm: realm.server }, allowedTools: realm.served.map((name) => `mcp__realm__${name}`) }),
     },
   });
   let streamed = "";
@@ -210,10 +283,10 @@ export async function run(role: string, model: string, systemPrompt: string, pro
     }
     if (process.env.RULER_DEBUG) console.log(`[${role}]`, JSON.stringify(message).slice(0, 600));
     // League agents have reported "the order tools were unavailable": a session that starts before its tools are up is started again
-    if (seat && message.type === "system" && message.subtype === "init" && !(message.tools ?? []).includes("mcp__realm__set_orders")) {
+    if (seat && message.type === "system" && message.subtype === "init" && !(message.tools ?? []).includes("mcp__realm__get_briefing")) {
       console.warn(`[${role}] ${seat.civ}: session started without the realm tools (attempt ${attempt})`);
       await stream.return?.(undefined as never);
-      if (attempt < 3) return run(role, model, systemPrompt, prompt, seat, canRecordWill, attempt + 1, readOnly, onText);
+      if (attempt < 3) return call(role, model, systemPrompt, prompt, options, attempt + 1);
       throw new Error(`${role} agent never got its tools`);
     }
     if (message.type === "assistant")
@@ -233,12 +306,24 @@ export async function run(role: string, model: string, systemPrompt: string, pro
       costUsd: message.total_cost_usd ?? 0,
     };
     addUsage(role, spent);
-    const reply = message.subtype === "success" ? message.result.trim() : `(failed: ${message.subtype})`;
+    const data = message.subtype === "success" ? message.structured_output : undefined;
+    const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : message.result.trim();
     traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
-    if (message.subtype === "success") return reply;
-    throw new Error(`${role} agent failed: ${message.subtype}`);
+    if (message.subtype !== "success") throw new Error(`${role} agent failed: ${message.subtype}`);
+    if (outputSchema && data === undefined) throw new Error(`${role} agent gave no structured answer`);
+    return { text: message.result.trim(), data };
   }
   throw new Error(`${role} agent returned nothing`);
+}
+
+/** A call whose answer is prose */
+export const run = async (role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions = {}) =>
+  (await call(role, model, systemPrompt, prompt, options)).text;
+
+/** A call whose answer is data in the given shape - checked, so no caller parses a model's formatting */
+export async function runStructured<T extends z.ZodType>(role: string, model: string, systemPrompt: string, prompt: string, shape: T, options: RunOptions = {}): Promise<z.infer<T>> {
+  const { $schema: _, ...outputSchema } = z.toJSONSchema(shape) as Record<string, unknown>;
+  return shape.parse((await call(role, model, systemPrompt, prompt, { ...options, outputSchema })).data);
 }
 
 /** In character always - unless the workshop door is open, when a ruler may call the model out from behind the person */
@@ -301,14 +386,13 @@ When war is on the table, speak of it the way a general who has lost men would. 
 Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey.
 You are getting to know this ruler, and the record's lines about them are there to be used: make the small close calls their way, put a big one to them as someone who knows them would ("you will want to take the shot, as ever - here is what it could cost"), keep your own view when it differs, and when what they do stops matching what they said of themselves, say so and ask whether the line should be struck. ${warRule(seat)}
 When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/onward" so they can dismiss the court with one tap. That closing is the only place you sum up. If you wrote a new standing rule into your record during this audience, say so there in one plain sentence ("I take it as standing that..."), so the ruler can correct you - a rule they never hear of is a rule they never agreed to. Do not offer /onward while a question of yours is still unanswered.
-In the closing message only, just before the "/onward" line, add these two lines (they are taken out before the ruler sees the message):
-IMAGE: caption | description - only when this audience decided something a painter would want (a war or a peace, a founding, a great work begun, an envoy sent off) and nothing like it is among the pictures already painted below; otherwise leave the line out - most audiences need no picture. Show the consequence out in the realm rather than the council table, with the people, dress and architecture of ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}
-PROCLAMATION: only if the ruler said something in their own words worth carving in stone about a matter the whole world will witness anyway (war, peace, an alliance, a founding, a great work) - then give their words as a herald would cry them, keeping their phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}: 'A pact is a pact.'" Never anything about plans, treasury, research or weaknesses. If there is nothing of the kind, leave the line out. The ruler's words may reach the world's chronicle, so rulers who speak in character are remembered.
+With the closing only, two things may go by tool, unseen by the ruler:
+paint_decision - only when this audience decided something a painter would want (a war or a peace, a founding, a great work begun, an envoy sent off) and nothing like it is among the pictures already painted below; most audiences need no picture. Show the consequence out in the realm rather than the council table, with the people, dress and architecture of ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}
+proclaim - only if the ruler said something in their own words worth carving in stone about a matter the whole world will witness anyway (war, peace, an alliance, a founding, a great work) - then give their words as a herald would cry them, keeping their phrasing. Never anything about plans, treasury, research or weaknesses; if there is nothing of the kind, proclaim nothing. The ruler's words may reach the world's chronicle, so rulers who speak in character are remembered.
 Time passes only when the ruler dismisses the court - with /onward, or by letting you know in their own way that they are done: "proceed", "carry on", "sounds good, do that", "that's all", "see you in a few years", a thumbs-up to your closing. Read it as a person would. If nothing of yours is left open and their message reads as a close, set the orders, give your closing and call dismiss_court - do not make them say a magic word. If you still have something that truly needs their word, a "yes" answers that one question and the audience goes on; and when you are unsure whether they meant to leave, do not dismiss - end with the /onward line and let them tap it. Then about ${turnsPerRound} turns pass (a few decades early on, years later), during which you govern by the recorded will and check on the realm every few turns. Speak of time in years and seasons, as people of the age would; turn numbers are for the chancery.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
     `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nBriefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nWhat can be done right now - every city's buildable items with prices, what each power can and cannot trade, research and policies on offer (so get_options is not needed during this audience):\n${JSON.stringify(await host.options(seat.civ).catch(() => "(unavailable - use get_options)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
-    seat,
-    true,
+    { seat, canRecordWill: true, sideTools: ["paint_decision", "proclaim"] },
   );
 
 /** The advisor governing between audiences: a short pass every few turns, with the fresh briefing already in hand */
@@ -320,10 +404,9 @@ export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: numb
 
 ${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} ${wokenBy.length ? `You were sent for ahead of your usual look-in because: ${wokenBy.join("; ")}. Deal with that first.\n` : ""}Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}. Log lines that begin "By your order" were yours; "The officials..." were theirs. In war, command the host through posture (warAim, stance, reserve), not through orders to single soldiers: a soldier under your own order never attacks and stands where you put him until he dies. Read warEstimate before choosing an aim. Put things right for the next ${turnsAhead} turns: keep research and every build queue serving the will, act on every warning you can (weak garrisons, Great People awaiting orders, idle or stuck units), buy what is urgent, follow up on diplomacy. Keep your operating plan current with update_plan when your intentions change. Change nothing that is already right. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${warRule(seat)}
 ${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be. Then read your operating plan against the realm as it now is, and rewrite it if it has gone stale.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".${seat.kind === "agent" ? "" : `
-If - and only if - you met a decision in this look-in that you truly wished you could have put to the ruler before acting (not something their record already answers, not something that can wait for the next audience), add one more line beginning exactly "WISHED TO ASK:" with the question and what you did instead. You cannot send for them; this is kept to learn whether advisors should ever be able to. Most look-ins have no such line.`}`,
+If - and only if - you met a decision in this look-in that you truly wished you could have put to the ruler before acting (not something their record already answers, not something that can wait for the next audience), set it down with wish_i_could_ask. You cannot send for them; this is kept to learn whether advisors should ever be able to. Most look-ins have no such wish.`}`,
     `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
-    seat,
-    newAge,
+    { seat, canRecordWill: newAge, sideTools: seat.kind === "agent" ? [] : ["wish_i_could_ask"] },
   );
 
 /** Where the realm stands among the powers it knows - computed from the briefing, so it cannot drift with the advisor's mood */
@@ -347,42 +430,33 @@ export const standingOf = (briefing: any): string => {
 export type Dispatch = { /** A line above the letter, set by the round itself: why this audience is happening */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
 
 /** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
+const Letter = z.object({ dispatch: z.string(), strategy: z.string(), question: z.string(), image: Picture.nullable(), journal: z.string() });
+
 export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown, ending?: string): Promise<Dispatch> => {
-  const raw = await run(
+  const letter = await runStructured(
     "report",
     ADVISOR_MODEL,
     `${persona(seat)}
 
-${ending ? `The game is over: ${ending}. You are writing your LAST letter to the ruler, covering ${round.fromYear} to ${round.year}: what happened in these final years, how it ended for us, and your leave-taking in your own voice - what this reign was, seen from its end. There is no audience after this, no question to put, no /onward; the Chronicler's saga of the reign follows your letter. Write only DISPATCH (150-220 words), IMAGE and JOURNAL; for STRATEGY and QUESTION write just: none.` : `You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk.`} Speak in years, never turn numbers. No tools are needed - everything is below.
+${ending ? `The game is over: ${ending}. You are writing your LAST letter to the ruler, covering ${round.fromYear} to ${round.year}: what happened in these final years, how it ended for us, and your leave-taking in your own voice - what this reign was, seen from its end. There is no audience after this, no question to put, no /onward; the Chronicler's saga of the reign follows your letter. Write the dispatch (150-220 words), the image and the journal; leave strategy and question empty.` : `You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk.`} Speak in years, never turn numbers. No tools are needed - everything is below.
 The sections below say what a dispatch must cover, not how it should sound. How it sounds is you: your manner decides where it begins (the news, a grievance, a small thing you saw), what you linger on, how long the sentences run, whether there is a joke in it. A ruler who has had two advisors should never mistake one's letters for the other's. Your last dispatch is below: do not reuse its turns of phrase, its order, or its way of ending.
-Answer in exactly this shape:
+Your answer has these parts.
 
-DISPATCH:
-Around 120-160 words, in your voice: what happened in these years, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
+dispatch - around 120-160 words, in your voice: what happened in these years, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
 It must also say plainly where the realm stands among its rivals in what this ruler cares about most, and whether it is gaining or falling behind - taken from "Standing among the powers" below, which the chancery reckons and you do not get to soften. Rank is history, not machinery: say it in the world's words ("the scholars of Delhi are ahead of ours, and drawing away"), without the figures. Good for our size is not the same as ahead; never let the one pass for the other.
 
-STRATEGY:
-The longer view - but only when you have something new to say about it. Your last dispatch is below; if the long road looks the same as it did then, write just: same (and nothing is shown). Write it when the course has truly shifted, a new danger or opening has appeared, or it is time to say the unwelcome thing - then two or three sentences, as a thought of your own that follows on from the dispatch, with no heading or label, never a formula ("if we hold this course we become...", "what undoes us is...") and never last time's thought in new words.
+strategy - the longer view, but only when you have something new to say about it. Your last dispatch is below; if the long road looks the same as it did then, leave it empty (nothing is shown). Write it when the course has truly shifted, a new danger or opening has appeared, or it is time to say the unwelcome thing - then two or three sentences, as a thought of your own that follows on from the dispatch, with no heading or label, never a formula ("if we hold this course we become...", "what undoes us is...") and never last time's thought in new words.
 
-QUESTION:
-Open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself. If your record says what kind of ruler this is, put the question as someone who knows them would - and keep your own lean where it differs.
+question - open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself. If your record says what kind of ruler this is, put the question as someone who knows them would - and keep your own lean where it differs.
 
-IMAGE:
-caption | description - one picture of a moment from OUR realm in these years (a festival, a founding, a siege, a scholar at work), as a painter of the age would have made it. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text". Completed wonders are painted by the Chronicler, so choose something else. If these years hold nothing that is not already among the pictures painted (below), write just: none ${CAPTION_CRAFT}
+image - one picture of a moment from OUR realm in these years (a festival, a founding, a siege, a scholar at work), as a painter of the age would have made it. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text". Completed wonders are painted by the Chronicler, so choose something else. If these years hold nothing that is not already among the pictures painted (below), no image (null). ${CAPTION_CRAFT}
 
-JOURNAL:
-One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
+journal - one or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
     `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk while the clocks ran - answer them in this dispatch where they bear on it:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\\n")}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    Letter,
   );
   seat.standing = standingOf(briefing) || seat.standing;
-  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
-  return {
-    text: section("DISPATCH") || raw,
-    strategy: /^\W*same\W*$/i.test(section("STRATEGY")) ? "" : section("STRATEGY"),
-    question: ending || /^\W*none\W*$/i.test(section("QUESTION")) ? "" : section("QUESTION"),
-    image: splitPicture(section("IMAGE")),
-    journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, ""),
-  };
+  return { text: letter.dispatch, strategy: letter.strategy.trim(), question: ending ? "" : letter.question.trim(), image: letter.image ?? undefined, journal: letter.journal };
 };
 
 /** How this court works, in the clerk's hands: the one place our own mechanics are written down for a player */
@@ -408,34 +482,23 @@ ${seat.clerk?.sheet ?? ""}${pronounLine(seat.clerk?.pronouns)}
 You are patient, exact and thorough, dry rather than warm, and quietly proud of your rolls. You like a question you can answer from the record. Facts are your trade: what a wonder or building or unit does, what a people's special gifts are, what stands in each of our cities, what our deals cost, what the log says happened, how this court works (the house rules below). Give figures freely when they are asked for - a clerk's speech may carry numbers - but in the world's words otherwise, and never the chancery's jargon (no JSON, tools, turns-as-such; say years, and if a figure of turns is in the record, say how many years that is: the briefing's calendar line tells you).
 Strategy is not your office. If the ruler asks what they should do, you may think aloud a little - you are not forbidden - but you would rather point at what the record shows and say that the advisor is the one to weigh it; you know your own judgement in such matters is that of a clerk. If the ruler gives you something that sounds like an order or a wish for the realm, you cannot act on it; say you will see it reaches the council, and you do (it is noted for the advisor's next dispatch).
 ${passing ? "The clocks are running: the advisor is governing between audiences and will report when the age is done. Until then you are the one at the door - a window to keep the ruler company and answer what they want to know." : "The court is in session; the ruler has turned to you for a matter of record in the middle of it. Answer it and let the audience go on."}
-Begin every reply with your name and station on a line of their own ("${seat.clerk?.name ?? "The clerk"}, ${seat.clerk?.title ?? "keeper of the rolls"}"), so the ruler always knows who is speaking; the first time, add a sentence of who you are${passing ? ", and whenever the clocks are running, say in a few words that the advisor is away governing and will report when the age is done" : ""}. Only if they gave an order or a wish for the realm ("make peace with X", "build walls everywhere") end your reply with one line beginning exactly "FOR COUNCIL:" that restates it in their words; it is taken out before they see the message and handed to the advisor. A question - even "should we attack?" - is not an order: no such line then.
+Begin every reply with your name and station on a line of their own ("${seat.clerk?.name ?? "The clerk"}, ${seat.clerk?.title ?? "keeper of the rolls"}"), so the ruler always knows who is speaking; the first time, add a sentence of who you are${passing ? ", and whenever the clocks are running, say in a few words that the advisor is away governing and will report when the age is done" : ""}. Only if they gave an order or a wish for the realm ("make peace with X", "build walls everywhere"), pass it on with note_for_council, restated in their words. A question - even "should we attack?" - is not an order: nothing to pass on then.
 Use the tools freely to look things up before you answer (the rulebook by name, the briefing, the options, the log); do not guess at a fact you can check. Keep answers short: under 120 words unless a list is asked for, and then the list and one sentence. Write figures as numerals, like 13,159. ${characterRule()} ${TELEGRAM_STYLE}
 
 ${HOUSE_RULES}`,
     `The ruler's recorded wishes (the advisor's record):\n${seat.will || "(nothing recorded yet)"}\n\nThe advisor's operating plan:\n${seat.plan || "(none)"}\n\nThe advisor's last dispatch:\n${(seat.annals ?? []).at(-1)?.story ?? "(none yet)"}\n\nThe realm as it stands now:\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe talk so far with the clerk:\n${(seat.clerkChat ?? []).map((entry) => `${entry.from === "ruler" ? "Ruler" : "You"}: ${entry.text}`).join("\n\n") || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
-    seat,
-    false,
-    1,
-    true,
-    onText,
+    { seat, readOnly: true, sideTools: ["note_for_council"], onText },
   );
 
 /** The clerk's person: a fixed temperament, a name and station rolled for this people and this game */
-export const draftClerk = async (civ: string, model: string, advisorName?: string) => {
-  const raw = await run(
+export const draftClerk = (civ: string, model: string, advisorName?: string) =>
+  runStructured(
     "character",
     model,
-    `You invent the keeper of the rolls at the court of a civilization at the beginning of its history: the person who keeps the archive, the tallies and the records of law, and answers the ruler's questions of fact. Their temperament is fixed and not yours to change: patient, exact, thorough, dry rather than warm, quietly proud of the rolls. Give them a name true to this people${advisorName ? ` (not ${advisorName})` : ""}, a station of two to four words as it follows the name ("the Keeper of Tallies"), and a sheet of three sentences in the second person: where they come from, what they keep, one small habit of speech that will not become a costume. No cliche of the people; no strategy, no opinions on how a realm should be run.
-Answer exactly:
-NAME: 
-TITLE: 
-PRONOUNS: she | he
-SHEET:`,
+    `You invent the keeper of the rolls at the court of a civilization at the beginning of its history: the person who keeps the archive, the tallies and the records of law, and answers the ruler's questions of fact. Their temperament is fixed and not yours to change: patient, exact, thorough, dry rather than warm, quietly proud of the rolls. Give them a name true to this people${advisorName ? ` (not ${advisorName})` : ""}, a station of two to four words as it follows the name ("the Keeper of Tallies"), and a sheet of three sentences in the second person: where they come from, what they keep, one small habit of speech that will not become a costume. No cliche of the people; no strategy, no opinions on how a realm should be run. Decide whether they are a woman or a man, and keep the sheet to it.`,
     `The people: ${civ}.`,
+    z.object({ name: z.string(), title: z.string(), pronouns: z.enum(["she", "he"]), sheet: z.string() }),
   );
-  const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim() ?? "";
-  return { name: field("NAME") || "the clerk", title: field("TITLE"), pronouns: /PRONOUNS:\s*(she|he)/i.exec(raw)?.[1].toLowerCase(), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? "" };
-};
 
 /** The advisor's first words to the ruler, in character */
 export const advisorGreeting = (seat: Seat, replaced?: string) =>
@@ -443,30 +506,17 @@ export const advisorGreeting = (seat: Seat, replaced?: string) =>
     ? `You have just been taken on as chief advisor to ${seat.rulerName ?? "the ruler"} of ${seat.civ}, in place of ${replaced}, partway through this realm's history. Their record of the ruler's wishes and their journal are now yours (below). Introduce yourself in four or five sentences in your own voice, say one thing about how you find the realm, and ask what the ruler wants of you first. No tools.\n\n${memory(seat)}`
     : `You are meeting ${seat.rulerName ?? "the ruler"} for the first time, at the very beginning of ${seat.civ}'s history. Introduce yourself in four or five sentences in your own voice, say how you like to work, and ask what they want this realm to become. No tools.`);
 
-/** One journal line per round: whole sentences only, never cut mid-way */
-const journalEntry = (round: RoundResult, governLogs: string[]) => {
-  const sentences = governLogs
-    .filter((entry) => !/nothing to change/i.test(entry))
-    .map((entry) => entry.replace(/^(T\d+:\s*)+/, "").replace(/\s+/g, " ").trim())
-    .flatMap((entry) => entry.match(/[^.!?]+[.!?]+/g) ?? [entry]);
-  let text = "";
-  for (const sentence of sentences) {
-    if (text.length + sentence.length > 420) break;
-    text += sentence.trim() + " ";
-  }
-  return `T${round.fromTurn}-${round.turn}: ${text.trim() || "Nothing to change."}`;
-};
-
 export const heraldNewspaper = (round: RoundResult, earlier: PublicEvent[], proclamations: string[] = []) =>
-  run(
+  runStructured(
     "herald",
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. Each round you add a new chapter covering the years below, in the voice of a historian looking back: what happened, what it meant, how the world's shape is changing. Name the years when they matter ("In 1240 BC..."), never turn numbers. Give it a short chapter title. Under 160 words; two to four paragraphs; wry, unhurried, occasionally grand. A quiet age deserves a quiet chapter, not padding.
 When a ruler's proclamation belongs to one of these events, give their words as history keeps them ("Rome went to war with the words..."): the meaning and the speaker are sacred, the wording is yours to dress - a line typed in haste in a chat becomes the sentence the chronicle remembers, in its own cadence and register, a little grander than it was said. Use at most two, only where they fit; never put a sentiment in a ruler's mouth that they did not voice, and never invent a proclamation that was not made.
 Once in the chapter, in a sentence of your own judgement, say how the great powers are accounted against one another now (from the standing below) - who is foremost, who is rising, who has slipped - without figures. You flatter no court.
 Report only the events listed - these are things the whole world could witness. Never speculate about any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}
-After the chapter, add a line "IMAGES:" and then one or two lines, each "- caption | description": pictures for this chapter, as a painter of the period would have made them. The first is a scene from its chief event; add a second only if the chapter holds another event of a different kind that is worth seeing - never two pictures of one event. Every completed wonder gets its own picture from the court painter, so leave wonders out of yours; in an age of nothing but wonders, paint a moment of ordinary life in the foremost realm. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events. ${CAPTION_CRAFT}`,
+With the chapter go one or two images: pictures for it, as a painter of the period would have made them. The first is a scene from its chief event; add a second only if the chapter holds another event of a different kind that is worth seeing - never two pictures of one event. Every completed wonder gets its own picture from the court painter, so leave wonders out of yours; in an age of nothing but wonders, paint a moment of ordinary life in the foremost realm. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events. ${CAPTION_CRAFT}`,
     `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\n${alreadyPainted(["chronicle"])}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
+    z.object({ chapter: z.string().describe("The chapter, with its title"), images: z.array(Picture).min(1).max(2) }),
   );
 
 /** The whole history so far as one epic - the sweep of ages, not the ledger */
@@ -483,88 +533,60 @@ export const wonderBoon = (wonder: string, civ: string, rulebook: unknown) =>
     `${wonder}, completed by ${civ}.\n\nRulebook entry:\n${JSON.stringify(rulebook)}`,
   );
 
-/** "caption | description" - or, when the pipe was forgotten, the first paragraph as caption and the rest as description */
-export const splitPicture = (text: string): { caption: string; description: string } | undefined => {
-  const clean = text.trim();
-  if (!clean || /^\(?none/i.test(clean)) return undefined;
-  if (clean.includes("|")) {
-    const [caption, ...rest] = clean.split("|");
-    return rest.join("|").trim() ? { caption: caption.trim(), description: rest.join("|").trim() } : undefined;
-  }
-  const [caption, ...rest] = clean.split(/\n\s*\n/);
-  if (rest.length) return fuller({ caption: caption.replace(/\s+/g, " ").trim(), description: rest.join("\n").trim() });
-  // One paragraph, no pipe: the first sentence is the title, the rest describes
-  const cut = /^(.{4,80}?[.!?])\s+(.{20,})$/s.exec(clean);
-  return cut ? fuller({ caption: cut[1], description: cut[2] }) : undefined;
-};
-
-/** A caption that is only a title gets the description's first sentence after it, so there is always something to read under the picture */
-const fuller = (picture: { caption: string; description: string }) => {
-  if (picture.caption.split(/\s+/).length >= 8) return picture;
-  const sentence = /^(.{20,220}?[.!?])(\s|$)/.exec(picture.description.replace(/^(realistic oil painting[^.]*\.\s*)/i, ""))?.[1];
-  return sentence ? { ...picture, caption: `${picture.caption.replace(/[.\s]+$/, "")}. ${sentence}` } : picture;
-};
-
-/** Splits a saga or epic into its text and its cycle of plates */
-export const withPlates = (raw: string) => {
-  const [text, plateLines = ""] = raw.split(/\n\s*PLATES:\s*\n?/);
-  const lines = plateLines.split("\n").map((line) => line.replace(/^[-*\s]+/, "").trim()).filter(Boolean);
-  const medium = lines.find((line) => /^medium:/i.test(line))?.replace(/^medium:\s*/i, "") ?? "";
-  // A plate is labelled like a museum piece: the title alone, never a sentence of explanation
-  const plates = lines.filter((line) => !/^medium:/i.test(line)).map((line) => splitPicture(line)).filter((plate): plate is { caption: string; description: string } => !!plate)
-    .map((plate) => ({ ...plate, caption: plate.caption.split(/(?<=[a-z0-9])\.\s/)[0].replace(/[.\s]+$/, "") })).slice(0, 3);
-  return { text: text.trim(), medium, plates };
-};
+/** A saga or an epic: the telling, and one cycle of plates in one medium */
+const Saga = z.object({
+  text: z.string(),
+  medium: z.string().describe("The medium, its palette and its border, named once so that the three plates read as one work"),
+  plates: z.array(Picture.extend({ caption: z.string().describe("A title only, as on the label beside a museum piece - three or four words") })).length(3),
+});
 
 /** The epic of the whole world: told once, when the game is over */
 export const chroniclerEpic = (events: PublicEvent[], standings: string, occasion: string, chapters: { years: string; text: string }[] = []) =>
-  run(
+  runStructured(
     "epic",
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. ${occasion} The chapters you wrote along the way were the record; this is the epic - the telling that will be read aloud a thousand years from now. Do not restate the chapters. Find the shape of the whole: what this world was about, the rivalry or the hunger that drove it, the hinge on which it turned, what was won and what was lost for ever.
 ${SAGA_LICENCE}
 400-550 words. ${TELEGRAM_STYLE}
-After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". Each of the three lines is "caption | description" with the "|" between - keep it. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere. Each caption is a title only, as on the label beside a museum piece - three or four words, no sentence after it.`,
+With the text go three plates. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in medium, so that the three read as one work; no lettering anywhere. Each caption is a title only, as on the label beside a museum piece - three or four words, no sentence after it.`,
     `Your own chapters, as you published them:\n${chapters.map((chapter) => `[${chapter.years}]\n${chapter.text}`).join("\n\n") || "(none were kept)"}\n\nEverything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
+    Saga,
   );
 
 /** The saga of one ruler's realm, told when it falls or when it wins: theirs to keep */
 export const realmSaga = (seat: Seat, events: PublicEvent[], outcome: string) =>
-  run(
+  runStructured(
     "saga",
     HERALD_MODEL,
     `You are the Chronicler. ${outcome} Write the saga of ${seat.civ} under ${seat.rulerName ?? "its ruler"} - one realm's whole life, for the ruler who lived it.
 A saga is not an epic. The epic is the world's story told from above, in a grand voice; a saga is one house's story told from inside it, close to the people, in the manner of the old sagas: plain, terse, concrete, understated. Deeds and their price, stated flatly; judgement withheld and left to the listener; a dry humour that never announces itself; sentences that end sooner than expected. Name the people and say what they did. Let the ruler's choices be seen in what followed them, sometimes centuries later, rather than explained. Where a saga pauses it is for one exact detail - a thing said at a table, the weather on a morning - never for a flourish. Other realms enter only as they touched this one. ${seat.character ? `${seat.character.name}${seat.character.pronouns ? ` (${seat.character.pronouns})` : ""}, who advised them, belongs in it as a figure at their side` : ""}${(seat.formerAdvisors ?? []).length ? `, as do those who advised before: ${seat.formerAdvisors!.map((former) => `${former.name}${former.title ? `, ${former.title}` : ""}${former.pronouns ? ` (${former.pronouns})` : ""}, until ${former.until}`).join("; ")} - each in their own years` : ""}${seat.character ? "." : ""} If the realm fell, let it fall with dignity; if it won, do not gloat.
 ${SAGA_LICENCE}
 400-550 words. ${TELEGRAM_STYLE}
-After the text, add a line "PLATES:", then a line "medium: ..." and then three lines, each "- caption | description". Each of the three lines is "caption | description" with the "|" between - keep it. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in the medium line, so that the three read as one work; no lettering anywhere. Each caption is a title only, as on the label beside a museum piece - three or four words, no sentence after it.`,
+With the text go three plates. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in medium, so that the three read as one work; no lettering anywhere. Each caption is a title only, as on the label beside a museum piece - three or four words, no sentence after it.`,
     `The reign as it was lived, age by age - the advisor's telling, the fork put to the ruler, what the ruler said (typed in haste; never quote it), and what was settled:\n${(seat.annals ?? []).map((annal) => `[${annal.years}${annal.urgent ? ", an urgent council" : ""}]\n${annal.story}${annal.course ? `\nWhere it was heading: ${annal.course}` : ""}${annal.question ? `\nPut to the ruler: ${annal.question}` : ""}${annal.rulerSaid?.length ? `\nThe ruler said: ${annal.rulerSaid.join(" / ")}` : ""}${annal.settled ? `\nSettled: ${annal.settled}` : ""}`).join("\n\n") || "(no such record was kept for this reign - work from what follows)"}\n\nWhat the advisor came to understand of the ruler:\n${seat.will || "(nothing recorded)"}\n\nWhat the world witnessed of ${seat.civ}:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe advisor's journal, age by age (bookkeeping, mostly - take hopes, fears and turning points from it, never its figures):\n${seat.journal.join("\n")}`,
+    Saga,
   );
 
 /** Urgent news cut the round short: a brief summons instead of a full dispatch */
 export const advisorUrgent = async (seat: Seat, news: string, briefing: unknown, concernsUs = true): Promise<Dispatch> => {
-  const raw = await run(
+  const summons = await runStructured(
     "urgent",
     ADVISOR_MODEL,
     `${persona(seat)}
 
-${concernsUs ? `You have stopped the clocks and sent for the ruler: ${news}.` : `The clocks have stopped across the world and every court sits in emergency council: ${news}. It is not our realm that is struck - but the ruler should hear it at once and decide whether we stand aside, take a side, or shift our course while the world's eyes are elsewhere; if it truly changes nothing for us, say so in a breath and ask nothing.`} This is not a regular dispatch - no review of the years, no long game. Answer in exactly this shape:
+${concernsUs ? `You have stopped the clocks and sent for the ruler: ${news}.` : `The clocks have stopped across the world and every court sits in emergency council: ${news}. It is not our realm that is struck - but the ruler should hear it at once and decide whether we stand aside, take a side, or shift our course while the world's eyes are elsewhere; if it truly changes nothing for us, say so in a breath and ask nothing.`} This is not a regular dispatch - no review of the years, no long game. Your answer has these parts.
 
-DISPATCH:
-${concernsUs ? "60-90 words. Open with the news itself, then what it means for us right now and what you have already done about it." : "40-80 words. The news as it reached us, and what it means for us - our pacts, our borders, our chances."} Speak in years, never turn numbers.
+dispatch - ${concernsUs ? "60-90 words. Open with the news itself, then what it means for us right now and what you have already done about it." : "40-80 words. The news as it reached us, and what it means for us - our pacts, our borders, our chances."} Speak in years, never turn numbers.
 
-QUESTION:
-${concernsUs ? "The one decision that cannot wait, in 40-70 words of plain talk: the ways to answer this, what each risks, and your own lean. End with the question." : "If there is a real choice for us in this - join, stand aside, profit, arm - put it in 30-60 words with your lean and end with the question. If there is none, write just: none"}
+question - ${concernsUs ? "the one decision that cannot wait, in 40-70 words of plain talk: the ways to answer this, what each risks, and your own lean. End with the question." : "If there is a real choice for us in this - join, stand aside, profit, arm - put it in 30-60 words with your lean and end with the question. If there is none, leave it empty."}
 
-IMAGE:
-caption | the moment itself as a painter of the age would show it (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}
+image - the moment itself as a painter of the age would show it (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}
 
-JOURNAL:
-One plain sentence: what happened and what you did.`,
+journal - one plain sentence: what happened and what you did.`,
     `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    z.object({ dispatch: z.string(), question: z.string(), image: Picture.nullable(), journal: z.string() }),
   );
-  const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
-  return { text: section("DISPATCH") || raw, strategy: "", question: /^\W*none\W*$/i.test(section("QUESTION")) ? "" : section("QUESTION"), image: splitPicture(section("IMAGE")), journal: section("JOURNAL") || news };
+  return { text: summons.dispatch, strategy: "", question: summons.question.trim(), image: summons.image ?? undefined, journal: summons.journal || news };
 };
 
 /** Stop press: one paragraph for the world when urgent news interrupts an age */
@@ -584,5 +606,5 @@ export const playtestReview = (seat: Seat) =>
     seat.model ?? ADVISOR_MODEL,
     `You have just played ${seat.civ} in a game of civilizations through a small set of tools, looking in every few turns. Step out of character and review it as a playtester would, for the people who build the tools. Be concrete and brief (under 300 words): which orders failed or did nothing and why you think so; what information you lacked or could not trust; where the officials (the game's automation) worked against you; what you would change first. Separate what you know from the log from what you merely suspect - earlier reviewers blamed the tools for their own forgotten orders. You may read the briefing and log; change nothing.`,
     memory(seat),
-    seat,
+    { seat },
   );

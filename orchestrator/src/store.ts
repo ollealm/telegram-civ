@@ -23,6 +23,8 @@ export type Annal = { years: string; story: string; course?: string; question?: 
 
 export type Seat = {
   civ: string;
+  /** Which advisor bot speaks for this seat (its place in ADVISOR_n_BOT_TOKEN order); a sovereign's realm has none */
+  bot?: number;
   /** Advisors who served before the present one, for the saga */
   formerAdvisors?: { name: string; title?: string; pronouns?: string; until: string }[];
   /** The keeper of the rolls: answers questions of fact while time passes (and on /clerk). One per realm per game. */
@@ -31,8 +33,6 @@ export type Seat = {
   clerkChat?: { from: "ruler" | "clerk"; text: string }[];
   /** Things said to the clerk that sounded like orders: handed to the advisor at the next dispatch */
   forCouncil?: string[];
-  /** The name this seat's Telegram bot currently shows */
-  botName?: string;
   /** The ruler's message that is being answered right now - survives a restart, so it is answered after one */
   unanswered?: { text: string; thenGo: boolean };
   /** The picture of what the current audience decided, painted when the court is dismissed */
@@ -81,7 +81,7 @@ export type Picture = { turn: number; year: string; for: string; caption: string
 export type Usage = { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
 
 export type State = {
-  /** One seat per advisor bot, in ADVISOR_n_BOT_TOKEN order */
+  /** The realms at the table: each ruler's seat bound to its advisor bot, and the sovereigns', which have none */
   seats: Seat[];
   heraldChats: number[];
   usage: Record<string, Usage>;
@@ -91,6 +91,8 @@ export type State = {
   chapters?: { years: string; text: string }[];
   /** The name the world-history bot currently shows */
   heraldName?: string;
+  /** The name each advisor bot currently shows, by bot - it belongs to the bot, which keeps it between games */
+  botNames?: Record<number, string>;
   /** The closing epic has been told: the game is over */
   epicTold?: boolean;
   /** Pictures painted lately, so that nobody is shown the same scene twice */
@@ -113,6 +115,16 @@ const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "aud
 
 export const state: State = existsSync(FILE) ? { ...empty(), ...JSON.parse(readFileSync(FILE, "utf8")) } : empty();
 if (state.phase === "passing") state.phase = "audience"; // a round cut short by a restart is simply played again
+// A seat was once bound to a bot by its place in the list; a state file from then gets the binding written out
+state.seats.forEach((seat, index) => {
+  const legacy = seat as Seat & { botName?: string };
+  if (seat.kind !== "agent" && seat.bot === undefined) seat.bot = index;
+  if (legacy.botName !== undefined) {
+    (state.botNames ??= {})[seat.bot ?? index] = legacy.botName; // a sovereign's seat held the name of the bot at its place, too
+    delete legacy.botName;
+  }
+});
+delete (state as { roundInProgress?: unknown }).roundInProgress; // an older version's round guard, long unused
 
 export function persist() {
   mkdirSync(dirname(FILE), { recursive: true });
