@@ -6,7 +6,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, generateImage, onImageLog, paintedMap } from "./images.ts";
+import { advisorPortrait, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
 import { host, type RoundResult } from "./host.ts";
 import { playRound as runRound, roundLength } from "./round.ts";
 import { forgetPicture, persist, recordPicture, remember, state, type Picture, type Seat } from "./store.ts";
@@ -143,7 +143,7 @@ async function sendSaga(seat: Seat, outcome: string, publicly = true) {
   const bot = advisors[state.seats.indexOf(seat)];
   if (seat.chatId) await bot.api.sendMessage(seat.chatId, saga).catch((error: Error) => log("saga send failed", error.message));
   if (publicly) await broadcastHerald(saga); // a living realm's saga draws on its private journal, so it stays with its ruler
-  void sendPlates(medium, plates, async (png, caption) => {
+  await sendPlates(medium, plates, async (png, caption) => {
     if (seat.chatId) await bot.api.sendPhoto(seat.chatId, new InputFile(png, "plate.png"), { caption });
     if (publicly) for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
   });
@@ -156,7 +156,7 @@ async function sendEpic(occasion: string) {
   const history = [...events, ...spoken].sort((a, b) => a.turn - b.turn);
   const { text, medium, plates } = withPlates(await chroniclerEpic(history, standings, occasion, state.chapters ?? []));
   await broadcastHerald(text);
-  void sendPlates(medium, plates, async (png, caption) => {
+  await sendPlates(medium, plates, async (png, caption) => {
     for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
   });
 }
@@ -218,7 +218,10 @@ async function playRound() {
       state.epicTold = true;
       state.pendingRound = undefined;
       persist();
-      if (game.winner) await broadcastHerald(`The game is over: ${game.winner} has won a ${game.victoryType} victory.`);
+      await imagesIdle(); // the last age's pictures land before the closing words
+      const closing = game.winner ? `The game is over: ${game.winner} has won a ${game.victoryType} victory.` : "The game is over: the last ruler's realm has fallen.";
+      await broadcastHerald(closing);
+      for (const seat of state.seats) if (seat.chatId && seat.kind !== "agent" && !rulersLeft.includes(seat)) await advisors[state.seats.indexOf(seat)].api.sendMessage(seat.chatId, closing).catch(() => {});
       for (const seat of rulersLeft) await sendSaga(seat, game.winner === seat.civ ? `${seat.civ} has won the world - a ${game.victoryType} victory.` : `The world has been won by ${game.winner}; ${seat.civ} still stands, but not first.`).catch((error) => log("saga failed:", error.message));
       await sendEpic(game.winner ? `${game.winner} has won a ${game.victoryType} victory, and the story is complete.` : "The last ruler's realm has fallen, and with it the story the rulers were telling ends; the world goes on without them.").catch((error) => log("epic failed:", error.message));
     }

@@ -126,7 +126,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           seat.journal.push(`${finished.fromYear} to ${finished.year}: ${entry.length > 700 ? `${entry.slice(0, 700)}...` : entry || "A quiet age; nothing changed."}`);
           return;
         }
-        const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing));
+        const ending = finished.stoppedEarly && /has won/.test(finished.stoppedEarly) ? finished.stoppedEarly.replace(/[.!]+$/, "") : undefined;
+        const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing, ending));
+        if (ending) dispatch.heading = `The game is over: ${ending}. This is your advisor's last letter; the saga of your reign follows.`;
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
         seat.choices = undefined;
         (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, story: dispatch.text, course: dispatch.strategy || undefined, question: dispatch.question });

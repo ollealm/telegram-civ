@@ -13,6 +13,9 @@ const TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS ?? 240_000);
 const MAX_PARALLEL = 3;
 let running = 0;
 const waiting: (() => void)[] = [];
+const idlers: (() => void)[] = [];
+/** Resolves once no picture is being painted or queued - so closing words can follow the last picture of an age instead of racing it */
+export const imagesIdle = () => (running === 0 && waiting.length === 0 ? Promise.resolve() : new Promise<void>((resolve) => idlers.push(resolve)));
 
 export type ImageLog = (message: string) => void;
 let log: ImageLog = () => {};
@@ -90,6 +93,7 @@ export async function generateImage(prompt: string, references: Reference[] = []
   } finally {
     running--;
     waiting.shift()?.();
+    if (running === 0 && waiting.length === 0) idlers.splice(0).forEach((resolve) => resolve());
   }
 }
 

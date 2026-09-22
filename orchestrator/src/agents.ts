@@ -332,13 +332,13 @@ export const standingOf = (briefing: any): string => {
 export type Dispatch = { /** A line above the letter, set by the round itself: why this audience is happening */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
 
 /** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
-export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown): Promise<Dispatch> => {
+export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown, ending?: string): Promise<Dispatch> => {
   const raw = await run(
     "report",
     ADVISOR_MODEL,
     `${persona(seat)}
 
-You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk. Speak in years, never turn numbers. No tools are needed - everything is below.
+${ending ? `The game is over: ${ending}. You are writing your LAST letter to the ruler, covering ${round.fromYear} to ${round.year}: what happened in these final years, how it ended for us, and your leave-taking in your own voice - what this reign was, seen from its end. There is no audience after this, no question to put, no /onward; the Chronicler's saga of the reign follows your letter. Write only DISPATCH (150-220 words), IMAGE and JOURNAL; for STRATEGY and QUESTION write just: none.` : `You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk.`} Speak in years, never turn numbers. No tools are needed - everything is below.
 The sections below say what a dispatch must cover, not how it should sound. How it sounds is you: your manner decides where it begins (the news, a grievance, a small thing you saw), what you linger on, how long the sentences run, whether there is a joke in it. A ruler who has had two advisors should never mistake one's letters for the other's. Your last dispatch is below: do not reuse its turns of phrase, its order, or its way of ending.
 Answer in exactly this shape:
 
@@ -364,7 +364,7 @@ One or two plain sentences for your own journal: what you did this round and wha
   return {
     text: section("DISPATCH") || raw,
     strategy: /^\W*same\W*$/i.test(section("STRATEGY")) ? "" : section("STRATEGY"),
-    question: section("QUESTION"),
+    question: ending || /^\W*none\W*$/i.test(section("QUESTION")) ? "" : section("QUESTION"),
     image: splitPicture(section("IMAGE")),
     journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, ""),
   };
