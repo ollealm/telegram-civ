@@ -9,7 +9,7 @@ turns=$1; shift
 (( $# )) || { echo "usage: $0 <maxTurns> <seats> [<seats> ...]"; exit 1 }
 i=0
 for seats in "$@"; do
-  i=$((i + 1)); port=$((8766 + i)); dir="${PWD:h}/data/league-run$i"
+  i=$((i + 1)); port=$((8770 + i)); dir="${PWD:h}/data/league-run$i"
   # Only ever stop a RulerHost, and only on this league's port
   old=$(lsof -tiTCP:$port -sTCP:LISTEN 2>/dev/null)
   if [[ -n $old ]] && ps -o command= -p $old | grep -q RulerHost; then kill $old; sleep 2; fi
