@@ -96,10 +96,10 @@ function paint(picture: Picture, send: (png: Buffer) => Promise<unknown>) {
 /** A completed wonder always gets its picture - once */
 const wonderPictures = (round: RoundResult): Picture[] =>
   round.publicEvents.flatMap((event) => {
-    const [, civ, wonder] = /^(.+?) completed the wonder (.+?)\.?$/.exec(event.text) ?? [];
+    const [, civ, wonder, site] = /^(.+?) completed the wonder (.+?)(?: in (.+?))?\.?$/.exec(event.text) ?? [];
     if (!wonder || (state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(`${wonder},`))) return [];
     return [{ turn: event.turn, year: event.year, for: "chronicle", caption: `${wonder}, completed by ${civ} in ${event.year}`,
-      description: `${wonder}, newly completed by the ${civ}, as a painter of the period would have shown it: the great work itself in its landscape, from a vantage that shows its scale, in the light of a particular hour, with the builders, priests or crowds of the ${civ} around it in the dress of the age. Architecture and setting true to the ${civ}.` }];
+      description: `${wonder}, newly completed by the ${civ}${site ? ` in their city of ${site}` : ""}, as a painter of the period would have shown it. This is NOT the wonder of that name as it stands in our world: it is the ${civ}' own version, raised by ${civ} builders in ${civ} lands - so the great work takes their forms, materials and ornament, and stands in ${site ? `${site.split(" (")[0]} itself, among that city's houses, walls and people` : "one of their cities"}, with the land as described${site ? ` (${site.split(" (")[1]?.replace(/\)$/, "") ?? ""})` : ""}. The city must be recognisably the ${civ}' - its roofs, dress and crowds are theirs - and the wonder recognisably itself, transformed by their hands. From a vantage that shows its scale, in the light of a particular hour, with builders, priests or crowds in the dress of the age.` }];
   });
 
 /** /map: our own drawing at once (the painted one comes with each dispatch) */
