@@ -71,7 +71,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
               const wished = /WISHED TO ASK:\s*(.+)/.exec(entry)?.[1];
               if (wished) appendFileSync(WISHES, `- ${seat.civ}, turn ${now}: ${wished}\n`);
             })
-            .catch((error) => io.log(`govern pass for ${seat.civ} failed:`, error.message)),
+            // A look-in that never happened must not read as a quiet one: the dispatch is written from these notes, and so is the journal
+            .catch((error) => { io.log(`govern pass for ${seat.civ} failed:`, error.message); notes.get(seat.civ)!.push(`T${now}: (no look-in this year - the advisor could not be reached: ${String(error.message).slice(0, 80)}. The realm ran on the standing orders alone.)`); }),
         ),
       );
       const untilNextLookIn = GOVERN_EVERY - (played % GOVERN_EVERY);
