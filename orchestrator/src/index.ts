@@ -109,7 +109,7 @@ async function sendMap(bot: Bot, seat: Seat) {
 }
 
 /** The word that ends an audience and lets the years pass */
-const LEAVE = ["onward"];
+const LEAVE = ["onward", "go"]; // the advisors offer /onward; /go is the quick way to type it
 
 async function broadcastHerald(text: string) {
   for (const chatId of state.heraldChats) await herald.api.sendMessage(chatId, text).catch((error) => log("herald send failed", error.message));
