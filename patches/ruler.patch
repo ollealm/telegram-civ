@@ -132,23 +132,24 @@ index b997da7..67527d7 100644
                          .none { unique -> it.matchesFilter(unique.params[0], civInfo.state) } }
          if (settlerUnits.isEmpty()) return
 diff --git a/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt b/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt
-index 9eea632..e07f7a0 100644
+index 9eea632..ddf11ba 100644
 --- a/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/TradeAutomation.kt
-@@ -17,7 +17,12 @@ object TradeAutomation {
+@@ -17,7 +17,13 @@ object TradeAutomation {
  
  
      fun respondToTradeRequests(civInfo: Civilization, tradeAndChangeState: Boolean) {
 +        // War and peace are a ruler's own: for a ruled civ an offer of peace is neither taken nor refused by the automation, it waits for the ruler's answer
 +        val heldForRuler = if (civInfo.civID in com.unciv.logic.automation.RulerOverrides.ruledCivs)
 +            civInfo.tradeRequests.filter { request -> (request.trade.ourOffers + request.trade.theirOffers).any { it.name == com.unciv.Constants.peaceTreaty } }
++                .groupBy { it.requestingCiv }.values.map { it.first() } // a power that asks every turn is asking once
 +            else emptyList()
          for (tradeRequest in civInfo.tradeRequests.toList()) {
 +            if (tradeRequest in heldForRuler) continue
              val otherCiv = civInfo.gameInfo.getCivilization(tradeRequest.requestingCiv)
              // Treat 'no trade' state as if all trades are invalid - thus AIs will not update its "turns to offer"
              if (!tradeAndChangeState || !TradeEvaluation().isTradeValid(tradeRequest.trade, civInfo, otherCiv))
-@@ -47,6 +52,7 @@ object TradeAutomation {
+@@ -47,6 +53,7 @@ object TradeAutomation {
              }
          }
          civInfo.tradeRequests.clear()
@@ -210,10 +211,41 @@ index f180f26..bf9b91c 100644
  
      private fun useGoldForCityStates(civ: Civilization) {
 diff --git a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
-index 3fc1b5e..3c5213a 100644
+index 3fc1b5e..d4aac64 100644
 --- a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
-@@ -35,7 +35,10 @@ object HeadTowardsEnemyCityAutomation {
+@@ -20,7 +20,7 @@ object HeadTowardsEnemyCityAutomation {
+         // only focus on *attacking* 1 enemy at a time otherwise you'll lose on both fronts
+         val closestReachableEnemyCity = getEnemyCitiesByPriority(unit)
+             .firstOrNull { unit.movement.canReach(it.getCenterTile()) }
+-            ?: return false // No enemy city reachable
++            ?: return headTowardsRingOfAimedCity(unit) // No enemy city reachable
+ 
+         return headTowardsEnemyCity(
+             unit,
+@@ -30,12 +30,32 @@ object HeadTowardsEnemyCityAutomation {
+         )
+     }
+ 
++    /** A ruler's war aim whose gate is plugged (its approaches held, the rest mountain or sea) has no path to its centre - but the host can still
++     *  gather within striking range: engines to bombard, foot soldiers to fight for the approaches. The siege routine takes it from there. */
++    private fun headTowardsRingOfAimedCity(unit: MapUnit): Boolean {
++        val aim = com.unciv.logic.automation.RulerOverrides.postures[unit.civ.civID]?.warAim ?: return false
++        val city = unit.civ.getKnownCivs().filter { unit.civ.isAtWarWith(it) }.flatMap { it.cities }.firstOrNull { it.name == aim } ?: return false
++        val centre = city.getCenterTile()
++        val reach = if (unit.baseUnit.isRanged()) unit.getRange() else 2
++        if (centre.aerialDistanceTo(unit.currentTile) <= reach) return false // already in the ring: let attacking and the siege routine act
++        val ringTile = centre.getTilesInDistance(reach)
++            .filter { it.isLand && it != centre && unit.getDamageFromTerrain(it) <= 0 }
++            .sortedBy { it.aerialDistanceTo(unit.currentTile) }
++            .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it) }
++            ?: return false
++        unit.movement.headTowards(ringTile)
++        return true
++    }
++
+     @Readonly
+     fun getEnemyCitiesByPriority(unit: MapUnit): Sequence<City> {
          val enemies = unit.civ.getKnownCivs()
              .filter { unit.civ.isAtWarWith(it) && it.cities.isNotEmpty() }
  
@@ -1048,10 +1080,10 @@ index 0000000..351f1c7
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..be4e1fa
+index 0000000..d31775d
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1037 @@
+@@ -0,0 +1,1052 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1451,6 +1483,12 @@ index 0000000..be4e1fa
 +        applyPersonality(civ, standing)
 +        RulerOverrides.postures[civ.civID] = RulerOverrides.Posture(standing.warAim, standing.stance, standing.reserve)
 +        if (json.has("posture")) log(civ, "By your order: the host's posture is now ${standing.stance}" + (standing.warAim?.let { ", its aim $it" } ?: "") + (if (standing.reserve > 0) ", ${standing.reserve} soldiers kept home" else "") + ".")
++        standing.warAim?.let { aim -> civ.gameInfo.getCities().firstOrNull { it.name == aim }?.let { target ->
++            val centre = target.getCenterTile()
++            val gate = centre.neighbors.filter { it.isLand && !it.isImpassible() }.toList()
++            val held = gate.filter { it.militaryUnit != null && it.militaryUnit!!.civ != civ }
++            if (gate.isNotEmpty() && held.size == gate.size) rejected += "Note: every land approach to $aim is held by enemy soldiers (${held.joinToString { it.militaryUnit!!.name }}), the rest is mountain or sea. The host will gather within range and fight for the approaches; engines can bombard from two tiles off. Expect it to be slow."
++        } }
 +
 +        val done = ArrayList<String>()
 +        val failed = ArrayList<String>(rejected)
@@ -1946,6 +1984,15 @@ index 0000000..be4e1fa
 +                val perVolley = bestEngine?.let { volley(it, city) } ?: 0
 +                val volleysToBreak = if (perVolley > 0) (city.health + perVolley - 1) / perVolley else null
 +                val hitOnFoot = bestFoot?.let { cityHits(it, city) }
++                // The approaches: how many land tiles touch the city, and how many of those an enemy soldier stands on
++                val approaches = city.getCenterTile().neighbors.filter { it.isLand && !it.isImpassible() }.toList()
++                val heldApproaches = approaches.count { it.militaryUnit != null && it.militaryUnit!!.civ != civ }
++                val gate = when {
++                    approaches.isEmpty() -> "no land approach at all - only from the sea"
++                    heldApproaches == approaches.size -> "every land approach (${approaches.size}) is held by an enemy soldier; the rest is mountain or sea - engines can still bombard from two tiles off, but nothing walks in until the approaches are won"
++                    approaches.size <= 2 -> "only ${approaches.size} land approaches - a narrow gate, easily plugged"
++                    else -> "${approaches.size} land approaches, $heldApproaches held"
++                }
 +                val verdict = when {
 +                    bestEngine == null -> "no siege engines - the walls cannot be broken"
 +                    volleysToBreak!! <= siege.size * 2 -> "would fall within a few turns of concerted bombardment"
@@ -1954,7 +2001,7 @@ index 0000000..be4e1fa
 +                }
 +                mapOf("city" to city.name, "of" to city.civ.civName, "defence" to defence, "health" to city.health, "walls" to city.cityConstructions.builtBuildings.any { "Walls" in it || "Castle" in it },
 +                    "garrison" to city.getCenterTile().militaryUnit?.name, "tilesFromOurNearestCity" to civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(city.getCenterTile()) },
-+                    "oneVolleyOfOurBestEngineTakes" to perVolley, "volleysToBreak" to volleysToBreak, "cityShotAtOurBestFootSoldierTakes" to hitOnFoot, "verdict" to verdict)
++                    "oneVolleyOfOurBestEngineTakes" to perVolley, "volleysToBreak" to volleysToBreak, "cityShotAtOurBestFootSoldierTakes" to hitOnFoot, "approaches" to gate, "verdict" to verdict)
 +            }.sortedBy { it["volleysToBreak"] as Int? ?: 999 }
 +        val unseen = civ.getKnownCivs().filter { it.isMajorCiv() && it.isAlive() }.associate { other -> other.civName to other.cities.count { !it.getCenterTile().isExplored(civ) } }.filterValues { it > 0 }
 +        return mapOf(
