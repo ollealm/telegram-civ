@@ -11,7 +11,7 @@ const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
 /** What makes a picture worth painting. One instant, never a summary - and never the parade. */
 const PICTURE_CRAFT = `Choose one particular instant and put the viewer inside it: a focal figure doing something, a vantage a painter would pick (low among the men, over a shoulder, from the wall looking down), a named hour and weather. War is never soldiers marching through a city or standing in ranks - paint the moment it turned: ladders going up at the breach, horsemen mid-charge through a ford, a galley burning at night, archers loosing from a ridge, the rout, the keys handed over, the field the morning after. Peace is people at work or in the middle of something, not posing.`;
 /** What goes under a picture: not a label but a small piece of the story */
-const CAPTION_CRAFT = `The caption is what is read under the picture, so make it worth reading: a short title, a full stop, then one sentence (up to 25 words) saying what is happening here and why it mattered - in the world's words, no chancery terms, and without the character "|".`;
+const CAPTION_CRAFT = `The caption is what is read under the picture, so make it worth reading: a short title, a full stop, then one sentence (up to 25 words) saying what is happening here and why it mattered - in the world's words, no chancery terms. The whole caption goes BEFORE the "|" on the same line, the description after it; the "|" is the only place that character appears.`;
 const alreadyPainted = (viewers: string[]) => `Pictures already painted in recent years (never the same subject or composition again):\n${recentPictures(viewers)}`;
 
 /** Governing passes are the bulk of the token use; set GOVERN_MODEL=claude-sonnet-5 to make them ~5x cheaper */
@@ -346,12 +346,11 @@ One or two plain sentences for your own journal: what you did this round and wha
   );
   seat.standing = standingOf(briefing) || seat.standing;
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
-  const [caption, ...description] = section("IMAGE").split("|");
   return {
     text: section("DISPATCH") || raw,
     strategy: /^\W*same\W*$/i.test(section("STRATEGY")) ? "" : section("STRATEGY"),
     question: section("QUESTION"),
-    image: description.length ? { caption: caption.trim(), description: description.join("|").trim() } : undefined,
+    image: splitPicture(section("IMAGE")),
     journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, ""),
   };
 };
@@ -401,6 +400,18 @@ export const wonderBoon = (wonder: string, civ: string, rulebook: unknown) =>
     `You are the Chronicler. Under a painting of a newly finished wonder you add one sentence, at most 25 words, on what the great work gives the people who raised it - told as the world would tell it, never in the rulebook's terms (no plus signs, numbers, yields, "tiles" or "units"). "Its granaries feed the desert towns, and the caravans that cross the sands now pay their toll in ${civ}'s markets." Only what the rulebook entry below supports. Reply with the sentence alone.`,
     `${wonder}, completed by ${civ}.\n\nRulebook entry:\n${JSON.stringify(rulebook)}`,
   );
+
+/** "caption | description" - or, when the pipe was forgotten, the first paragraph as caption and the rest as description */
+export const splitPicture = (text: string): { caption: string; description: string } | undefined => {
+  const clean = text.trim();
+  if (!clean || /^\(?none/i.test(clean)) return undefined;
+  if (clean.includes("|")) {
+    const [caption, ...rest] = clean.split("|");
+    return rest.join("|").trim() ? { caption: caption.trim(), description: rest.join("|").trim() } : undefined;
+  }
+  const [caption, ...rest] = clean.split(/\n\s*\n/);
+  return rest.length ? { caption: caption.replace(/\s+/g, " ").trim(), description: rest.join("\n").trim() } : undefined;
+};
 
 /** Splits a saga or epic into its text and its cycle of plates */
 export const withPlates = (raw: string) => {
@@ -459,8 +470,7 @@ One plain sentence: what happened and what you did.`,
     `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
   );
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
-  const [caption, ...description] = section("IMAGE").split("|");
-  return { text: section("DISPATCH") || raw, strategy: "", question: /^\W*none\W*$/i.test(section("QUESTION")) ? "" : section("QUESTION"), image: description.length ? { caption: caption.trim(), description: description.join("|").trim() } : undefined, journal: section("JOURNAL") || news };
+  return { text: section("DISPATCH") || raw, strategy: "", question: /^\W*none\W*$/i.test(section("QUESTION")) ? "" : section("QUESTION"), image: splitPicture(section("IMAGE")), journal: section("JOURNAL") || news };
 };
 
 /** Stop press: one paragraph for the world when urgent news interrupts an age */

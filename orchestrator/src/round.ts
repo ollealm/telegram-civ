@@ -1,7 +1,7 @@
 // One round of play, shared by the Telegram bots and the test harness:
 // the advisors govern every few turns, time passes, then dispatches and the Chronicler's chapter go out.
 
-import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, type Dispatch } from "./agents.ts";
+import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, splitPicture, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -138,9 +138,10 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         .events()
         .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed))
         .then((raw) => {
-          const [chapter, imageLines = ""] = raw.split(/\n\s*IMAGES:\s*\n?/);
-          const images = imageLines.split("\n").map((line) => line.replace(/^[-*\s]+/, "").split("|")).filter((parts) => parts.length >= 2)
-            .map(([caption, ...rest]) => ({ caption: caption.trim(), description: rest.join("|").trim() })).slice(0, 2);
+          // The chapter is everything before the first IMAGES:; the pictures are whichever block carries descriptions (a model sometimes lists captions first and the full lines after)
+          const [chapter, ...blocks] = raw.split(/\n\s*IMAGES:\s*\n?/);
+          const images = blocks.flatMap((block) => block.split("\n").map((line) => splitPicture(line.replace(/^[-*\s]+/, ""))).filter((picture): picture is { caption: string; description: string } => !!picture))
+            .filter((picture, index, all) => all.findIndex((other) => other.caption === picture.caption) === index).slice(0, 2);
           (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter.trim() });
           return io.chronicle(chapter.trim(), images, finished);
         }),
