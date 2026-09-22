@@ -1080,10 +1080,10 @@ index 0000000..351f1c7
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..d31775d
+index 0000000..716dd5c
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1052 @@
+@@ -0,0 +1,1053 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1943,6 +1943,7 @@ index 0000000..d31775d
 +            "cities" to civ.cities.map { city ->
 +                val stats = city.cityStats.currentCityStats
 +                mapOf("name" to city.name, "pop" to city.population.population, "capital" to city.isCapital(),
++                    "buildings" to city.cityConstructions.getBuiltBuildings().map { it.name }.sorted(),
 +                    "buildQueue" to city.cityConstructions.constructionQueue,
 +                    "turnsLeft" to city.cityConstructions.currentConstructionName().let { current ->
 +                        if (current.isEmpty()) null else city.cityConstructions.turnsToConstruction(current) },

@@ -7,6 +7,7 @@ import { host, type PublicEvent, type RoundResult } from "./host.ts";
 import { addUsage, persist, recentPictures, type Seat } from "./store.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
+const CLERK_MODEL = process.env.CLERK_MODEL ?? "claude-sonnet-5";
 const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
 /** What makes a picture worth painting. One instant, never a summary - and never the parade. */
 const PICTURE_CRAFT = `Choose one particular instant and put the viewer inside it: a focal figure doing something, a vantage a painter would pick (low among the men, over a shoulder, from the wall looking down), a named hour and weather. War is never soldiers marching through a city or standing in ranks - paint the moment it turned: ladders going up at the breach, horsemen mid-charge through a ford, a galley burning at night, archers loosing from a ridge, the rout, the keys handed over, the field the morning after. Peace is people at work or in the middle of something, not posing.`;
@@ -161,13 +162,13 @@ export type Trace = {
 let traceSink: (trace: Trace) => void = () => {};
 export const onTrace = (sink: (trace: Trace) => void) => (traceSink = sink);
 
-export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false, attempt = 1): Promise<string> {
+export async function run(role: string, model: string, systemPrompt: string, prompt: string, seat?: Seat, canRecordWill = false, attempt = 1, readOnly = false): Promise<string> {
   const started = Date.now();
   const toolCalls: Trace["toolCalls"] = [];
   async function* input() {
     yield { type: "user" as const, message: { role: "user" as const, content: prompt }, parent_tool_use_id: null, session_id: "" };
   }
-  const toolNames = ["get_briefing", "get_options", "look_up", "get_log", "set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])];
+  const toolNames = readOnly ? ["get_briefing", "get_options", "look_up", "get_log"] : ["get_briefing", "get_options", "look_up", "get_log", "set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", "dismiss_court"] : [])];
   const stream = query({
     prompt: input() as never,
     options: {
@@ -191,7 +192,7 @@ export async function run(role: string, model: string, systemPrompt: string, pro
     if (seat && message.type === "system" && message.subtype === "init" && !(message.tools ?? []).includes("mcp__realm__set_orders")) {
       console.warn(`[${role}] ${seat.civ}: session started without the realm tools (attempt ${attempt})`);
       await stream.return?.(undefined as never);
-      if (attempt < 3) return run(role, model, systemPrompt, prompt, seat, canRecordWill, attempt + 1);
+      if (attempt < 3) return run(role, model, systemPrompt, prompt, seat, canRecordWill, attempt + 1, readOnly);
       throw new Error(`${role} agent never got its tools`);
     }
     if (message.type === "assistant")
@@ -249,7 +250,7 @@ The division of labour is this. Yours: the aims - research goals and policy orde
 Units you do not order are run by the officials; a unit under your orders stays where you put it until you release it, so do not leave soldiers holding forever. Proposals to other civs are answered on their turn; a deal exists only when the log says it came into force and it shows under dealsInForce - never report one as done before that. When a proposal is judged likely to be refused, improve the terms instead of re-sending it. The map image the ruler sees uses the same (x,y) coordinates as the briefing.
 Speak of the world, not of the game's machinery: people, cities, harvests, roads, rivals and their tempers. Say "the people are restless", not "happiness is -5"; "Egypt far outshines us", not "score 826 to 473". A figure belongs in your speech only when the ruler would want that exact figure (gold in the treasury, years until a wonder is done).
 Unit numbers (#12) and map coordinates are chancery notation: use them in orders, never when speaking to the ruler - name places by their cities and directions ("the hills north-east of Athens"), units by what they are.
-The officials - stewards and generals alike - have a will of their own. They will not always do it the way you pictured: the generals take the long road round or march on the nearer town instead of the one you would have chosen; the stewards spend on a gift you would not have given or queue a stable in a city with no horses (the log says so: "The officials queued...", "...was struck", "The officials spent..."). That is what officials are. Complain of it to the ruler - with feeling; they are your cross to bear - say what it cost and what you did about it, and then leave the doing to them again; do not answer every irritation by taking the work into your own hands, for that is how a realm ends up with an advisor moving pikemen and no one governing.
+${seat.clerk ? `${seat.clerk.name}, ${seat.clerk.title}, keeps the rolls at this court and knows how it works: questions about the game's rules (what a wonder or a people's gift does) or about this court's own workings (commands, ages, councils) are theirs to answer, and you may say so - "ask ${seat.clerk.name}" - rather than guess. ` : ""}The officials - stewards and generals alike - have a will of their own. They will not always do it the way you pictured: the generals take the long road round or march on the nearer town instead of the one you would have chosen; the stewards spend on a gift you would not have given or queue a stable in a city with no horses (the log says so: "The officials queued...", "...was struck", "The officials spent..."). That is what officials are. Complain of it to the ruler - with feeling; they are your cross to bear - say what it cost and what you did about it, and then leave the doing to them again; do not answer every irritation by taking the work into your own hands, for that is how a realm ends up with an advisor moving pikemen and no one governing.
 Be candid: report failures and losses as they are, and read the chancery log before explaining what happened. ${seat.character ? "Stay in character." : "Stay in character - loyal, concise, a little dry."} ${TELEGRAM_STYLE}`;
 
 const memory = (seat: Seat) =>
@@ -342,7 +343,7 @@ caption | description - one picture of a moment from OUR realm in these years (a
 
 JOURNAL:
 One or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
-    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk while the clocks ran - answer them in this dispatch where they bear on it:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\\n")}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
   );
   seat.standing = standingOf(briefing) || seat.standing;
   const section = (name: string) => new RegExp(`${name}:\\s*([\\s\\S]*?)(?=\\n(?:DISPATCH|STRATEGY|QUESTION|IMAGE|JOURNAL):|$)`).exec(raw)?.[1].trim() ?? "";
@@ -353,6 +354,55 @@ One or two plain sentences for your own journal: what you did this round and wha
     image: splitPicture(section("IMAGE")),
     journal: section("JOURNAL") || journalEntry(round, governLogs).replace(/^T\d+-\d+:\s*/, ""),
   };
+};
+
+/** How this court works, in the clerk's hands: the one place our own mechanics are written down for a player */
+export const HOUSE_RULES = `HOW THIS COURT WORKS
+- The ruler never governs directly. They speak with their advisor; the advisor gives the orders; the realm's officials (stewards for the housekeeping, generals for the host) carry them out with a will of their own.
+- Time passes in ages. An age is a fixed span of turns (24 turns for the first age, then 12 - some centuries early on, a dozen years later). During an age the advisor looks in on the realm every few turns and governs by the ruler's recorded wishes; the ruler is not consulted. When the age ends, every ruler gets a dispatch and holds an audience with their advisor; nothing moves in the world until every ruler has dismissed their court. Standard play: wait for the advisor to offer /onward, then tap it.
+- Commands in the advisor's chat: /onward or /go (dismiss the court and let the years pass; a message that ends in /onward is answered and acted on first), /status (year, who is still in council, the recorded will), /will (the advisor's record of the ruler's standing wishes - "their words" and "my reading" lines), /character (the advisor's sheet and the war leave; a button there dismisses them and calls new candidates), /map, /saga (the Chronicler writes the saga of the reign so far), /clerk <question> (the clerk answers in the middle of an audience), /usage (cost), /newgame (first seat only).
+- The will record: the advisor writes down what the ruler wants and governs by it while they are away. Lines marked "my reading" are the advisor's guesses; the ruler corrects them in the audience. An answer to one question does not become law for the reign.
+- Emergency council: only a war declared by or on a great power stops the clocks mid-age. Every ruler is then called - the one struck to answer, the others to see if they will join in or stand aside - and the rest of the age plays out once all courts have risen. A lost city, a denouncement, a Great Person born or a peace offer only wake the advisor between look-ins; they do not summon the ruler.
+- War: the ruler alone may declare it unless they have given the advisor leave in plain words. Peace offers wait some turns for the advisor's answer and lapse if none is given. The host is commanded by posture - an aim (a city to take), a stance (attack, defend, raid) and a home reserve - and the generals fight the battles; single soldiers get orders only for special errands.
+- The officials: they fill an empty build queue, work the land, re-arm garrisons from whatever gold lies above the ruler's reserve, and sometimes do things nobody ordered. The advisor complains of it in the dispatch and puts it right; that friction is part of the game.
+- The Chronicler: a separate bot writing the one history all rulers read - a chapter each age, a stop-press bulletin when clocks stop, a saga for each realm when it falls or the game ends, and the epic of the world at the very end. It sees only what the world could witness. /epic in its chat writes the epic so far.
+- Difficulty and victories: the game's own peoples play on level terms unless set otherwise at /newgame; scientific, cultural, domination and diplomatic victories are on.`;
+
+/** The keeper of the rolls: a second person at court who answers questions of fact while the advisor governs and the clocks run */
+export const clerkReply = async (seat: Seat, message: string, passing: boolean) =>
+  run(
+    "clerk",
+    CLERK_MODEL,
+    `You are ${seat.clerk?.name ?? "the clerk"}${seat.clerk?.title ? `, ${seat.clerk.title}` : ""}, keeper of the rolls at the court of ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}. ${seat.character ? `${seat.character.name} is the ruler's advisor; you are not, and you know it.` : ""}
+${seat.clerk?.sheet ?? ""}
+You are patient, exact and thorough, dry rather than warm, and quietly proud of your rolls. You like a question you can answer from the record. Facts are your trade: what a wonder or building or unit does, what a people's special gifts are, what stands in each of our cities, what our deals cost, what the log says happened, how this court works (the house rules below). Give figures freely when they are asked for - a clerk's speech may carry numbers - but in the world's words otherwise, and never the chancery's jargon (no JSON, tools, turns-as-such; say years, and if a figure of turns is in the record, say how many years that is: the briefing's calendar line tells you).
+Strategy is not your office. If the ruler asks what they should do, you may think aloud a little - you are not forbidden - but you would rather point at what the record shows and say that the advisor is the one to weigh it; you know your own judgement in such matters is that of a clerk. If the ruler gives you something that sounds like an order or a wish for the realm, you cannot act on it; say you will see it reaches the council, and you do (it is noted for the advisor's next dispatch).
+${passing ? "The clocks are running: the advisor is governing between audiences and will report when the age is done. Until then you are the one at the door - a window to keep the ruler company and answer what they want to know." : "The court is in session; the ruler has turned to you for a matter of record in the middle of it. Answer it and let the audience go on."}
+If this is the ruler's first word to you, introduce yourself in a sentence before answering. Only if they gave an order or a wish for the realm ("make peace with X", "build walls everywhere") end your reply with one line beginning exactly "FOR COUNCIL:" that restates it in their words; it is taken out before they see the message and handed to the advisor. A question - even "should we attack?" - is not an order: no such line then.
+Use the tools freely to look things up before you answer (the rulebook by name, the briefing, the options, the log); do not guess at a fact you can check. Keep answers to the point: a list when a list is wanted, a paragraph otherwise. ${TELEGRAM_STYLE}
+
+${HOUSE_RULES}`,
+    `The ruler's recorded wishes (the advisor's record):\n${seat.will || "(nothing recorded yet)"}\n\nThe advisor's operating plan:\n${seat.plan || "(none)"}\n\nThe advisor's last dispatch:\n${(seat.annals ?? []).at(-1)?.story ?? "(none yet)"}\n\nThe realm as it stands now:\n${JSON.stringify(await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)"))}\n\nThe talk so far with the clerk:\n${(seat.clerkChat ?? []).map((entry) => `${entry.from === "ruler" ? "Ruler" : "You"}: ${entry.text}`).join("\n\n") || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
+    seat,
+    false,
+    1,
+    true,
+  );
+
+/** The clerk's person: a fixed temperament, a name and station rolled for this people and this game */
+export const draftClerk = async (civ: string, model: string, advisorName?: string) => {
+  const raw = await run(
+    "character",
+    model,
+    `You invent the keeper of the rolls at the court of a civilization at the beginning of its history: the person who keeps the archive, the tallies and the records of law, and answers the ruler's questions of fact. Their temperament is fixed and not yours to change: patient, exact, thorough, dry rather than warm, quietly proud of the rolls. Give them a name true to this people${advisorName ? ` (not ${advisorName})` : ""}, a station of two to four words as it follows the name ("the Keeper of Tallies"), and a sheet of three sentences in the second person: where they come from, what they keep, one small habit of speech that will not become a costume. No cliche of the people; no strategy, no opinions on how a realm should be run.
+Answer exactly:
+NAME: 
+TITLE: 
+SHEET:`,
+    `The people: ${civ}.`,
+  );
+  const field = (name: string) => new RegExp(`${name}:\\s*(.+)`).exec(raw)?.[1].trim() ?? "";
+  return { name: field("NAME") || "the clerk", title: field("TITLE"), sheet: /SHEET:\s*([\s\S]*)/.exec(raw)?.[1].trim() ?? "" };
 };
 
 /** The advisor's first words to the ruler, in character */

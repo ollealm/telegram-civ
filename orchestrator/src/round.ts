@@ -130,6 +130,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
         seat.choices = undefined;
         (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, story: dispatch.text, course: dispatch.strategy || undefined, question: dispatch.question });
+        seat.forCouncil = undefined; // what was left with the clerk has now been answered
         remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n") });
         await io.dispatch(seat, dispatch, finished);
       }),

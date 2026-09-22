@@ -21,6 +21,12 @@ export type Annal = { years: string; story: string; course?: string; question?: 
 
 export type Seat = {
   civ: string;
+  /** The keeper of the rolls: answers questions of fact while time passes (and on /clerk). One per realm per game. */
+  clerk?: { name: string; title: string; sheet: string };
+  /** The last few exchanges with the clerk */
+  clerkChat?: { from: "ruler" | "clerk"; text: string }[];
+  /** Things said to the clerk that sounded like orders: handed to the advisor at the next dispatch */
+  forCouncil?: string[];
   /** The name this seat's Telegram bot currently shows */
   botName?: string;
   /** The ruler's message that is being answered right now - survives a restart, so it is answered after one */

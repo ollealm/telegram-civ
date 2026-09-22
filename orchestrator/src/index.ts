@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, realmSaga, withPlates, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, draftClerk, realmSaga, withPlates, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -308,6 +308,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     try {
       seat().character = { name: chosen.name, title: chosen.title, sheet: chosen.sheet };
       void wearName();
+      if (!seat().clerk) draftClerk(seat().civ, ADVISOR_MODEL, chosen.name).then((made) => { seat().clerk = made; persist(); }).catch((error) => log("clerk drafting failed:", error.message));
       seat().setup = undefined;
       seat().candidates = undefined;
       seat().rerolled = undefined;
@@ -428,6 +429,27 @@ function setUpAdvisor(bot: Bot, index: number) {
   const canHoldAudience = () => !seat().fallen && state.phase === "audience" && !!seat().character;
   bot.command(LEAVE, (ctx) => (ctx.match.trim() && canHoldAudience() ? audience(ctx, ctx.match.trim(), true) : dismiss((text) => ctx.reply(text), true)));
 
+  /** The keeper of the rolls answers: while the clocks run, on /clerk, or when addressed by name. Read-only; anything that sounded like an order goes to the council. */
+  const clerk = (ctx: Context, message: string) => {
+    queue = queue.then(async () => {
+      try {
+        if (!seat().clerk) { seat().clerk = await draftClerk(seat().civ, ADVISOR_MODEL, seat().character?.name); persist(); }
+        const passing = state.phase === "passing";
+        const raw = await whileTyping(bot, ctx.chat!.id, clerkReply(seat(), message, passing));
+        const forCouncil = /^FOR COUNCIL:\s*(.+)$/m.exec(raw)?.[1].trim();
+        const reply = raw.replace(/^FOR COUNCIL:.*\n?/gm, "").trim();
+        if (forCouncil && !/^(the ruler )?asked|no order|nothing (was )?(ordered|asked)|none\b/i.test(forCouncil)) (seat().forCouncil ??= []).push(forCouncil);
+        (seat().clerkChat ??= []).push({ from: "ruler", text: message }, { from: "clerk", text: reply });
+        if (seat().clerkChat!.length > 12) seat().clerkChat!.splice(0, seat().clerkChat!.length - 12);
+        persist();
+        await ctx.reply(reply);
+      } catch (error) {
+        log("clerk failed:", error);
+        await ctx.reply("The clerk has mislaid the roll. Ask again in a moment.").catch(() => {});
+      }
+    });
+  };
+
   /** One audience at a time per seat, so replies stay in order */
   /** thenGo: the ruler ended their message with /go - answer it, act on it, and let time pass without another word from them */
   const audience = (ctx: Pick<Context, "reply"> & { chat?: { id: number } }, message: string, thenGo = false) => {
@@ -486,6 +508,9 @@ function setUpAdvisor(bot: Bot, index: number) {
     await ctx.reply("The Chronicler is writing...");
     await sendSaga(seat(), seat().fallen ? `${seat().civ} has fallen.` : `${seat().civ} still stands; its ruler has asked for the saga so far.`, !!seat().fallen || !!state.epicTold).catch((error) => log("saga failed:", error.message));
   });
+
+  // The keeper of the rolls, in the middle of an audience or at any hour
+  bot.command("clerk", (ctx) => (ctx.match.trim() ? clerk(ctx, ctx.match.trim()) : ctx.reply(seat().clerk ? `${seat().clerk!.name}, ${seat().clerk!.title}, keeps the rolls here. Ask: /clerk what does the Great Library do` : "The keeper of the rolls answers questions of fact - the rules, our cities, our deals, how this court works. Ask: /clerk what does the Great Library do")));
 
   bot.command("usage", (ctx) => ctx.reply(usageSummary()));
 
@@ -569,7 +594,9 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.on("message:text", async (ctx) => {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
+    if (state.phase === "passing" && seat().character) return clerk(ctx, ctx.message.text);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
+    if (seat().clerk && new RegExp(`^\\W*${seat().clerk!.name.split(" ")[0]}\\b`, "i").test(ctx.message.text)) return clerk(ctx, ctx.message.text);
     if (seat().setup && !seat().civ) return choosePeople(ctx, ctx.message.text);
     if (seat().setup) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
     if (state.phase === "setup") return seat().character ? ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.") : beginSetup(ctx);
