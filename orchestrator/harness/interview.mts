@@ -32,7 +32,7 @@ const QUESTIONS = `1. How has your reign gone so far, as you see it?
 5. Anything else you have been sitting with that these questions did not ask about?`;
 
 for (const seat of state.seats) {
-  const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? seat : undefined, false, 1, true).catch(
+  const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? { seat, readOnly: true } : {}).catch(
     (error) => `(interview failed: ${error.message})`,
   );
   console.log(`\n=== ${seat.civ} - ${seat.character?.name} (${seat.model}) ===\n${answer}\n`);

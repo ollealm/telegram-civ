@@ -43,8 +43,9 @@ onTrace((trace) => {
 const nations = (await host.nations()).map((nation) => nation.name).sort(() => Math.random() - 0.5);
 state.seats = models.map((model, index): Seat => ({ civ: nations[index], kind: "agent", model, will: "", journal: [], chat: [], ready: false }));
 for (const seat of state.seats) {
-  seat.character = await draftSovereign(seat.civ, seat.model!).then(({ name, title, sheet }) => ({ name, title, sheet }));
-  say(`${seat.civ}: ${seat.character.name} on ${seat.model}`);
+  const { name, title, pronouns, sheet } = await draftSovereign(seat.civ, seat.model!);
+  seat.character = { name, title, pronouns, sheet };
+  say(`${seat.civ}: ${name} on ${seat.model}`);
 }
 const others = nations.slice(models.length, models.length + gameAi);
 await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, cityStates: 4 });
@@ -69,7 +70,7 @@ for (;;) {
   if (game.winner || round.turn >= maxTurns || game.majorCivs.filter((civ) => civ.alive).length < 2) {
     say(game.winner ? `${game.winner} (${modelOf(game.winner)}) won a ${game.victoryType} victory` : "The league ends here.");
     const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
-    say("\n" + (await chroniclerEpic(await host.events(), standings, "This history has reached its end.")));
+    say("\n" + (await chroniclerEpic(await host.events(), standings, "This history has reached its end.")).text);
     for (const seat of state.seats) {
       const review = await playtestReview(seat).catch((error) => `(review failed: ${error.message})`);
       say(`\n=== PLAYTEST REVIEW: ${seat.civ} (${seat.model}, ${seat.character?.name}) ===\n${review}\n`);

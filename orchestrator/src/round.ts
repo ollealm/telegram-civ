@@ -1,13 +1,9 @@
 // One round of play, shared by the Telegram bots and the test harness:
 // the advisors govern every few turns, time passes, then dispatches and the Chronicler's chapter go out.
 
-import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, splitPicture, type Dispatch } from "./agents.ts";
+import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
 import { persist, remember, state, type Seat } from "./store.ts";
-
-const WISHES = join(process.env.RULER_STATE_FILE ? join(process.env.RULER_STATE_FILE, "..") : "../data/game", "wished-to-ask.md");
 
 const TURNS_PER_ROUND = Number(process.env.TURNS_PER_ROUND ?? 12);
 const EARLY_ROUND_TURNS = Number(process.env.EARLY_ROUND_TURNS ?? 24);
@@ -29,18 +25,19 @@ export type RoundIO = {
 };
 
 export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundResult> {
-  // A fallen realm has no advisor left to govern or report
-  const alive = new Set((await host.state()).majorCivs.filter((civ) => civ.alive).map((civ) => civ.civ));
-  const seats = allSeats.filter((seat) => alive.has(seat.civ));
+  // Set before anything is awaited, so that a second dismissal arriving meanwhile finds time already passing
   state.phase = "passing";
   persist();
-  const notes = new Map(seats.map((seat) => [seat.civ, [] as string[]]));
   let urgentFor: Seat[] | undefined;
-  // What the rulers said aloud before this round began belongs to the chapter about it
-  const proclaimed = seats.flatMap((seat) => seat.proclamations ?? []);
-  for (const seat of seats) seat.proclamations = undefined;
   try {
     const opening = await host.state();
+    // A fallen realm has no advisor left to govern or report
+    const alive = new Set(opening.majorCivs.filter((civ) => civ.alive).map((civ) => civ.civ));
+    const seats = allSeats.filter((seat) => alive.has(seat.civ));
+    const notes = new Map(seats.map((seat) => [seat.civ, [] as string[]]));
+    // What the rulers said aloud before this round began belongs to the chapter about it
+    const proclaimed = seats.flatMap((seat) => seat.proclamations ?? []);
+    for (const seat of seats) seat.proclamations = undefined;
     // Resuming after urgent news: play what is left of the interrupted round, and report on the whole of it
     const pending = state.pendingRound;
     state.pendingRound = undefined;
@@ -67,9 +64,6 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
             .then((entry) => {
               notes.get(seat.civ)!.push(`T${now}: ${entry}`);
               lookedAt.set(seat.civ, now);
-              // Collected to learn whether advisors should ever be able to send for the ruler
-              const wished = /WISHED TO ASK:\s*(.+)/.exec(entry)?.[1];
-              if (wished) appendFileSync(WISHES, `- ${seat.civ}, turn ${now}: ${wished}\n`);
             })
             // A look-in that never happened must not read as a quiet one: the dispatch is written from these notes, and so is the journal
             .catch((error) => { io.log(`govern pass for ${seat.civ} failed:`, error.message); notes.get(seat.civ)!.push(`T${now}: (no look-in this year - the advisor could not be reached: ${String(error.message).slice(0, 80)}. The realm ran on the standing orders alone.)`); }),
@@ -142,13 +136,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       host
         .events()
         .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed))
-        .then((raw) => {
-          // The chapter is everything before the first IMAGES:; the pictures are whichever block carries descriptions (a model sometimes lists captions first and the full lines after)
-          const [chapter, ...blocks] = raw.split(/\n\s*IMAGES:\s*\n?/);
-          const images = blocks.flatMap((block) => block.split("\n").map((line) => splitPicture(line.replace(/^[-*\s]+/, ""))).filter((picture): picture is { caption: string; description: string } => !!picture))
-            .filter((picture, index, all) => all.findIndex((other) => other.caption === picture.caption) === index).slice(0, 2);
-          (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter.trim() });
-          return io.chronicle(chapter.trim(), images, finished);
+        .then(({ chapter, images }) => {
+          (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter });
+          return io.chronicle(chapter, images, finished);
         }),
     ]);
     settled.forEach((result, index) => {
