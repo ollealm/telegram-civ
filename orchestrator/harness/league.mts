@@ -28,7 +28,8 @@ const passes = `../data/harness/league-${stamp}-passes.csv`;
 appendFileSync(passes, "civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
 onTrace((trace) => {
   if (trace.role === "govern") {
-    const orderCalls = trace.toolCalls.filter((call) => /set_orders|update_plan/.test(call.name)).length;
+    // Orders only: a look-in that just rewrote its plan changed nothing in the realm
+    const orderCalls = trace.toolCalls.filter((call) => /set_orders/.test(call.name)).length;
     appendFileSync(passes, [trace.civ, trace.model, /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000)].join(",") + "\n");
   }
   for (const call of trace.toolCalls) {

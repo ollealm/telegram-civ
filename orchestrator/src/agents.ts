@@ -17,6 +17,14 @@ const alreadyPainted = (viewers: string[]) => `Pictures already painted in recen
 
 /** Governing passes are the bulk of the token use; set GOVERN_MODEL=claude-sonnet-5 to make them ~5x cheaper */
 const GOVERN_MODEL = process.env.GOVERN_MODEL ?? ADVISOR_MODEL;
+/** Reasoning effort per role (low | medium | high | xhigh | max); unset means the model's own default. Look-ins are the bulk of the spend and the first place to try "low" or "medium". */
+const EFFORT: Record<string, string | undefined> = {
+  advisor: process.env.ADVISOR_EFFORT, report: process.env.ADVISOR_EFFORT, urgent: process.env.ADVISOR_EFFORT, greeting: process.env.ADVISOR_EFFORT,
+  govern: process.env.GOVERN_EFFORT, council: process.env.GOVERN_EFFORT,
+  clerk: process.env.CLERK_EFFORT,
+  herald: process.env.HERALD_EFFORT, epic: process.env.HERALD_EFFORT, saga: process.env.HERALD_EFFORT,
+  character: process.env.CHARACTER_EFFORT,
+};
 
 const text = (value: unknown) => ({
   content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }],
@@ -182,6 +190,7 @@ export async function run(role: string, model: string, systemPrompt: string, pro
       settingSources: [],
       strictMcpConfig: true,
       includePartialMessages: !!onText,
+      ...((EFFORT[role] ?? process.env.EFFORT) && { effort: (EFFORT[role] ?? process.env.EFFORT) as "low" | "medium" | "high" | "xhigh" | "max" }),
       // Use the CLI's own login even when launched from inside another Claude session
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC)/.test(key))),
       maxTurns: 15,
