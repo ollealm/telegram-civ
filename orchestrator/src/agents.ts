@@ -201,6 +201,8 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
       "Pass an order or a wish for the realm that the ruler gave you on to the advisor, who has it with their next dispatch. Never for a question.",
       { wish: z.string().describe("The order or wish, restated in the ruler's words") },
       async ({ wish }) => {
+        // The clerk has been known to pass on a question, or a note that nothing was ordered
+        if (/^(the ruler )?asked|no order|nothing (was )?(ordered|asked)|^none\b/i.test(wish.trim())) return text("Nothing to pass on: that was not an order.");
         (seat.forCouncil ??= []).push(wish);
         persist();
         return text("It will reach the council.");
