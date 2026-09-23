@@ -17,6 +17,11 @@ const MAP_SIZES = ["Tiny", "Small", "Medium", "Large", "Huge"];
 const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
 /** Models for agent-ruled realms, dealt in turn */
 const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-sonnet-5").split(",").map((model) => model.trim());
+/** Per-seat effort for a new game (temporary levers for testing): HUMAN_EFFORTS=high,medium sets each ruler's seat in bot order (an empty entry keeps the per-role setting); AGENT_EFFORT sets every sovereign */
+type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+const asEffort = (value?: string): Effort | undefined => (["low", "medium", "high", "xhigh", "max"].includes(value ?? "") ? (value as Effort) : undefined);
+const HUMAN_EFFORTS = (process.env.HUMAN_EFFORTS ?? "").split(",").map((value) => asEffort(value.trim()));
+const AGENT_EFFORT = asEffort(process.env.AGENT_EFFORT);
 /** How the game's own peoples are handicapped; rulers' realms always get the player's side of the scale */
 const DIFFICULTIES: Record<string, string> = { Even: "Prince", Easy: "Warlord", Gentle: "Chieftain", Hard: "King" };
 const WONDERS: Record<string, "all" | "rulers" | "advised"> = { Everyone: "all", "Rulers only": "rulers", "Rulers and sovereigns": "advised" };
@@ -626,8 +631,8 @@ function setUpAdvisor(bot: Bot, index: number) {
       if (state.phase === "passing" || !draft.humans || !draft.size) return void ctx.editMessageText("Send /newgame to begin again.");
       // A ruler keeps their advisor bot's chat from one game to the next; the first seats go to the first bots
       state.seats = [
-        ...Array.from({ length: draft.humans }, (_, botIndex) => ({ ...blankSeat(), bot: botIndex, chatId: seatOf(botIndex)?.chatId, rulerName: seatOf(botIndex)?.rulerName })),
-        ...Array.from({ length: draft.agents ?? 0 }, (_, agentIndex) => ({ ...blankSeat(), kind: "agent" as const, model: AGENT_MODELS[agentIndex % AGENT_MODELS.length] })),
+        ...Array.from({ length: draft.humans }, (_, botIndex) => ({ ...blankSeat(), bot: botIndex, chatId: seatOf(botIndex)?.chatId, rulerName: seatOf(botIndex)?.rulerName, effort: HUMAN_EFFORTS[botIndex] })),
+        ...Array.from({ length: draft.agents ?? 0 }, (_, agentIndex) => ({ ...blankSeat(), kind: "agent" as const, model: AGENT_MODELS[agentIndex % AGENT_MODELS.length], effort: AGENT_EFFORT })),
       ];
       state.difficulty = draft.difficulty;
       state.wonders = draft.wonders ?? "all";
