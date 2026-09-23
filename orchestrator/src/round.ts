@@ -52,6 +52,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     let woken: Record<string, string[]> = {};
     const sentFor = new Set<string>();
     let lookedAt = new Map(seats.map((seat) => [seat.civ, fromTurn]));
+    const lookInFailures = new Map<string, number>();
     for (let played = opening.turn - fromTurn; played < length; ) {
       const now = fromTurn + played;
       const scheduled = Object.keys(woken).length === 0;
@@ -62,11 +63,17 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           io
             .working(seat, governPass(seat, lookedAt.get(seat.civ)!, GOVERN_EVERY, woken[seat.civ], seat.kind === "agent" && scheduled && played === 0))
             .then((entry) => {
+              lookInFailures.set(seat.civ, 0);
               notes.get(seat.civ)!.push(`T${now}: ${entry}`);
               lookedAt.set(seat.civ, now);
             })
             // A look-in that never happened must not read as a quiet one: the dispatch is written from these notes, and so is the journal
-            .catch((error) => { io.log(`govern pass for ${seat.civ} failed:`, error.message); notes.get(seat.civ)!.push(`T${now}: (no look-in this year - the advisor could not be reached: ${String(error.message).slice(0, 80)}. The realm ran on the standing orders alone.)`); }),
+            .catch((error) => {
+              // Three unreachable look-ins running is not a hiccup: the round stops rather than play on without the advisor
+              const failures = (lookInFailures.get(seat.civ) ?? 0) + 1;
+              lookInFailures.set(seat.civ, failures);
+              if (failures >= 3) throw new Error(`${seat.civ}'s advisor could not be reached three look-ins running (${error.message}); the age is halted so the realm does not run on unadvised`);
+              io.log(`govern pass for ${seat.civ} failed:`, error.message); notes.get(seat.civ)!.push(`T${now}: (no look-in this year - the advisor could not be reached: ${String(error.message).slice(0, 80)}. The realm ran on the standing orders alone.)`); }),
         ),
       );
       const untilNextLookIn = GOVERN_EVERY - (played % GOVERN_EVERY);

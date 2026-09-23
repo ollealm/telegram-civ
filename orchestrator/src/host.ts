@@ -81,7 +81,7 @@ export const host = {
     if (!response.ok) throw new HostError(`overlay ${response.status}`);
     return Buffer.from(await response.arrayBuffer());
   },
-  log: (civ: string, since: number) => call<{ turn: number; text: string }[]>("GET", `/log${civQuery(civ)}&since=${since}`),
+  log: (civ: string, since: number, sinceYear?: number) => call<{ turn: number; text: string }[]>("GET", `/log${civQuery(civ)}&since=${since}${sinceYear === undefined ? "" : `&sinceYear=${sinceYear}`}`),
   setOrders: (civ: string, orders: Orders) =>
     call<{ orders: Orders; done: string[]; failed: string[]; researchQueue: string[]; gold: number }>("POST", "/orders" + civQuery(civ), orders),
 };

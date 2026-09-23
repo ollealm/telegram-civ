@@ -91,8 +91,8 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "get_log",
       "The chancery log: everything that happened to our realm turn by turn - what was built, lost, researched, what the officials changed on their own.",
-      { sinceTurn: z.number().describe("Return entries after this turn") },
-      ({ sinceTurn }) => attempt(() => host.log(seat.civ, sinceTurn)),
+      { sinceTurn: z.number().optional().describe("Return entries after this turn"), sinceYear: z.number().optional().describe("Or: entries from this year on (negative for BC, e.g. -600). At most the last 150 lines come back; ask from a later point for the rest.") },
+      ({ sinceTurn, sinceYear }) => attempt(() => host.log(seat.civ, sinceTurn ?? 0, sinceYear)),
     ),
     tool(
       "set_orders",
