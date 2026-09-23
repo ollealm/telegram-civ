@@ -161,7 +161,7 @@ index 9eea632..a5d4ec9 100644
  
      /** @return a TradeRequest with the same ourOffers as [tradeRequest] but with enough theirOffers
 diff --git a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
-index f180f26..974e389 100644
+index f180f26..c3cb2f2 100644
 --- a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
 @@ -18,11 +18,34 @@ object UseGoldAutomation {
@@ -203,11 +203,12 @@ index f180f26..974e389 100644
  
          val acceptableHurryCostModifier = civ.gold.coerceAtLeast(0)/100
          // Ideally we buy things with good gold:production conversion from purchasing and hard-build the rest, but some mods have high hurryCostModifier on everything leading to too much gold being saved. 
-@@ -36,10 +59,10 @@ object UseGoldAutomation {
+@@ -36,10 +59,11 @@ object UseGoldAutomation {
              if (!city.cityConstructions.isConstructionPurchaseAllowed(construction, Stat.Gold, statBuyCost)) continue
              if (civ.gold < statBuyCost || construction.hurryCostModifier > acceptableHurryCostModifier) continue
              if (city.cityConstructions.getWorkDone(construction.name) > 0) continue // Don't buy things we already invested production into (may waste the invested production)
 -            city.cityConstructions.purchaseConstruction(construction, 0, true)
++            if (com.unciv.logic.automation.RulerOverrides.forbidden?.invoke(civ, construction) == true) continue // a ruler's never-build list binds the purse as well as the queue
 +            itemised(civ, { "buying ${construction.name} in ${city.name}" }) { city.cityConstructions.purchaseConstruction(construction, 0, true) }
          }
  
@@ -864,10 +865,10 @@ index 0000000..c5710f2
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
 new file mode 100644
-index 0000000..084b016
+index 0000000..2b51e92
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
-@@ -0,0 +1,266 @@
+@@ -0,0 +1,268 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -945,13 +946,15 @@ index 0000000..084b016
 +        // A TradeRequest holds the trade as the receiver sees it, so it goes out reversed
 +        val acceptable = TradeEvaluation().isTradeAcceptable(trade.reverse(), other, civ)
 +        // A second offer for the same goods replaces the first - otherwise both can be accepted and paid for
-+        val asked = trade.theirOffers.map { it.name }.toSet()
-+        val superseded = other.tradeRequests.filter { request -> request.requestingCiv == civ.civID && request.trade.ourOffers.any { it.name in asked } }
++        // Keyed on the goods asked for; gold is a sweetener, not a good, so two offers that both carry gold are not the same offer
++        val isGold = { offer: com.unciv.logic.trade.TradeOffer -> offer.type == com.unciv.logic.trade.TradeOfferType.Gold || offer.type == com.unciv.logic.trade.TradeOfferType.Gold_Per_Turn }
++        val asked = trade.theirOffers.filterNot(isGold).map { it.name }.toSet().ifEmpty { trade.theirOffers.map { it.name }.toSet() }
++        val superseded = other.tradeRequests.filter { request -> request.requestingCiv == civ.civID && request.trade.ourOffers.filterNot(isGold).ifEmpty { request.trade.ourOffers }.any { it.name in asked } }
 +        other.tradeRequests.removeAll(superseded.toSet())
 +        if (superseded.isNotEmpty()) pending.removeAll { it.first == civ.civName && it.second == other.civName && it.third != "peace" } // a withdrawn offer cannot be "accepted" later
 +        other.tradeRequests.add(TradeRequest(civ.civID, trade.reverse()))
 +        val summary = trade.brief()
-+        if (superseded.isNotEmpty()) log(civ, "Our earlier offer to ${other.civName} for ${asked.joinToString()} was withdrawn in favour of the new one.")
++        if (superseded.isNotEmpty()) log(civ, "Our earlier offer to ${other.civName} (${superseded.joinToString("; ") { it.trade.reverse().brief() }}) was withdrawn in favour of the new one, which asks for the same goods.")
 +        pending += Triple(civ.civName, other.civName, summary)
 +        log(civ, "We proposed a trade to ${other.civName}: $summary.")
 +        val balance = TradeEvaluation().getTradeAcceptability(trade.reverse(), other, civ, true)
@@ -1136,10 +1139,10 @@ index 0000000..084b016
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..e496ccb
+index 0000000..d0941f4
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1188 @@
+@@ -0,0 +1,1194 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1678,8 +1681,12 @@ index 0000000..e496ccb
 +            }
 +            if (problem != null) throw ApiError(400, "Could not buy $item in ${city.name}: $problem")
 +            if (!city.cityConstructions.purchaseConstruction(construction, -1, false)) throw ApiError(400, "Could not buy $item in ${city.name}: no room to place it")
-+            log(civ, "By your order: bought $item in ${city.name} for $cost gold.")
-+            "Bought $item in ${city.name} for $cost gold (${civ.gold} left)"
++            val centre = city.getCenterTile()
++            val bought = civ.units.getCivUnits().filter { it.name == item && it.getTile().aerialDistanceTo(centre) <= 1 }.maxByOrNull { it.id }
++            val holder = centre.militaryUnit?.takeIf { bought != null && bought.isMilitary() && it != bought }
++            val note = if (holder != null && bought != null) " ${item} #${bought.id} stands beside ${city.name}, which our ${holder.name} #${holder.id} still holds: order it to garrison ${city.name} to swap them, or the officials use it as they see fit." else ""
++            log(civ, "By your order: bought $item in ${city.name} for $cost gold.$note")
++            "Bought $item in ${city.name} for $cost gold (${civ.gold} left).$note"
 +        }
 +        // Unit orders, diplomacy
 +        tryEach(json.get("units")) { units.give(civ, it) }
@@ -1839,8 +1846,10 @@ index 0000000..e496ccb
 +            val fell = (notifications.map { it.text } + civ.notifications.map { it.text })
 +                .any { unit.first in it && (("destroyed" in it) || ("captured" in it) || ("was killed" in it)) }
 +            val spent = civ.gameInfo.ruleset.units[unit.first]?.hasUnique(com.unciv.models.ruleset.unique.UniqueType.CreateWaterImprovements) == true
++            val great = civ.gameInfo.ruleset.units[unit.first]?.hasUnique(com.unciv.models.ruleset.unique.UniqueType.GreatPerson) == true
 +            log(civ, if (fell) "Our ${unit.first} was lost in action ${describeWhere(civ, unit.second)}."
 +                else if (spent) "Our ${unit.first} ${describeWhere(civ, unit.second)} did its work and was used up, as such boats are: the fishing grounds it set up stay."
++                else if (great) "Our ${unit.first} ${describeWhere(civ, unit.second)} was spent: its ability used, by your order or by the officials once it was left to them."
 +                else "Our ${unit.first} ${describeWhere(civ, unit.second)} is no longer in service.")
 +        }
 +        applyStandingOrders(civ) // a finished goal leaves the queue empty until the next goal's path is set - not idleness
@@ -2087,7 +2096,7 @@ index 0000000..e496ccb
 +                val have = civ.victoryManager.currentsSpaceshipParts
 +                mapOf("parts" to needed.keys.associateWith { "${have[it]} of ${needed[it]}" },
 +                    "apollo" to civ.hasUnique(com.unciv.models.ruleset.unique.UniqueType.EnablesConstructionOfSpaceshipParts),
-+                    "note" to "Parts are built like buildings (queue them by name once the Apollo Program stands and the techs are known); the ship launches when every part is built.") } },
++                    "note" to "Parts are built like buildings (queue them by name once the Apollo Program stands and the techs are known) and CANNOT be bought with gold - saving gold for them is wasted; the ship launches when every part is built.") } },
 +            "policies" to civ.policies.getAdoptedPolicies().toList(),
 +            "culture" to mapOf("stored" to civ.policies.storedCulture, "neededForNextPolicy" to civ.policies.getCultureNeededForNextPolicy()),
 +            "militaryStrength" to civ.getStatForRanking(RankingType.Force),
@@ -2416,10 +2425,10 @@ index 0000000..458064c
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..8586431
+index 0000000..38bf4c0
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,360 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -2539,6 +2548,11 @@ index 0000000..8586431
 +                order.lastSpot = spot
 +                if (order.turnsStuck >= 3) {
 +                    val blocker = target.militaryUnit?.takeIf { !unit.isCivilian() } ?: target.civilianUnit?.takeIf { unit.isCivilian() }
++                    // One of our own holds the city: the relief waits beside it and swaps in the turn it can, instead of giving up
++                    if (order.action == "garrison" && blocker != null && blocker.civ == civ) {
++                        if (order.turnsStuck == 3) log(civ, "Our ${unit.name} #${unit.id} waits beside ${where(civ, target)}: our ${blocker.name} #${blocker.id} holds it and cannot change places yet. It swaps in as soon as it can.")
++                        return true
++                    }
 +                    log(civ, "Our ${unit.name} #${unit.id} has been stuck for ${order.turnsStuck} turns on its way to ${where(civ, target)}" +
 +                        (blocker?.let { " - the tile is held by ${it.civ.civName}'s ${it.name}" } ?: " - the way is blocked") + ". The order is dropped.")
 +                    orders.remove(unit.id)
@@ -2563,13 +2577,22 @@ index 0000000..8586431
 +            }
 +            "fortify", "garrison" -> { unit.fortifyIfCan(); true }
 +            "use" -> {
++                // An ability needs movement left; a Great Person that walked here this turn uses it next turn
++                if (unit.currentMovement <= 0f) return true
 +                // A Great Person can usually be spent more than one way; the ruler says which, or gets the first that works
 +                val wanted = ABILITIES.filter { order.ability == null || it in abilitiesNamed(order.ability) }
 +                val used = wanted.firstOrNull { UnitActions.invokeUnitAction(unit, it) }
 +                if (used != null) log(civ, "Our ${unit.name} used its ability (${used.name}) at ${where(civ, unit.getTile())}.")
-+                else log(civ, "Our ${unit.name} could not use its ability at ${where(civ, unit.getTile())}: nothing to use it on here (trade missions need a city-state's city, improvements need an unimproved tile of ours).")
++                else {
++                    val known = ABILITY_WORDS.filter { (_, types) -> types.any { UnitActions.getUnitActions(unit, it).any() } }.keys
++                    order.turnsStuck += 1
++                    if (order.turnsStuck == 1) log(civ, "Our ${unit.name} #${unit.id} could not use its ability at ${where(civ, unit.getTile())}: nothing to use it on here (trade missions need a city-state's city, improvements need an unimproved tile of ours, hurrying needs a city). " +
++                        "It can: ${known.joinToString().ifEmpty { "nothing here" }} - name one with the order and stand where it applies. It tries again for two more turns, then the order is dropped.")
++                    if (order.turnsStuck < 3) return true
++                    log(civ, "Our ${unit.name} #${unit.id} still could not use its ability at ${where(civ, unit.getTile())}; the order is dropped and the officials take it back.")
++                }
 +                orders.remove(unit.id)
-+                used != null
++                true
 +            }
 +            "hold" -> true
 +            "disband" -> { log(civ, "Our ${unit.name} #${unit.id} was disbanded."); orders.remove(unit.id); unit.disband(); true }
