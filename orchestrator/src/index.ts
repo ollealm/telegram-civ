@@ -586,7 +586,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       await ctx.reply(`A new world, then. This ends the current game for everyone - nothing changes until you confirm at the end.\n\nHow many rulers will sit at the table? (There are ${advisors.length} advisor bots.)`, { reply_markup: keyboard });
     });
 
-    bot.callbackQuery(/^ng:(humans|agents|ai|difficulty|size|confirm|cancel):?(.*)$/, async (ctx) => {
+    bot.callbackQuery(/^ng:(humans|agents|ai|difficulty|size|wonders|confirm|cancel):?(.*)$/, async (ctx) => {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, step, value] = ctx.match;
       if (step === "cancel") return void ctx.editMessageText("The old world carries on.");
