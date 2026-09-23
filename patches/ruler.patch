@@ -293,6 +293,20 @@ index 9a9354b..bc19ef8 100644
          // if a embarked melee unit can land and attack next turn, do not attack from water.
          if (BattleHelper.tryDisembarkUnitToAttackPosition(unit)) return
  
+diff --git a/core/src/com/unciv/logic/battle/Battle.kt b/core/src/com/unciv/logic/battle/Battle.kt
+index d2524e2..edba297 100644
+--- a/core/src/com/unciv/logic/battle/Battle.kt
++++ b/core/src/com/unciv/logic/battle/Battle.kt
+@@ -717,6 +717,9 @@ object Battle {
+         } else if (attackerCiv.isHuman() && UncivGame.Current.worldScreen?.autoPlay?.isAutoPlayingAndFullAutoPlayAI() == false) {
+             // we're not taking our former capital
+             attackerCiv.popupAlerts.add(PopupAlert(AlertType.CityConquered, city.id))
++        } else if (attackerCiv.civID in com.unciv.logic.automation.RulerOverrides.ruledCivs) {
++            // A ruler's conquest is the ruler's to dispose of: held as a puppet until they annex, raze or free it by order - never burned on the automation's say-so
++            city.puppetCity(attackerCiv)
+         } else automateCityConquer(attackerCiv, city)
+ 
+         if (attackerCiv.isCurrentPlayer())
 diff --git a/core/src/com/unciv/logic/city/CityConstructions.kt b/core/src/com/unciv/logic/city/CityConstructions.kt
 index ebb116c..f8234e7 100644
 --- a/core/src/com/unciv/logic/city/CityConstructions.kt
@@ -1094,10 +1108,10 @@ index 0000000..084b016
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..56213ae
+index 0000000..f57ac67
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1140 @@
+@@ -0,0 +1,1151 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1588,6 +1602,16 @@ index 0000000..56213ae
 +            "${city.name} queue is now: ${city.cityConstructions.constructionQueue.joinToString()}"
 +        }
 +        // Buy outright with gold
++        // What becomes of a city: annex a puppet, raze it, or stop a razing
++        tryEach(json.get("cities")) { order ->
++            val city = civ.city(order.getString("city"))
++            when (val action = order.getString("action")) {
++                "annex" -> { if (!city.isPuppet) throw ApiError(400, "${city.name} is not a puppet"); city.annexCity(); log(civ, "By your order: ${city.name} is annexed and governed as our own."); "${city.name} annexed" }
++                "raze" -> { if (city.isCapital()) throw ApiError(400, "A capital cannot be razed"); city.isBeingRazed = true; log(civ, "By your order: ${city.name} is being razed; it shrinks each turn until nothing is left."); "${city.name} is being razed" }
++                "spare" -> { if (!city.isBeingRazed) throw ApiError(400, "${city.name} is not being razed"); city.isBeingRazed = false; log(civ, "By your order: the razing of ${city.name} is stopped."); "${city.name} spared" }
++                else -> throw ApiError(400, "Unknown city action $action; use annex, raze or spare")
++            }
++        }
 +        tryEach(json.get("purchase")) { order ->
 +            val city = civ.city(order.getString("city"))
 +            val item = order.getString("item")
@@ -1748,7 +1772,6 @@ index 0000000..56213ae
 +            for (item in was) if (item !in now && item !in built && !(isPerpetual(item) && city.id !in RulerOverrides.lockedCities)) {
 +                val construction = civ.gameInfo.ruleset.buildings[item] ?: civ.gameInfo.ruleset.units[item]
 +                val reasons = construction?.let { whyNot(city, it) } ?: emptyList()
-+                val theirs = city.id !in RulerOverrides.lockedCities && item !in (orders[civ.civName]?.let { emptyList<String>() } ?: emptyList())
 +                log(civ, if (reasons.isNotEmpty()) "The officials dropped $item from ${city.name}'s queue because ${reasons.joinToString()}."
 +                    else if (city.id !in RulerOverrides.lockedCities) "The officials changed their own plan for ${city.name}: $item out."
 +                    else "The officials dropped $item from ${city.name}'s queue, replacing it with their own choice.")
@@ -1756,7 +1779,8 @@ index 0000000..56213ae
 +            for (item in now) if (item !in was && !isPerpetual(item))
 +                log(civ, "The officials queued $item in ${city.name}.")
 +        }
-+        for (city in civ.cities) if (city.name !in before.queues) log(civ, "Founded ${city.name}.")
++        for (city in civ.cities) if (city.name !in before.queues) log(civ, if (city.foundingCivObject == civ) "Founded ${city.name}."
++            else "We took ${city.name}${city.foundingCivObject?.let { " from ${it.civName}" } ?: ""}: it is ours, held as a puppet (it builds and pays for itself, gives no orders) until you annex it - or raze it, or spare it; a cities order does each.")
 +        val alive = civ.units.getCivUnits().map { it.id }.toSet()
 +        for ((id, unit) in before.units) if (id !in alive && unit.first != "Settler") // settlers vanish by founding
 +        {
@@ -2027,6 +2051,7 @@ index 0000000..56213ae
 +            "cities" to civ.cities.map { city ->
 +                val stats = city.cityStats.currentCityStats
 +                mapOf("name" to city.name, "pop" to city.population.population, "capital" to city.isCapital(),
++                    "puppet" to city.isPuppet.takeIf { it }, "beingRazed" to city.isBeingRazed.takeIf { it },
 +                    "buildings" to city.cityConstructions.getBuiltBuildings().map { it.name }.sorted(),
 +                    "buildQueue" to city.cityConstructions.constructionQueue,
 +                    "turnsLeft" to city.cityConstructions.currentConstructionName().let { current ->
