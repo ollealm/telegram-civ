@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, draftClerk, pronounLine, realmSaga, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, describeDecision, draftClerk, pronounLine, realmSaga, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -459,12 +459,18 @@ function setUpAdvisor(bot: Bot, index: number) {
       annal.rulerSaid = since.filter((message) => message.from === "ruler").map((message) => message.text).filter((text) => !new RegExp(`^/?(${LEAVE.join("|")})\\b`, "i").test(text.trim()) && !text.startsWith("["));
       annal.settled = since.filter((message) => message.from === "advisor").at(-1)?.text.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
     }
-    const decided = seat().decisionPicture;
-    if (decided && seat().chatId) {
-      const chatId = seat().chatId!;
-      paint({ ...decided, for: seat().civ }, (png) => bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }));
-    }
+    // Every dismissal leaves the ruler a picture to carry off while they wait: the advisor's, or one asked for now if the closing came without. It is painted beside the dismissal, not before it
+    const asked = seat().decisionPicture;
     seat().decisionPicture = undefined;
+    if (seat().chatId && seat().character) {
+      const chatId = seat().chatId!;
+      const civ = seat().civ;
+      void (async () => {
+        const game = await host.state();
+        const decided: Picture = asked ? { ...asked, for: civ } : { turn: game.turn, year: game.year, for: civ, ...(await describeDecision(seat())) };
+        paint(decided, (png) => bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }));
+      })().catch((error) => log("decision picture failed:", error.message));
+    }
     seat().ready = true;
     seat().dismissed = false;
     persist();
@@ -524,7 +530,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     queue = queue.then(async () => {
       try {
         const game = await host.state();
-        const reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further.]` : message, roundLength(game.turn)));
+        const reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, roundLength(game.turn)));
         // A closing's picture of the decision and the ruler's words for the Chronicler went by the advisor's own tools. The picture is painted once
         // the court is dismissed - a closing can still be talked over, and only the last one stands.
         remember(seat(), { from: "ruler", text: message });
