@@ -26,7 +26,9 @@ const alreadyPainted = (viewers: string[]) => `Pictures already painted in recen
 const GOVERN_MODEL = process.env.GOVERN_MODEL ?? ADVISOR_MODEL;
 /** Reasoning effort per role (low | medium | high | xhigh | max); unset means the model's own default. Look-ins are the bulk of the spend and the first place to try "low" or "medium". */
 const EFFORT: Record<string, string | undefined> = {
-  advisor: process.env.ADVISOR_EFFORT, report: process.env.ADVISOR_EFFORT, urgent: process.env.ADVISOR_EFFORT, greeting: process.env.ADVISOR_EFFORT,
+  // The advisor talks at ADVISOR_EFFORT and writes the two letters at LETTER_EFFORT: a reply is read once, a letter is the age's record
+  advisor: process.env.ADVISOR_EFFORT, greeting: process.env.ADVISOR_EFFORT,
+  report: process.env.LETTER_EFFORT ?? process.env.ADVISOR_EFFORT, urgent: process.env.LETTER_EFFORT ?? process.env.ADVISOR_EFFORT,
   govern: process.env.GOVERN_EFFORT, council: process.env.GOVERN_EFFORT,
   clerk: process.env.CLERK_EFFORT,
   herald: process.env.HERALD_EFFORT, epic: process.env.HERALD_EFFORT, saga: process.env.HERALD_EFFORT,
