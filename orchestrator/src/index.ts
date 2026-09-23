@@ -640,6 +640,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       state.proclaimed = [];
       state.epicTold = false;
       state.chapters = [];
+      state.pictures = []; // the last world's paintings must not steer this one's
       state.pendingRound = undefined;
       state.mapSize = draft.size;
       state.aiCivs = draft.ai ?? AI_CIVS;
