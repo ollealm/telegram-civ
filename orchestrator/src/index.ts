@@ -102,7 +102,6 @@ onImageLog((message) => log(message));
 
 /** The painted map costs a picture a round for every ruler; PAINTED_MAPS=off leaves it out (the march map comes either way) */
 const PAINTED_MAPS = process.env.PAINTED_MAPS !== "off";
-const HOLD_FOR_PICTURES = process.env.HOLD_FOR_PICTURES === "on";
 
 /** Every picture goes through here: noted in the ledger first, so that whoever describes the next one knows not to ask for it again */
 /** Paints and returns the picture (or null), keeping the ledger honest either way */
@@ -190,30 +189,29 @@ async function playRound() {
   // Two rulers dismissing at the same moment must start one round, not two: the round sets the phase before its first await
   if (state.phase === "passing") return;
   const seated = state.seats.filter((seat) => seat.chatId || seat.kind === "agent");
+  type Painting = Promise<Buffer | null>;
+  const letters: { seat: Seat; letter: string; caption?: string; scene: Painting; marches: Painting; painted: Painting }[] = [];
+  const chapters: { chapter: string; pictures: { picture: Picture & { note?: string }; png: Buffer | null }[] }[] = [];
   try {
     await runRound(seated, {
       working: (seat, work) => {
         const bot = botOf(seat);
         return bot && seat.chatId ? whileTyping(bot, seat.chatId, work) : work;
       },
+      // Nothing is sent as it is written: letters, scenes, maps and the chapter are gathered, painted, and go out together once the age is complete
       dispatch: async (seat, dispatch, round) => {
         const bot = botOf(seat);
         if (!bot || !seat.chatId) return;
         const letter = [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
-        await bot.api.sendMessage(seat.chatId!, letter);
-        // Pictures follow the letter instead of holding it up: a scene from the realm, then the painted map
-        if (dispatch.image) {
-          const game = await host.state();
-          paint({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }, (png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "scene.png"), { caption: dispatch.image!.caption }));
-        }
+        const game = await host.state();
+        const scene = dispatch.image ? paintAndKeep({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }) : Promise.resolve(null);
         // With every letter, the marches of the years it covers - ours, drawn by the host, so it costs nothing
-        void host.map(seat.civ, "campaign", round.fromTurn).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "marches.png"))).catch((error) => log("march map failed:", error.message));
-        if (!dispatch.heading && PAINTED_MAPS) void paintedMap(seat.civ).then((png) => bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"))).catch((error) => log("map failed:", error.message));
+        const marches = host.map(seat.civ, "campaign", round.fromTurn).catch((error) => { log("march map failed:", error.message); return null; });
+        const painted = !dispatch.heading && PAINTED_MAPS ? paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; }) : Promise.resolve(null);
+        letters.push({ seat, letter, caption: dispatch.image?.caption, scene, marches, painted });
       },
       notice: tell,
       chronicle: async (chapter, images, round) => {
-        // With HOLD_FOR_PICTURES=on the chapter waits for its pictures (a real game, one round a day); otherwise the text goes first
-        if (!HOLD_FOR_PICTURES) await broadcastHerald(chapter);
         // One or two scenes of the Chronicler's choosing, and every wonder
         // A wonder's picture says what the great work gives its builders
         const wonders = await Promise.all(wonderPictures(round).map(async (picture) => {
@@ -225,12 +223,25 @@ async function playRound() {
         const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders];
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         const painted = await Promise.all(pictures.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
-        if (HOLD_FOR_PICTURES) await broadcastHerald(chapter);
-        for (const { picture, png } of painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn))
-          for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
+        chapters.push({ chapter, pictures: painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn) });
       },
       log,
     });
+    // The age is complete and painted: every ruler's letter goes out now, then the Chronicler's chapter, all within the same minute
+    for (const post of letters) {
+      const bot = botOf(post.seat)!;
+      const chatId = post.seat.chatId!;
+      const [scene, marches, painted] = await Promise.all([post.scene, post.marches, post.painted]);
+      await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+      if (scene) await bot.api.sendPhoto(chatId, new InputFile(scene, "scene.png"), { caption: post.caption }).catch((error) => log(`scene to ${post.seat.civ} failed:`, error.message));
+      if (marches) await bot.api.sendPhoto(chatId, new InputFile(marches, "marches.png")).catch((error) => log(`marches to ${post.seat.civ} failed:`, error.message));
+      if (painted) await bot.api.sendPhoto(chatId, new InputFile(painted, "map.png")).catch((error) => log(`map to ${post.seat.civ} failed:`, error.message));
+    }
+    for (const post of chapters) {
+      await broadcastHerald(post.chapter);
+      for (const { picture, png } of post.pictures)
+        for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
+    }
     const game = await host.state();
     // A realm that fell this round: its ruler is told once, and gets the saga of their reign
     for (const seat of seated) {
@@ -460,7 +471,6 @@ function setUpAdvisor(bot: Bot, index: number) {
     const waiting = (await standing()).filter((other) => !other.ready).map((other) => other.civ);
     if (waiting.length) return reply(`The court is dismissed. Waiting for the ruler of ${waiting.join(", ")}. ${seat().clerk?.name ?? "The clerk"} keeps the rolls meanwhile; call me by name, ${seat().character?.name.split(" ")[0]}, if you need the court again.`);
     await reply("The court is dismissed. Until next time.");
-    for (const other of state.seats) if (other !== seat()) await tell(other, "All rulers have dismissed their courts. Godspeed.");
     void playRound();
   };
 
