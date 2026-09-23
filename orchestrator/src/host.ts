@@ -4,8 +4,21 @@ const HOST = process.env.RULER_HOST_URL ?? "http://127.0.0.1:8765";
 
 export class HostError extends Error {}
 
+/** A host that is being restarted answers nothing for half a minute; every request waits that out rather than fail the advisor mid-sentence */
+async function reach(url: string, init?: RequestInit): Promise<Response> {
+  const until = Date.now() + Number(process.env.HOST_WAIT_MS ?? 90_000);
+  for (;;) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      if (Date.now() >= until) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
 async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
-  const response = await fetch(HOST + path, {
+  const response = await reach(HOST + path, {
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -71,13 +84,13 @@ export const host = {
   events: () => call<PublicEvent[]>("GET", "/events"),
   /** campaign: the atlas with every march since that turn traced on it, and where units fell and cities were taken */
   map: async (civ: string, style: "atlas" | "reference" | "campaign" = "atlas", since?: number) => {
-    const response = await fetch(`${HOST}/map.png${civQuery(civ)}&style=${style}${since === undefined ? "" : `&since=${since}`}`);
+    const response = await reach(`${HOST}/map.png${civQuery(civ)}&style=${style}${since === undefined ? "" : `&since=${since}`}`);
     if (!response.ok) throw new Error(`map: ${response.status} ${(await response.text()).slice(0, 200)}`);
     return Buffer.from(await response.arrayBuffer());
   },
   /** Draw names, borders and units onto a repaint of the reference map */
   mapOverlay: async (civ: string, repaint: Buffer) => {
-    const response = await fetch(`${HOST}/map/overlay${civQuery(civ)}`, { method: "POST", body: new Uint8Array(repaint) });
+    const response = await reach(`${HOST}/map/overlay${civQuery(civ)}`, { method: "POST", body: new Uint8Array(repaint) });
     if (!response.ok) throw new HostError(`overlay ${response.status}`);
     return Buffer.from(await response.arrayBuffer());
   },
