@@ -15,6 +15,9 @@ mkdir -p "$DATA"
 SNAP="$DATA/classes"; rm -rf "$SNAP"; mkdir -p "$SNAP"
 CP=""; n=0
 for entry in ${(s.:.)"$(cat data/classpath.txt)"}; do
-  if [[ "$entry" == */unciv/*/build/* && -e "$entry" ]]; then n=$((n + 1)); cp -R "$entry" "$SNAP/$n${entry:e:+.${entry:e}}"; CP="$CP:$SNAP/$n${entry:e:+.${entry:e}}"; else CP="$CP:$entry"; fi
+  if [[ "$entry" == */unciv/*/build/* && -e "$entry" ]]; then
+    n=$((n + 1)); copy="$SNAP/$n"; [[ "$entry" == *.jar ]] && copy="$copy.jar"
+    cp -R "$entry" "$copy"; CP="$CP:$copy"
+  else CP="$CP:$entry"; fi
 done
 cd unciv/android/assets && exec "$JAVA_HOME/bin/java" -cp "${CP#:}" com.unciv.app.desktop.ruler.RulerHost "$DATA" "$PORT"
