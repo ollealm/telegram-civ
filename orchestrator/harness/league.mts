@@ -6,6 +6,8 @@
 // wonders=advised leaves the world's wonders to the sovereigns: the game's own peoples raise none.
 // LEAGUE_CHARACTERS=harness/league-characters.json: every seat plays one of a few fixed sovereigns (by the game's leader name) instead of a
 //   freshly drafted one, handed out in turn within each model:effort, so each condition plays the same characters.
+// LEAGUE_REFLECT_EFFORT: the effort of the closing reviews and interviews - a level (default high, so answers compare across seats)
+//   or "own" to hear each seat at the effort it played at.
 // LEAGUE_TAG=run1 keeps the result files of leagues started in the same minute apart (harness/league-batch.sh sets it).
 // Results: ../data/harness/league-<date>.csv (score per realm per round), the Chronicler's chapters and a closing epic on the console,
 // then playtest reviews and interviews of every sovereign.
@@ -55,12 +57,14 @@ function lookIn(civ: string | undefined, reached: boolean, why = "") {
 
 // Every look-in: was it scheduled or a wake-up, did it change anything, what did it cost - to judge whether the fixed look-in earns its keep
 const passes = `../data/harness/league-${stamp}-passes.csv`;
-appendFileSync(passes, "civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
+appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
+// The game turn a look-in happened at, read off the round's own log lines
+let gameTurn = 0;
 onTrace((trace) => {
   if (trace.role === "govern") {
     // Orders only: a look-in that just rewrote its plan changed nothing in the realm
     const orderCalls = trace.toolCalls.filter((call) => /set_orders/.test(call.name)).length;
-    appendFileSync(passes, [trace.civ, labelOf(trace.civ), /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000)].join(",") + "\n");
+    appendFileSync(passes, [gameTurn, trace.civ, labelOf(trace.civ), /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000)].join(",") + "\n");
     // Every real call costs something; an error that comes back as a reply (a spent session limit) costs nothing
     const unreached = trace.costUsd === 0 || trace.reply.startsWith("(failed") || /session limit|could not be reached/i.test(trace.reply);
     lookIn(trace.civ, !unreached, trace.reply);
@@ -74,6 +78,8 @@ onTrace((trace) => {
 });
 // A look-in that throws (a lost connection) never reaches the trace; the round logs it instead
 const log = (...args: unknown[]) => {
+  const turn = typeof args[0] === "string" ? /^(?:Advanced to turn|Round (?:starting|resuming) at turn) (\d+)/.exec(args[0]) : null;
+  if (turn) gameTurn = Number(turn[1]);
   const failed = typeof args[0] === "string" ? /^govern pass for (.+) failed:/.exec(args[0]) : null;
   if (failed) lookIn(failed[1], false, String(args[1] ?? ""));
   say(...args);
@@ -102,8 +108,11 @@ const others = nations.slice(seatSpecs.length, seatSpecs.length + gameAi);
 await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, cityStates: 4 });
 persist();
 
-// Reviews and interviews think equally hard for every seat, whatever effort it played at, so their answers can be compared
-const REFLECT_EFFORT: Seat["effort"] = "high";
+// Reviews and interviews think equally hard for every seat, whatever effort it played at, so their answers can be compared -
+// unless LEAGUE_REFLECT_EFFORT=own, which hears each seat as it played
+const reflectEffort = process.env.LEAGUE_REFLECT_EFFORT ?? "high";
+if (reflectEffort !== "own" && !["low", "medium", "high", "xhigh", "max"].includes(reflectEffort)) throw new Error(`Unknown LEAGUE_REFLECT_EFFORT "${reflectEffort}"`);
+const REFLECT_EFFORT = reflectEffort === "own" ? undefined : (reflectEffort as Seat["effort"]);
 
 const csv = `../data/harness/league-${stamp}.csv`;
 appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd\n");
@@ -125,7 +134,7 @@ for (;;) {
     const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
     say("\n" + (await chroniclerEpic(await host.events(), standings, "This history has reached its end.")).text);
     for (const seat of state.seats) {
-      const review = await playtestReview({ ...seat, effort: REFLECT_EFFORT }).catch((error) => `(review failed: ${error.message})`);
+      const review = await playtestReview(REFLECT_EFFORT ? { ...seat, effort: REFLECT_EFFORT } : seat).catch((error) => `(review failed: ${error.message})`);
       say(`\n=== PLAYTEST REVIEW: ${seat.civ} (${labelOf(seat.civ)}, ${seat.character?.name}) ===\n${review}\n`);
       appendFileSync(`../data/harness/league-${stamp}-reviews.md`, `## ${seat.civ} - ${labelOf(seat.civ)} - ${seat.character?.name}\n\nWill:\n${seat.will}\n\nPlan:\n${seat.plan ?? ""}\n\nJournal:\n${seat.journal.join("\n")}\n\nReview:\n${review}\n\n`);
     }
