@@ -8,11 +8,13 @@
 //   freshly drafted one, handed out in turn within each model:effort, so each condition plays the same characters.
 // LEAGUE_REFLECT_EFFORT: the effort of the closing reviews and interviews - a level (default high, so answers compare across seats)
 //   or "own" to hear each seat at the effort it played at.
+// LEAGUE_RESUME=1 (with the same LEAGUE_TAG, host and state file) carries on a league that paused or stopped, into the same result files.
+//   A spent token limit pauses a league at once (exit 4) before the game moves on; harness/league-loop.sh resumes it by itself.
 // LEAGUE_TAG=run1 keeps the result files of leagues started in the same minute apart (harness/league-batch.sh sets it).
 // Results: ../data/harness/league-<date>.csv (score per realm per round), the Chronicler's chapters and a closing epic on the console,
 // then playtest reviews and interviews of every sovereign.
 
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { chroniclerEpic, onTrace, playtestReview } from "../src/agents.ts";
 import { draftSovereign } from "../src/characters.ts";
 import { host } from "../src/host.ts";
@@ -32,8 +34,13 @@ const wonders = process.argv[6] ?? "all";
 const say = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args);
 
 // Every order that failed, and every call that errored, for the bug hunt afterwards
-const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-") + (process.env.LEAGUE_TAG ? `-${process.env.LEAGUE_TAG}` : "");
+const tag = process.env.LEAGUE_TAG ? `-${process.env.LEAGUE_TAG}` : "";
+const resuming = !!process.env.LEAGUE_RESUME;
+if (resuming && !tag) throw new Error("LEAGUE_RESUME needs the LEAGUE_TAG of the league to carry on");
 mkdirSync("../data/harness", { recursive: true });
+const earlier = resuming ? readdirSync("../data/harness").filter((name) => name.startsWith("league-") && name.endsWith(`${tag}.csv`)).sort().at(-1) : undefined;
+if (resuming && !earlier) throw new Error(`LEAGUE_RESUME: no earlier results for league${tag}`);
+const stamp = earlier ? earlier.slice("league-".length, -".csv".length) : new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-") + tag;
 const problems = `../data/harness/league-${stamp}-problems.jsonl`;
 // A seat as the results name it: model, and effort when one is set
 const labelOf = (civ?: string) => {
@@ -55,9 +62,18 @@ function lookIn(civ: string | undefined, reached: boolean, why = "") {
   process.exit(3);
 }
 
+// A spent token limit is a pause, not a failure: stop at once, before the game moves on, keeping what the realms have done so far
+const LIMIT_SPENT = /hit your (?:session|usage|weekly) limit|usage limit|rate.?limit|\b429\b/i;
+function pauseIfLimited(civ: string | undefined, why: string) {
+  if (!LIMIT_SPENT.test(why)) return;
+  persist();
+  say(`PAUSED: the token limit is spent (${civ}: ${why.slice(0, 100)}). The game waits at turn ${gameTurn}; resume with LEAGUE_RESUME=1 and LEAGUE_TAG${tag.replace("-", "=")}.`);
+  process.exit(4);
+}
+
 // Every look-in: was it scheduled or a wake-up, did it change anything, what did it cost - to judge whether the fixed look-in earns its keep
 const passes = `../data/harness/league-${stamp}-passes.csv`;
-appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
+if (!resuming) appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
 // The game turn a look-in happened at, read off the round's own log lines
 let gameTurn = 0;
 onTrace((trace) => {
@@ -67,6 +83,7 @@ onTrace((trace) => {
     appendFileSync(passes, [gameTurn, trace.civ, labelOf(trace.civ), /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000)].join(",") + "\n");
     // Every real call costs something; an error that comes back as a reply (a spent session limit) costs nothing
     const unreached = trace.costUsd === 0 || trace.reply.startsWith("(failed") || /session limit|could not be reached/i.test(trace.reply);
+    if (unreached) pauseIfLimited(trace.civ, trace.reply);
     lookIn(trace.civ, !unreached, trace.reply);
   }
   for (const call of trace.toolCalls) {
@@ -81,32 +98,40 @@ const log = (...args: unknown[]) => {
   const turn = typeof args[0] === "string" ? /^(?:Advanced to turn|Round (?:starting|resuming) at turn) (\d+)/.exec(args[0]) : null;
   if (turn) gameTurn = Number(turn[1]);
   const failed = typeof args[0] === "string" ? /^govern pass for (.+) failed:/.exec(args[0]) : null;
+  if (failed) pauseIfLimited(failed[1], String(args[1] ?? ""));
   if (failed) lookIn(failed[1], false, String(args[1] ?? ""));
   say(...args);
 };
 
-const peoples = await host.nations();
-const nations = peoples.map((nation) => nation.name).sort(() => Math.random() - 0.5);
-state.seats = seatSpecs.map(({ model, effort }, index): Seat => ({ civ: nations[index], kind: "agent", model, ...(effort && { effort }), will: "", journal: [], chat: [], ready: false }));
-// Fixed sovereigns take the character out of the comparison: a drafted one differs in ambition and is written by the seat's own model
-const fixedSheets = process.env.LEAGUE_CHARACTERS ? (JSON.parse(readFileSync(process.env.LEAGUE_CHARACTERS, "utf8")) as { sheet: string }[]) : undefined;
-const handedOut = new Map<string, number>();
-for (const seat of state.seats) {
-  if (fixedSheets) {
-    const turn = handedOut.get(labelOf(seat.civ)) ?? 0;
-    handedOut.set(labelOf(seat.civ), turn + 1);
-    const leader = peoples.find((people) => people.name === seat.civ)?.leader ?? seat.civ;
-    seat.character = { name: leader, sheet: fixedSheets[turn % fixedSheets.length].sheet };
-    say(`${seat.civ}: ${leader} on ${labelOf(seat.civ)}, fixed character ${(turn % fixedSheets.length) + 1}`);
-    continue;
+if (resuming) {
+  // The seats, their journals and the world are all where the league left them
+  if (!state.seats.length) throw new Error("LEAGUE_RESUME: the state file holds no seats");
+  gameTurn = (await host.state()).turn;
+  say(`Resuming league${tag} at turn ${gameTurn}: ${state.seats.map((seat) => `${seat.civ} (${labelOf(seat.civ)})`).join(", ")}`);
+} else {
+  const peoples = await host.nations();
+  const nations = peoples.map((nation) => nation.name).sort(() => Math.random() - 0.5);
+  state.seats = seatSpecs.map(({ model, effort }, index): Seat => ({ civ: nations[index], kind: "agent", model, ...(effort && { effort }), will: "", journal: [], chat: [], ready: false }));
+  // Fixed sovereigns take the character out of the comparison: a drafted one differs in ambition and is written by the seat's own model
+  const fixedSheets = process.env.LEAGUE_CHARACTERS ? (JSON.parse(readFileSync(process.env.LEAGUE_CHARACTERS, "utf8")) as { sheet: string }[]) : undefined;
+  const handedOut = new Map<string, number>();
+  for (const seat of state.seats) {
+    if (fixedSheets) {
+      const turn = handedOut.get(labelOf(seat.civ)) ?? 0;
+      handedOut.set(labelOf(seat.civ), turn + 1);
+      const leader = peoples.find((people) => people.name === seat.civ)?.leader ?? seat.civ;
+      seat.character = { name: leader, sheet: fixedSheets[turn % fixedSheets.length].sheet };
+      say(`${seat.civ}: ${leader} on ${labelOf(seat.civ)}, fixed character ${(turn % fixedSheets.length) + 1}`);
+      continue;
+    }
+    const { name, title, pronouns, sheet } = await draftSovereign(seat.civ, seat.model!);
+    seat.character = { name, title, pronouns, sheet };
+    say(`${seat.civ}: ${name} on ${labelOf(seat.civ)}`);
   }
-  const { name, title, pronouns, sheet } = await draftSovereign(seat.civ, seat.model!);
-  seat.character = { name, title, pronouns, sheet };
-  say(`${seat.civ}: ${name} on ${labelOf(seat.civ)}`);
+  const others = nations.slice(seatSpecs.length, seatSpecs.length + gameAi);
+  await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, cityStates: 4 });
+  persist();
 }
-const others = nations.slice(seatSpecs.length, seatSpecs.length + gameAi);
-await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, cityStates: 4 });
-persist();
 
 // Reviews and interviews think equally hard for every seat, whatever effort it played at, so their answers can be compared -
 // unless LEAGUE_REFLECT_EFFORT=own, which hears each seat as it played
@@ -115,7 +140,7 @@ if (reflectEffort !== "own" && !["low", "medium", "high", "xhigh", "max"].includ
 const REFLECT_EFFORT = reflectEffort === "own" ? undefined : (reflectEffort as Seat["effort"]);
 
 const csv = `../data/harness/league-${stamp}.csv`;
-appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd\n");
+if (!resuming) appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd\n");
 
 for (;;) {
   const round = await playRound(state.seats, {

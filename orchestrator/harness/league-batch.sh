@@ -5,7 +5,8 @@
 # Leagues are numbered on from the highest ../data/league-run<n> already there, so a new batch never touches a running one:
 # league n runs on port 8770+n (never 8765, the real game), keeps its data in ../data/league-run<n>, tags its result files run<n>
 # and logs to ../data/league-run<n>/league.log. No game-AI peoples; LEAGUE_MAP=Medium for a bigger map (default Small).
-# LEAGUE_CHARACTERS and LEAGUE_REFLECT_EFFORT pass through to league.mts.
+# LEAGUE_CHARACTERS and LEAGUE_REFLECT_EFFORT pass through to league.mts. A league that hits the token limit pauses and resumes
+# itself (harness/league-loop.sh).
 cd "${0:A:h}/.."
 turns=$1; shift
 (( $# )) || { echo "usage: $0 <maxTurns> <seats> [<seats> ...]"; exit 1 }
@@ -20,7 +21,7 @@ for seats in "$@"; do
   nohup ../host.sh "$dir" $port > "$dir/host.log" 2>&1 &
   for _ in {1..60}; do grep -q "listening on http://127.0.0.1:$port" "$dir/host.log" 2>/dev/null && break; sleep 1; done
   grep -q "listening on http://127.0.0.1:$port" "$dir/host.log" || { echo "run$i: host on $port did not start - see $dir/host.log"; exit 1 }
-  LEAGUE_TAG=run$i RULER_HOST_URL=http://127.0.0.1:$port RULER_STATE_FILE="$dir/state.json" IMAGES=off \
-    nohup npx tsx harness/league.mts "$seats" $turns 0 ${LEAGUE_MAP:-Small} > "$dir/league.log" 2>&1 &
+  # league-loop.sh resumes the league by itself after a spent token limit
+  nohup harness/league-loop.sh $i $turns "$seats" ${LEAGUE_MAP:-Small} > "$dir/league.log" 2>&1 &
   echo "run$i on port $port: $seats (${LEAGUE_MAP:-Small} map) -> $dir/league.log"
 done
