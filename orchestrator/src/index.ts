@@ -458,7 +458,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().dismissed = false;
     persist();
     const waiting = (await standing()).filter((other) => !other.ready).map((other) => other.civ);
-    if (waiting.length) return reply(`The court is dismissed. Waiting for the ruler of ${waiting.join(", ")}.`);
+    if (waiting.length) return reply(`The court is dismissed. Waiting for the ruler of ${waiting.join(", ")}. ${seat().clerk?.name ?? "The clerk"} keeps the rolls meanwhile; call me by name, ${seat().character?.name.split(" ")[0]}, if you need the court again.`);
     await reply("The court is dismissed. Until next time.");
     for (const other of state.seats) if (other !== seat()) await tell(other, "All rulers have dismissed their courts. Godspeed.");
     void playRound();
@@ -474,7 +474,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     queue = queue.then(async () => {
       try {
         if (!seat().clerk) { seat().clerk = await draftClerk(seat().civ, ADVISOR_MODEL, seat().character?.name); persist(); }
-        const passing = state.phase === "passing";
+        const away = state.phase === "passing" ? "passing" : seat().ready ? "dismissed" : undefined;
         // The answer is shown as it is written: one message, edited as the text grows (Telegram tolerates an edit every second or so)
         const chatId = ctx.chat!.id;
         let draft: { message_id: number } | undefined;
@@ -491,7 +491,7 @@ function setUpAdvisor(bot: Bot, index: number) {
           });
         };
         // Anything that sounded like an order went to the council by the clerk's own tool
-        const reply = await whileTyping(bot, chatId, clerkReply(seat(), message, passing, show));
+        const reply = await whileTyping(bot, chatId, clerkReply(seat(), message, away, show));
         (seat().clerkChat ??= []).push({ from: "ruler", text: message }, { from: "clerk", text: reply });
         if (seat().clerkChat!.length > 12) seat().clerkChat!.splice(0, seat().clerkChat!.length - 12);
         persist();
@@ -651,11 +651,22 @@ function setUpAdvisor(bot: Bot, index: number) {
     });
   } else bot.command("newgame", (ctx) => ctx.reply("Only the ruler of the first seat may start a new game."));
 
+  /** Whether a message opens by calling someone by their first name */
+  const addressed = (name: string, text: string) => new RegExp(`^[^\\p{L}\\p{N}]*${name.split(" ")[0].replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![\\p{L}\\p{N}])`, "iu").test(text);
   bot.on("message:text", async (ctx) => {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing" && seat().character) return clerk(ctx, ctx.message.text);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
-    if (seat().clerk && new RegExp(`^[^\\p{L}\\p{N}]*${seat().clerk!.name.split(" ")[0].replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![\\p{L}\\p{N}])`, "iu").test(ctx.message.text)) return clerk(ctx, ctx.message.text);
+    if (seat().clerk && addressed(seat().clerk!.name, ctx.message.text)) return clerk(ctx, ctx.message.text);
+    // A dismissed court: the advisor has withdrawn until every ruler is ready, and the clerk keeps the ruler company - unless the advisor is called back by name
+    if (seat().ready && seat().character && state.phase === "audience") {
+      if (!addressed(seat().character!.name, ctx.message.text)) return clerk(ctx, ctx.message.text);
+      seat().ready = false;
+      const annal = seat().annals?.at(-1);
+      if (annal) annal.settled = undefined; // the closing is talked over again; the next dismissal records the last word
+      persist();
+      log(`${seat().civ}: the court is reopened`);
+    }
     if (seat().setup && !seat().civ) return choosePeople(ctx, ctx.message.text);
     if (seat().setup) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
     if (state.phase === "setup") return seat().character ? ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.") : beginSetup(ctx);
