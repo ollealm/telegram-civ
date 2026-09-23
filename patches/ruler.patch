@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..83386de
+index 0000000..b644933
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,48 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.map.mapunit.MapUnit
@@ -33,6 +33,9 @@ index 0000000..83386de
 +    /** A ruled civ's posture of arms: the city its army is to take (warAim), how it fights (attack | defend | raid), and how many soldiers stay home */
 +    class Posture(val warAim: String? = null, val stance: String = "attack", val reserve: Int = 0)
 +    val postures = ConcurrentHashMap<String, Posture>()
++
++    /** civIDs whose officials may not give gold to city-states on their own (a standing order of the ruler) */
++    val noGifts: MutableSet<String> = ConcurrentHashMap.newKeySet()
 +
 +    /** civIDs that may raise no world wonder at all (a game setting: e.g. only the rulers' realms compete for them) */
 +    val noWonders: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -158,10 +161,10 @@ index 9eea632..a5d4ec9 100644
  
      /** @return a TradeRequest with the same ourOffers as [tradeRequest] but with enough theirOffers
 diff --git a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
-index f180f26..bf9b91c 100644
+index f180f26..974e389 100644
 --- a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
-@@ -18,11 +18,31 @@ object UseGoldAutomation {
+@@ -18,11 +18,34 @@ object UseGoldAutomation {
  
      /** allow AI to spend money to purchase city-state friendship, buildings & unit */
      fun useGold(civ: Civilization) {
@@ -190,14 +193,17 @@ index f180f26..bf9b91c 100644
 +            itemised(civ, { "re-arming a $name as ${(if (unit.isCivilian()) tile.civilianUnit else tile.militaryUnit)?.name ?: "something newer"}" }) { UnitAutomation.tryUpgradeUnit(unit) }
 +        }
 +
-+        if (civ.isMajorCiv()) {
++        if (civ.isMajorCiv() && civ.civID !in com.unciv.logic.automation.RulerOverrides.noGifts) {
 +            val influence = civ.getKnownCivs().filter { it.isCityState }.associateWith { it.getDiplomacyManager(civ)?.getInfluence() ?: 0f }
-+            itemised(civ, { "gifts to " + (influence.filter { (it.key.getDiplomacyManager(civ)?.getInfluence() ?: 0f) > it.value + 1 }.keys.joinToString(" and ") { it.civName }.ifEmpty { "the city-states" }) }) { useGoldForCityStates(civ) }
++            // The ruler's chancery is told whom the gift went to and what that city-state has to offer, so the ledger line is a reason and not a mystery
++            itemised(civ, { "a gift to win the friendship of " + (influence.filter { (it.key.getDiplomacyManager(civ)?.getInfluence() ?: 0f) > it.value + 1 }.keys.joinToString(" and ") { cityState ->
++                val goods = cityState.getCivResourcesByName().filter { (name, amount) -> amount > 0 && civ.gameInfo.ruleset.tileResources[name]?.resourceType?.name in setOf("Luxury", "Strategic") }.keys.take(3)
++                "${cityState.civName}, a ${cityState.cityStateType.name.lowercase()} city-state" + (if (goods.isEmpty()) "" else " holding ${goods.joinToString()}") + " (an ally shares its goods and its favours)" }.ifEmpty { "the city-states" }) }) { useGoldForCityStates(civ) }
 +        }
  
          val acceptableHurryCostModifier = civ.gold.coerceAtLeast(0)/100
          // Ideally we buy things with good gold:production conversion from purchasing and hard-build the rest, but some mods have high hurryCostModifier on everything leading to too much gold being saved. 
-@@ -36,10 +56,10 @@ object UseGoldAutomation {
+@@ -36,10 +59,10 @@ object UseGoldAutomation {
              if (!city.cityConstructions.isConstructionPurchaseAllowed(construction, Stat.Gold, statBuyCost)) continue
              if (civ.gold < statBuyCost || construction.hurryCostModifier > acceptableHurryCostModifier) continue
              if (city.cityConstructions.getWorkDone(construction.name) > 0) continue // Don't buy things we already invested production into (may waste the invested production)
@@ -1130,10 +1136,10 @@ index 0000000..084b016
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..80e622c
+index 0000000..e496ccb
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1183 @@
+@@ -0,0 +1,1188 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1198,6 +1204,8 @@ index 0000000..80e622c
 +        var neverBuild = ArrayList<String>()
 +        /** Gold the officials must leave untouched; null = they spend as they see fit */
 +        var goldReserve: Int? = null
++        /** The officials may not give gold to city-states on their own */
++        var noGifts = false
 +        /** Keep a soldier inside every city: when one stands empty, the nearest free soldier is sent in under a garrison order */
 +        var garrisonEveryCity = false
 +        /** The posture of arms: warAim (an enemy city the host converges on), stance attack|defend|raid, reserve (soldiers kept home) */
@@ -1206,6 +1214,7 @@ index 0000000..80e622c
 +        var reserve: Int = 0
 +        fun toMap(civ: Civilization? = null) = mapOf(
 +            "goldReserve" to goldReserve,
++            "noGifts" to noGifts,
 +            "garrisonEveryCity" to garrisonEveryCity,
 +            "posture" to mapOf("warAim" to warAim, "stance" to stance, "reserve" to reserve),
 +            "personality" to personality,
@@ -1412,7 +1421,7 @@ index 0000000..80e622c
 +        orders.clear(); publicEvents.clear(); chancery.clear(); spending.clear(); warningsWoken.clear()
 +        units.reset(); diplomacy.reset(); trail.clear()
 +        worldAtLastAdvance = null
-+        RulerOverrides.lockedCities.clear(); RulerOverrides.focusedCities.clear(); RulerOverrides.postures.clear(); RulerOverrides.goldReserve.clear(); RulerOverrides.noWonders.clear()
++        RulerOverrides.lockedCities.clear(); RulerOverrides.focusedCities.clear(); RulerOverrides.postures.clear(); RulerOverrides.goldReserve.clear(); RulerOverrides.noGifts.clear(); RulerOverrides.noWonders.clear()
 +    }
 +
 +    /** Written to a sibling file and moved into place, so a crash mid-write never leaves a half file behind */
@@ -1482,6 +1491,7 @@ index 0000000..80e622c
 +        json.get("policyBranches")?.let { policyBranches = ArrayList(it.asStringArray().toList()) }
 +        json.get("neverBuild")?.let { neverBuild = ArrayList(it.asStringArray().toList()) }
 +        json.get("goldReserve")?.let { goldReserve = if (it.isNull) null else it.asInt().coerceAtLeast(0) }
++        json.get("noGifts")?.let { noGifts = it.asBoolean() }
 +        json.get("garrisonEveryCity")?.takeUnless { it.isNull }?.let { garrisonEveryCity = it.asBoolean() }
 +        json.get("posture")?.takeUnless { it.isNull }?.let { posture ->
 +            if (posture.has("warAim")) warAim = posture.get("warAim").takeUnless { it.isNull }?.asString()
@@ -1496,6 +1506,7 @@ index 0000000..80e622c
 +        for ((name, value) in standing.personality) personality[PersonalityValue.valueOf(name)] = value
 +        RulerOverrides.personalities[civ.civID] = personality
 +        standing.goldReserve?.let { RulerOverrides.goldReserve[civ.civID] = it } ?: RulerOverrides.goldReserve.remove(civ.civID)
++        if (standing.noGifts) RulerOverrides.noGifts += civ.civID else RulerOverrides.noGifts -= civ.civID
 +    }
 +
 +    /** "Railroad" -> Railroads: the names agents reach for are usually one slip away from the real one */

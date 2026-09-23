@@ -128,6 +128,17 @@ const wonderPictures = (round: RoundResult): Picture[] =>
       description: `${wonder}, newly completed by the ${civ}${site ? ` in their city of ${site}` : ""}, as a painter of the period would have shown it. This is NOT the wonder of that name as it stands in our world: it is the ${civ}' own version, raised by ${civ} builders in ${civ} lands - so the great work takes their forms, materials and ornament, and stands in ${site ? `${site.split(" (")[0]} itself, among that city's houses, walls and people` : "one of their cities"}, with the land as described${site ? ` (${site.split(" (")[1]?.replace(/\)$/, "") ?? ""})` : ""}. The city must be recognisably the ${civ}' - its roofs, dress and crowds are theirs - and the wonder recognisably itself, transformed by their hands. From a vantage that shows its scale, in the light of a particular hour, with builders, priests or crowds in the dress of the age.` }];
   });
 
+/** A people's entry into a new age always gets its picture - once */
+const eraPictures = (round: RoundResult): Picture[] =>
+  round.publicEvents.flatMap((event) => {
+    const [, civ, era] = /^(.+?) entered the (.+?)\.?$/.exec(event.text) ?? [];
+    if (!era || /^Ancient/i.test(era)) return [];
+    const caption = `${civ} enter the ${era}, ${event.year}`;
+    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(caption.split(",")[0]))) return [];
+    return [{ turn: event.turn, year: event.year, for: "chronicle", caption,
+      description: `The people of ${civ} at the dawn of their ${era}, ${event.year}: one instant of life in a city or a field of theirs in which the new age shows - the tools, dress, buildings, ships or arms that were not there a generation before, as this people would have had them, as a painter of the period would have shown it. A working moment with a focal figure, not a parade or a monument.` }];
+  });
+
 /** /map: our own drawing at once (the painted one comes with each dispatch) */
 async function sendMap(bot: Bot, seat: Seat) {
   const png = await host.map(seat.civ);
@@ -207,7 +218,7 @@ async function playRound() {
         const scene = dispatch.image ? paintAndKeep({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }) : Promise.resolve(null);
         // With every letter, the marches of the years it covers - ours, drawn by the host, so it costs nothing
         const marches = host.map(seat.civ, "campaign", round.fromTurn).catch((error) => { log("march map failed:", error.message); return null; });
-        const painted = !dispatch.heading && PAINTED_MAPS ? paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; }) : Promise.resolve(null);
+        const painted = !round.stoppedEarly && PAINTED_MAPS ? paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; }) : Promise.resolve(null);
         letters.push({ seat, letter, caption: dispatch.image?.caption, scene, marches, painted });
       },
       notice: tell,
@@ -220,7 +231,7 @@ async function playRound() {
           return { ...picture, note: boon.trim() };
         }));
         // All of the age's pictures are painted together and then sent in the order of the years they show
-        const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders];
+        const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders, ...eraPictures(round).map((picture) => ({ ...picture, note: "" }))];
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         const painted = await Promise.all(pictures.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
         chapters.push({ chapter, pictures: painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn) });
@@ -474,9 +485,9 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().ready = true;
     seat().dismissed = false;
     persist();
-    const waiting = (await standing()).filter((other) => !other.ready).map((other) => other.civ);
-    if (waiting.length) return reply(`The court is dismissed. Waiting for the ruler of ${waiting.join(", ")}. ${seat().clerk?.name ?? "The clerk"} keeps the rolls meanwhile; call me by name, ${seat().character?.name.split(" ")[0]}, if you need the court again.`);
+    // The same words whether the other rulers are done or not: what the wait is for is not the ruler's concern
     await reply("The court is dismissed. Until next time.");
+    if ((await standing()).some((other) => !other.ready)) return;
     void playRound();
   };
 
