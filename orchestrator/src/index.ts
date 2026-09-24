@@ -6,7 +6,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
+import { advisorPortrait, asJpeg, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
 import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
@@ -132,16 +132,16 @@ const wonderPictures = (round: RoundResult): Picture[] =>
 /** A people's entry into a new age always gets its picture - once; the Chronicler chooses the instant from what that people has lately done */
 const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
   const entries = round.publicEvents.flatMap((event) => {
-    const [, civ, era] = /^(.+?) entered the (.+?)\.?$/.exec(event.text) ?? [];
-    return !era || /^Ancient/i.test(era) ? [] : [{ event, civ, era }];
+    const [, civ, era, opened] = /^(.+?) entered the (.+?)(?: with the learning of (.+?))?\.?$/.exec(event.text) ?? [];
+    return !era || /^Ancient/i.test(era) ? [] : [{ event, civ, era, opened }];
   });
   if (!entries.length) return [];
   const all = await host.events().catch(() => [] as PublicEvent[]);
-  return Promise.all(entries.map(async ({ event, civ, era }) => {
+  return Promise.all(entries.map(async ({ event, civ, era, opened }) => {
     const tag = `${civ} enter the ${era}`;
     if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(tag))) return [];
     const recent = all.filter((entry) => entry.turn <= event.turn && entry.text.startsWith(civ)).slice(-12);
-    const scene = await eraScene(civ, era, event.year, recent).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
+    const scene = await eraScene(civ, era, event.year, recent, opened).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
     if (!scene) return [];
     return [{ turn: event.turn, year: event.year, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description }];
   })).then((pictures) => pictures.flat());
@@ -425,7 +425,13 @@ function setUpAdvisor(bot: Bot, index: number) {
         else await ctx.reply(`The world will be made once every ruler has assembled a court - ${missing} still to come.`);
       }
       const era = String((await host.briefing(seat().civ).catch(() => ({ era: "Ancient era" }))).era);
-      void advisorPortrait(seat().civ, seat().character!.sheet + pronounLine(seat().character!.pronouns), era).then((png) => png && ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name })).catch(() => {});
+      void advisorPortrait(seat().civ, seat().character!.sheet + pronounLine(seat().character!.pronouns), era).then(async (png) => {
+        if (!png) return;
+        await ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name });
+        // The advisor's face is the bot's face: the portrait becomes its profile photo (one advisor per bot, so one face per game)
+        await bot.api.setMyProfilePhoto({ type: "static", photo: new InputFile(await asJpeg(png), "portrait.jpg") })
+          .catch((error) => log(`setting the profile photo for ${seat().civ}'s advisor failed:`, error.message));
+      }).catch((error) => log(`portrait for ${seat().civ} failed:`, error.message));
     } catch (error) {
       log("taking on the advisor failed:", error);
       await ctx.reply("Your advisor is delayed on the road. Send /start to try again.");

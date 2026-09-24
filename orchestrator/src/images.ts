@@ -156,6 +156,22 @@ The schematic is built from six-sided cells; the finished map must show no trace
 const PORTRAITS = join(process.env.RULER_STATE_FILE ? join(process.env.RULER_STATE_FILE, "..") : "../data/game", "portraits");
 export const portraitPath = (civ: string) => join(PORTRAITS, `${civ}.png`);
 
+/** The portrait as Telegram wants a profile photo: a JPEG, by way of the system's own converter */
+export async function asJpeg(png: Buffer): Promise<Buffer> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { tmpdir } = await import("node:os");
+  const { writeFileSync, readFileSync, rmSync } = await import("node:fs");
+  const base = join(tmpdir(), `portrait-${process.pid}-${Date.now()}`);
+  writeFileSync(`${base}.png`, png);
+  try {
+    await promisify(execFile)("sips", ["-s", "format", "jpeg", "-s", "formatOptions", "85", `${base}.png`, "--out", `${base}.jpg`]);
+    return readFileSync(`${base}.jpg`);
+  } finally {
+    rmSync(`${base}.png`, { force: true }); rmSync(`${base}.jpg`, { force: true });
+  }
+}
+
 export async function advisorPortrait(civ: string, characterSheet: string, era: string): Promise<Buffer | null> {
   const png = await generateImage(`A portrait of this person, as a realistic oil painting in the manner and dress of the ${era} of the ${civ} civilization, head and shoulders, natural light, no text:\n\n${characterSheet}`);
   if (png) {

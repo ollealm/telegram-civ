@@ -567,12 +567,12 @@ export const wonderBoon = (wonder: string, civ: string, rulebook: unknown) =>
   );
 
 /** A people's entry into a new age: the Chronicler picks one instant of their life in which the new age shows, from what they have lately done */
-export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[]) =>
+export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[], opened?: string) =>
   runStructured(
     "herald",
     HERALD_MODEL,
-    `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory: one instant of ordinary life in a city or a field of theirs in which the new age shows - the tool, the dress, the ship, the roof, the weapon that was not there a generation before, in the hands of someone using it. Pick the instant from what this people has lately done (below) so that it is theirs and no one else's; if their recent doings say nothing, choose the change of age that this people, in this land, would feel first. ${PICTURE_CRAFT} Dress, tools and architecture true to ${civ} in ${year}, as a painter of the period would have shown it. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
-    `${civ} entered the ${era} in ${year}.\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${alreadyPainted(["chronicle"])}`,
+    `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory: one instant of ordinary life in a city or a field of theirs in which the new age shows - the tool, the dress, the ship, the roof, the weapon that was not there a generation before, in the hands of someone using it. Pick the instant from what this people has lately done (below) so that it is theirs and no one else's, and from the learning that opened the age for them, if it can be shown in someone's hands; if neither says anything, choose the change of age that this people, in this land, would feel first. The sea is one setting among many and not the emblem of any age: no quay, harbour or ship unless the learning or the doings were of the sea. ${PICTURE_CRAFT} Dress, tools and architecture true to ${civ} in ${year}, as a painter of the period would have shown it. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
+    `${civ} entered the ${era} in ${year}${opened ? `, opened for them by the learning of ${opened}` : ""}.\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${alreadyPainted(["chronicle"])}`,
     Picture,
   );
 
