@@ -71,6 +71,7 @@ export type Orders = {
   units?: { unit: number; action: string; x?: number; y?: number; city?: string }[];
   trade?: { with: string; give?: { item: string; amount?: number }[]; want?: { item: string; amount?: number }[] }[];
   peace?: string[];
+  answerOffers?: { power: string; answer: "accept" | "refuse"; terms?: string }[];
   friendship?: string[];
   gift?: { cityState: string; gold: number }[];
   cityFocus?: { city: string; focus: string }[];
