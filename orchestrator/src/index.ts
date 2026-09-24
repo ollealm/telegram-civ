@@ -208,7 +208,7 @@ async function playRound() {
   if (state.phase === "passing") return;
   const seated = state.seats.filter((seat) => seat.chatId || seat.kind === "agent");
   type Painting = Promise<Buffer | null>;
-  const letters: { seat: Seat; letter: string; caption?: string; scene: Painting; marches: Painting; painted: Painting }[] = [];
+  const letters: { seat: Seat; letter: string; caption?: string; scene: Painting; marches: Painting; painted: Painting; urgent: boolean }[] = [];
   const chapters: { chapter: string; pictures: { picture: Picture & { note?: string }; png: Buffer | null }[] }[] = [];
   try {
     await runRound(seated, {
@@ -226,7 +226,7 @@ async function playRound() {
         // With every letter, the marches of the years it covers - ours, drawn by the host, so it costs nothing
         const marches = host.map(seat.civ, "campaign", round.fromTurn).catch((error) => { log("march map failed:", error.message); return null; });
         const painted = !round.stoppedEarly && PAINTED_MAPS ? paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; }) : Promise.resolve(null);
-        letters.push({ seat, letter, caption: dispatch.image?.caption, scene, marches, painted });
+        letters.push({ seat, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
       notice: tell,
       chronicle: async (chapter, images, round) => {
@@ -245,12 +245,17 @@ async function playRound() {
       },
       log,
     });
-    // The age is complete and painted: every ruler's letter goes out now, then the Chronicler's chapter, all within the same minute
+    // The age is complete and painted: every ruler's letter goes out now, then the Chronicler's chapter, all within the same minute.
+    // Time keeps passing until they are delivered: a word sent meanwhile goes to the clerk, not to an advisor who has read a letter the ruler has not
+    state.phase = "passing";
+    persist();
     for (const post of letters) {
       const bot = botOf(post.seat)!;
       const chatId = post.seat.chatId!;
+      // An emergency letter goes the moment it is written; its picture follows. A regular letter waits for its paintings
+      if (post.urgent) await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
       const [scene, marches, painted] = await Promise.all([post.scene, post.marches, post.painted]);
-      await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+      if (!post.urgent) await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
       if (scene) await bot.api.sendPhoto(chatId, new InputFile(scene, "scene.png"), { caption: post.caption }).catch((error) => log(`scene to ${post.seat.civ} failed:`, error.message));
       if (marches) await bot.api.sendPhoto(chatId, new InputFile(marches, "marches.png")).catch((error) => log(`marches to ${post.seat.civ} failed:`, error.message));
       if (painted) await bot.api.sendPhoto(chatId, new InputFile(painted, "map.png")).catch((error) => log(`map to ${post.seat.civ} failed:`, error.message));
@@ -260,6 +265,8 @@ async function playRound() {
       for (const { picture, png } of post.pictures)
         for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
     }
+    state.phase = "audience";
+    persist();
     const game = await host.state();
     // A realm that fell this round: its ruler is told once, and gets the saga of their reign
     for (const seat of seated) {
@@ -290,6 +297,8 @@ async function playRound() {
     }
   } catch (error) {
     log("Round failed:", error);
+    state.phase = "audience"; // whatever failed, the rulers must be able to speak again
+    persist();
     for (const seat of seated) await tell(seat, "Something went wrong while time was passing. Send /onward to try again.");
   }
 }
@@ -694,7 +703,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing" && seat().character) return clerk(ctx, ctx.message.text);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
-    if (seat().clerk && addressed(seat().clerk!.name, ctx.message.text)) return clerk(ctx, ctx.message.text);
+    if (seat().clerk && (addressed(seat().clerk!.name, ctx.message.text) || addressed("clerk", ctx.message.text))) return clerk(ctx, ctx.message.text);
     // A dismissed court: the advisor has withdrawn until every ruler is ready, and the clerk keeps the ruler company - unless the advisor is called back by name
     if (seat().ready && seat().character && state.phase === "audience") {
       if (!addressed(seat().character!.name, ctx.message.text)) return clerk(ctx, ctx.message.text);
