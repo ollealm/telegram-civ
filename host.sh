@@ -15,7 +15,9 @@ mkdir -p "$DATA"
 SNAP="$DATA/classes"; rm -rf "$SNAP"; mkdir -p "$SNAP"
 CP=""; n=0
 for entry in ${(s.:.)"$(cat data/classpath.txt)"}; do
-  if [[ "$entry" == */unciv/*/build/* && -e "$entry" ]]; then
+  if [[ "$entry" == */unciv/*/build/* ]]; then
+    # A build directory that does not exist yet stays off the classpath: if a later build made it, the host would load from it live
+    [[ -e "$entry" ]] || continue
     n=$((n + 1)); copy="$SNAP/$n"; [[ "$entry" == *.jar ]] && copy="$copy.jar"
     cp -R "$entry" "$copy"; CP="$CP:$copy"
   else CP="$CP:$entry"; fi
