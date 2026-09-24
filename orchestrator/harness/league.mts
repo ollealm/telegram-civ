@@ -164,7 +164,11 @@ for (;;) {
       appendFileSync(`../data/harness/league-${stamp}-reviews.md`, `## ${seat.civ} - ${labelOf(seat.civ)} - ${seat.character?.name}\n\nWill:\n${seat.will}\n\nPlan:\n${seat.plan ?? ""}\n\nJournal:\n${seat.journal.join("\n")}\n\nReview:\n${review}\n\n`);
     }
     // The world is still live at the end, so the sovereigns may check their briefing before they answer
-    await interviewAll(state.seats, `../data/harness/league-${stamp}-interviews.md`, true, REFLECT_EFFORT);
+    // Tell them how it ended: the interview comes after the last turn, and the briefing alone may not say that the game is over
+    const ending = game.winner
+      ? `The game is over: ${game.winner} won a ${game.victoryType} victory in ${round.year} (turn ${round.turn}); no more turns will be played.`
+      : `The game is over: the league was stopped in ${round.year} (turn ${round.turn}) with no winner; no more turns will be played.`;
+    await interviewAll(state.seats, `../data/harness/league-${stamp}-interviews.md`, true, REFLECT_EFFORT, ending);
     break;
   }
 }

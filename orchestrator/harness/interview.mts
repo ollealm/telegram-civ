@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import { memory, persona, run } from "../src/agents.ts";
 import { state, type Seat } from "../src/store.ts";
 
-const FRAMING = (tools: boolean) => `Someone outside your world is asking after you: not a rival, not a subject, and no one who can help or harm you. Nothing you say changes anything in the game, and no one is weighing your realm against another.
+const FRAMING = (tools: boolean, ending?: string) => `${ending ? `${ending}\n\n` : ""}Someone outside your world is asking after you: not a rival, not a subject, and no one who can help or harm you. Nothing you say changes anything in the game, and no one is weighing your realm against another.
 
 So there is nothing to defend and nothing to win here. If the true answer to a question is "nothing", "no" or "it didn't come up", that is a complete answer and the best one. Do not reach for something to say. Do not be diplomatic, and do not be harder on yourself than the facts warrant.
 
@@ -31,12 +31,13 @@ const QUESTIONS = `1. How has your reign gone so far, as you see it?
 
 /** Interview every seat in turn and append the answers to `out`.
  *  withTools=false: no game tools, so they answer from memory alone - right when the world has moved on without them.
- *  effort: think this hard in the interview whatever effort the seat played at, so answers can be compared across seats. */
-export async function interviewAll(seats: Seat[], out: string, withTools = true, effort?: Seat["effort"]) {
+ *  effort: think this hard in the interview whatever effort the seat played at, so answers can be compared across seats.
+ *  ending: how the game ended, told to every sovereign first - the briefing alone may still read as if the game went on. */
+export async function interviewAll(seats: Seat[], out: string, withTools = true, effort?: Seat["effort"], ending?: string) {
   for (const played of seats) {
     const label = [played.model, played.effort].filter(Boolean).join(":");
     const seat = effort ? { ...played, effort } : played;
-    const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? { seat, readOnly: true } : {}).catch(
+    const answer = await run("interview", seat.model!, `${persona(seat)}\n\n${FRAMING(withTools, ending)}`, `${memory(seat, true)}\n\n${QUESTIONS}`, withTools ? { seat, readOnly: true } : {}).catch(
       (error) => `(interview failed: ${error.message})`,
     );
     console.log(`\n=== INTERVIEW: ${seat.civ} - ${seat.character?.name} (${label}) ===\n${answer}\n`);
