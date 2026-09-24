@@ -1,13 +1,13 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, describeDecision, draftClerk, pronounLine, realmSaga, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, pronounLine, realmSaga, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
-import { host, type RoundResult } from "./host.ts";
+import { host, type PublicEvent, type RoundResult } from "./host.ts";
 import { playRound as runRound, roundLength } from "./round.ts";
 import { forgetPicture, persist, recordPicture, remember, state, type Picture, type Seat } from "./store.ts";
 
@@ -128,16 +128,23 @@ const wonderPictures = (round: RoundResult): Picture[] =>
       description: `${wonder}, newly completed by the ${civ}${site ? ` in their city of ${site}` : ""}, as a painter of the period would have shown it. This is NOT the wonder of that name as it stands in our world: it is the ${civ}' own version, raised by ${civ} builders in ${civ} lands - so the great work takes their forms, materials and ornament, and stands in ${site ? `${site.split(" (")[0]} itself, among that city's houses, walls and people` : "one of their cities"}, with the land as described${site ? ` (${site.split(" (")[1]?.replace(/\)$/, "") ?? ""})` : ""}. The city must be recognisably the ${civ}' - its roofs, dress and crowds are theirs - and the wonder recognisably itself, transformed by their hands. From a vantage that shows its scale, in the light of a particular hour, with builders, priests or crowds in the dress of the age.` }];
   });
 
-/** A people's entry into a new age always gets its picture - once */
-const eraPictures = (round: RoundResult): Picture[] =>
-  round.publicEvents.flatMap((event) => {
+/** A people's entry into a new age always gets its picture - once; the Chronicler chooses the instant from what that people has lately done */
+const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
+  const entries = round.publicEvents.flatMap((event) => {
     const [, civ, era] = /^(.+?) entered the (.+?)\.?$/.exec(event.text) ?? [];
-    if (!era || /^Ancient/i.test(era)) return [];
-    const caption = `${civ} enter the ${era}, ${event.year}`;
-    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(caption.split(",")[0]))) return [];
-    return [{ turn: event.turn, year: event.year, for: "chronicle", caption,
-      description: `The people of ${civ} at the dawn of their ${era}, ${event.year}: one instant of life in a city or a field of theirs in which the new age shows - the tools, dress, buildings, ships or arms that were not there a generation before, as this people would have had them, as a painter of the period would have shown it. A working moment with a focal figure, not a parade or a monument.` }];
+    return !era || /^Ancient/i.test(era) ? [] : [{ event, civ, era }];
   });
+  if (!entries.length) return [];
+  const all = await host.events().catch(() => [] as PublicEvent[]);
+  return Promise.all(entries.map(async ({ event, civ, era }) => {
+    const tag = `${civ} enter the ${era}`;
+    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(tag))) return [];
+    const recent = all.filter((entry) => entry.turn <= event.turn && entry.text.startsWith(civ)).slice(-12);
+    const scene = await eraScene(civ, era, event.year, recent).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
+    if (!scene) return [];
+    return [{ turn: event.turn, year: event.year, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description }];
+  })).then((pictures) => pictures.flat());
+};
 
 /** /map: our own drawing at once (the painted one comes with each dispatch) */
 async function sendMap(bot: Bot, seat: Seat) {
@@ -231,7 +238,7 @@ async function playRound() {
           return { ...picture, note: boon.trim() };
         }));
         // All of the age's pictures are painted together and then sent in the order of the years they show
-        const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders, ...eraPictures(round).map((picture) => ({ ...picture, note: "" }))];
+        const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders, ...(await eraPictures(round)).map((picture) => ({ ...picture, note: "" }))];
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         const painted = await Promise.all(pictures.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
         chapters.push({ chapter, pictures: painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn) });
@@ -541,9 +548,11 @@ function setUpAdvisor(bot: Bot, index: number) {
     queue = queue.then(async () => {
       try {
         const game = await host.state();
-        const reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, roundLength(game.turn)));
+        let reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, roundLength(game.turn)));
         // A closing's picture of the decision and the ruler's words for the Chronicler went by the advisor's own tools. The picture is painted once
         // the court is dismissed - a closing can still be talked over, and only the last one stands.
+        // A court the advisor dismissed by its own call is not also offered the tap
+        if (seat().dismissed) reply = reply.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
         remember(seat(), { from: "ruler", text: message });
         remember(seat(), { from: "advisor", text: reply });
         seat().unanswered = undefined;

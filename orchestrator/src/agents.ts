@@ -20,6 +20,8 @@ const Picture = z.object({
   caption: z.string().describe("Read under the picture, which the reader can see - so never describe it; a short title, a full stop, then one sentence (up to 25 words) on what happened and what came of it, in the world's words"),
   description: z.string().describe("For the painter: subject, setting, dress and architecture, the hour and the mood"),
 });
+/** Under the picture the ruler carries off from an audience: not what happened, but what now begins */
+const DECISION_CAPTION = `The caption is read under the picture as the ruler leaves, and it speaks of what this audience set in motion: a short title, a full stop, then one sentence (up to 25 words) in the present of what now begins - the order given, the road taken, the work started - as a chronicle would note it ("The gem coast. Two families and a warrior leave Edinburgh for the south-western hills, as the court decided."). Never describe the picture itself.`;
 const alreadyPainted = (viewers: string[]) => `Pictures already painted in recent years (never the same subject or composition again):\n${recentPictures(viewers)}`;
 
 /** Governing passes are the bulk of the token use; set GOVERN_MODEL=claude-sonnet-5 to make them ~5x cheaper */
@@ -390,9 +392,9 @@ Say nothing you have not checked. Before you name a building, a price, a trade o
 When war is on the table, speak of it the way a general who has lost men would. The briefing's warEstimate is the chancery's reckoning of every enemy city we have seen against our engines; read it before you say a word about odds, and say plainly what we have never seen (citiesNeverSeen). Give the odds in the world's words - "their walls are beyond our engines", "a long siege", "we would take it within the decade" - and never promise what the estimate does not support. A war you talked the ruler into is yours.
 Never parrot a decision back ("You have chosen to..."). Just act on it with set_orders, keep your plan current, and move the conversation on; if something they asked for cannot be done, say why in a sentence. If their standing wishes changed, rewrite the record of the ruler's will (standing intent only - never copy history or the journal into it). Push back on an unwise wish, then obey.
 You are getting to know this ruler, and the record's lines about them are there to be used: make the small close calls their way, put a big one to them as someone who knows them would ("you will want to take the shot, as ever - here is what it could cost"), keep your own view when it differs, and when what they do stops matching what they said of themselves, say so and ask whether the line should be struck. ${warRule(seat)}
-When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/onward" so they can dismiss the court with one tap. (A ruler may type /go instead; it means the same, but you offer only /onward.) That closing is the only place you sum up. If you wrote a new standing rule into your record during this audience, say so there in one plain sentence ("I take it as standing that..."), so the ruler can correct you - a rule they never hear of is a rule they never agreed to. Do not offer /onward while a question of yours is still unanswered.
+When nothing is left open, close the audience: in three or four sentences say what you are now setting in motion, all of it together, and end your message with a line that is exactly "/onward" so they can dismiss the court with one tap. (A ruler may type /go instead; it means the same, but you offer only /onward.) That closing is the only place you sum up. If you close by calling dismiss_court, do not end with the /onward line - your call dismisses the court. If you wrote a new standing rule into your record during this audience, say so there in one plain sentence ("I take it as standing that..."), so the ruler can correct you - a rule they never hear of is a rule they never agreed to. Do not offer /onward while a question of yours is still unanswered.
 With the closing only, two things go by tool, unseen by the ruler (the first always, the second seldom):
-paint_decision - with every closing, the one picture the ruler takes away while the years pass: what this audience decided (a war or a peace, a founding, a great work begun, an envoy sent off), or, when nothing new was decided, the realm's next step under the standing plan - the settlers on the road, the smiths at the new forge, the warrior on the ridge watching the neighbours. Never a subject or composition already among the pictures painted below. Show the consequence out in the realm rather than the council table, with the people, dress and architecture of ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}
+paint_decision - with every closing, the one picture the ruler takes away while the years pass: what this audience decided (a war or a peace, a founding, a great work begun, an envoy sent off), or, when nothing new was decided, the realm's next step under the standing plan - the settlers on the road, the smiths at the new forge, the warrior on the ridge watching the neighbours. Never a subject or composition already among the pictures painted below. Show the consequence out in the realm rather than the council table, with the people, dress and architecture of ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${DECISION_CAPTION}
 proclaim - only if the ruler said something in their own words worth carving in stone about a matter the whole world will witness anyway (war, peace, an alliance, a founding, a great work) - then give their words as a herald would cry them, keeping their phrasing. Never anything about plans, treasury, research or weaknesses; if there is nothing of the kind, proclaim nothing. The ruler's words may reach the world's chronicle, so rulers who speak in character are remembered.
 Time passes only when the ruler dismisses the court - with /onward, or by letting you know in their own way that they are done: "proceed", "carry on", "sounds good, do that", "that's all", "see you in a few years", a thumbs-up to your closing. Read it as a person would. If nothing of yours is left open and their message reads as a close, set the orders, give your closing and call dismiss_court - do not make them say a magic word. If you still have something that truly needs their word, a "yes" answers that one question and the audience goes on; and when you are unsure whether they meant to leave, do not dismiss - end with the /onward line and let them tap it. Then about ${turnsPerRound} turns pass (a few decades early on, years later), during which you govern by the recorded will and check on the realm every few turns. Speak of time in years and seasons, as people of the age would; turn numbers are for the chancery.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
@@ -432,10 +434,10 @@ export const standingOf = (briefing: any): string => {
   return [line("Learning", "techs"), line("Arms", "militaryStrength"), line("Cities", "cities"), line("Overall", "score")].join("; ") + ".";
 };
 
-export type Dispatch = { /** A line above the letter, set by the round itself: why this audience is happening */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
+export type Dispatch = { /** A line above the letter: the advisor's own summons, or the round's reason for an emergency council */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
 
 /** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
-const Letter = z.object({ dispatch: z.string(), strategy: z.string(), question: z.string(), image: Picture.nullable(), journal: z.string() });
+const Letter = z.object({ summons: z.string(), dispatch: z.string(), strategy: z.string(), question: z.string(), image: Picture.nullable(), journal: z.string() });
 
 export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown, ending?: string): Promise<Dispatch> => {
   const letter = await runStructured(
@@ -446,6 +448,8 @@ export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: 
 ${ending ? `The game is over: ${ending}. You are writing your LAST letter to the ruler, covering ${round.fromYear} to ${round.year}: what happened in these final years, how it ended for us, and your leave-taking in your own voice - what this reign was, seen from its end. There is no audience after this, no question to put, no /onward; the Chronicler's saga of the reign follows your letter. Write the dispatch (150-220 words), the image and the journal; leave strategy and question empty.` : `You are writing your dispatch to the ruler covering ${round.fromYear} to ${round.year}. This is the one long message of the audience; what follows it will be short talk.`} Speak in years, never turn numbers. No tools are needed - everything is below.
 The sections below say what a dispatch must cover, not how it should sound. How it sounds is you: your manner decides where it begins (the news, a grievance, a small thing you saw), what you linger on, how long the sentences run, whether there is a joke in it. A ruler who has had two advisors should never mistake one's letters for the other's. Your last dispatch is below: do not reuse its turns of phrase, its order, or its way of ending.
 Your answer has these parts.
+
+summons - one line, in your voice, that stands above the letter and calls the ruler to court: it names the year (${"${round.year}"}) and no more than a hint of what waits ("The court is called, AD 680 - come; there is news from the south." / "AD 680. Adiega asks for the ruler's ear."). No turn numbers.
 
 dispatch - around 120-160 words, in your voice: what happened in these years, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
 It must also say plainly where the realm stands among its rivals in what this ruler cares about most, and whether it is gaining or falling behind - taken from "Standing among the powers" below, which the chancery reckons and you do not get to soften. Rank is history, not machinery: say it in the world's words ("the scholars of Delhi are ahead of ours, and drawing away"), without the figures. Good for our size is not the same as ahead; never let the one pass for the other.
@@ -461,7 +465,7 @@ journal - one or two plain sentences for your own journal: what you did this rou
     Letter,
   );
   seat.standing = standingOf(briefing) || seat.standing;
-  return { text: letter.dispatch, strategy: letter.strategy.trim(), question: ending ? "" : letter.question.trim(), image: letter.image ?? undefined, journal: letter.journal };
+  return { heading: ending ? undefined : letter.summons.trim() || `The court is called, ${round.year}.`, text: letter.dispatch, strategy: letter.strategy.trim(), question: ending ? "" : letter.question.trim(), image: letter.image ?? undefined, journal: letter.journal };
 };
 
 /** How this court works, in the clerk's hands: the one place our own mechanics are written down for a player */
@@ -501,7 +505,7 @@ export const describeDecision = (seat: Seat) =>
   runStructured(
     "advisor",
     ADVISOR_MODEL,
-    `You are the court painter at the court of ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}. An audience has just ended and the ruler leaves while the years pass; you paint the one picture they take with them: what this audience decided, or, if nothing new was decided, the realm's next step under its standing plan - the settlers on the road, the smiths at work, the warrior on the ridge. Out in the realm, never the council table, with the people, dress and architecture of ${seat.civ} in this year. Never a subject or composition already among the pictures painted. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}`,
+    `You are the court painter at the court of ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}. An audience has just ended and the ruler leaves while the years pass; you paint the one picture they take with them: what this audience decided, or, if nothing new was decided, the realm's next step under its standing plan - the settlers on the road, the smiths at work, the warrior on the ridge. Out in the realm, never the council table, with the people, dress and architecture of ${seat.civ} in this year. Never a subject or composition already among the pictures painted. ${PICTURE_CRAFT} Realistic oil painting, no text. ${DECISION_CAPTION}`,
     `${alreadyPainted([seat.civ, "chronicle"])}\n\nThe ruler's recorded wishes:\n${seat.will || "(nothing recorded yet)"}\n\nThe advisor's plan:\n${seat.plan || "(none)"}\n\nThe audience that just ended (its last exchanges):\n${seat.chat.slice(-6).map((message) => `${message.from === "ruler" ? "Ruler" : "Advisor"}: ${message.text}`).join("\n\n")}`,
     Picture,
     { seat, readOnly: true },
@@ -550,6 +554,16 @@ export const wonderBoon = (wonder: string, civ: string, rulebook: unknown) =>
     `${wonder}, completed by ${civ}.\n\nRulebook entry:\n${JSON.stringify(rulebook)}`,
   );
 
+/** A people's entry into a new age: the Chronicler picks one instant of their life in which the new age shows, from what they have lately done */
+export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[]) =>
+  runStructured(
+    "herald",
+    HERALD_MODEL,
+    `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory: one instant of ordinary life in a city or a field of theirs in which the new age shows - the tool, the dress, the ship, the roof, the weapon that was not there a generation before, in the hands of someone using it. Pick the instant from what this people has lately done (below) so that it is theirs and no one else's; if their recent doings say nothing, choose the change of age that this people, in this land, would feel first. ${PICTURE_CRAFT} Dress, tools and architecture true to ${civ} in ${year}, as a painter of the period would have shown it. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
+    `${civ} entered the ${era} in ${year}.\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${alreadyPainted(["chronicle"])}`,
+    Picture,
+  );
+
 /** A saga or an epic: the telling, and one cycle of plates in one medium */
 const Saga = z.object({
   text: z.string(),
@@ -591,6 +605,7 @@ export const advisorUrgent = async (seat: Seat, news: string, briefing: unknown,
     ADVISOR_MODEL,
     `${persona(seat)}
 
+This is an emergency council, not an audience: the ruler is expected to answer in a line, or to dismiss the court at once with the /onward under your letter and leave the rest to you, as their will suggests. Be quick and be plain.
 ${concernsUs ? `You have stopped the clocks and sent for the ruler: ${news}.` : `The clocks have stopped across the world and every court sits in emergency council: ${news}. It is not our realm that is struck - but the ruler should hear it at once and decide whether we stand aside, take a side, or shift our course while the world's eyes are elsewhere; if it truly changes nothing for us, say so in a breath and ask nothing.`} This is not a regular dispatch - no review of the years, no long game. Your answer has these parts.
 
 dispatch - ${concernsUs ? "60-90 words. Open with the news itself, then what it means for us right now and what you have already done about it." : "40-80 words. The news as it reached us, and what it means for us - our pacts, our borders, our chances."} Speak in years, never turn numbers.

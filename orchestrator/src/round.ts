@@ -1,7 +1,7 @@
 // One round of play, shared by the Telegram bots and the test harness:
 // the advisors govern every few turns, time passes, then dispatches and the Chronicler's chapter go out.
 
-import { advisorReport, advisorUrgent, governPass, heraldBulletin, heraldNewspaper, type Dispatch } from "./agents.ts";
+import { advisorReport, advisorUrgent, governPass, heraldNewspaper, type Dispatch } from "./agents.ts";
 import { host, type RoundResult } from "./host.ts";
 import { persist, remember, state, type Seat } from "./store.ts";
 
@@ -100,20 +100,21 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       // Every ruler is called to the emergency council - the one it concerns to answer, the others to see whether they will join in, stand aside or change course
       const rulers = seats.filter((seat) => seat.kind !== "agent");
       state.pendingRound = { fromTurn, fromYear: finished.fromYear, remaining, publicEvents: finished.publicEvents };
-      await Promise.all([
-        ...rulers.map(async (seat) => {
+      // No chapter for a broken age: the Chronicler writes when the age is whole, and this news is carried into it
+      await Promise.all(
+        rulers.map(async (seat) => {
           const concerned = news.startsWith(seat.civ);
           const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
           const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing, concerned));
-          // The ruler must see at a glance that this is not the regular audience: the age was cut short, and why
-          dispatch.heading = `Emergency council, ${finished.year} - the age was interrupted: ${news.replace(/[.!]+$/, "")}.\nNot a full age has passed. The rest of it plays out once every court has risen.`;
+          // The ruler must see at a glance that this is not the regular audience, and may dismiss it with one tap
+          dispatch.heading = `Emergency council, ${finished.year}: ${news.replace(/[.!]+$/, "")}.`;
+          dispatch.question = [dispatch.question, "/onward"].filter(Boolean).join("\n\n");
           notes.get(seat.civ)!.push(dispatch.journal);
           (seat.annals ??= []).push({ years: finished.year, story: dispatch.text, question: dispatch.question, urgent: true });
           remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
           await io.dispatch(seat, dispatch, finished);
         }),
-        heraldBulletin(news, finished.publicEvents.slice(-8)).then((bulletin) => io.chronicle(bulletin, [], finished)),
-      ]);
+      );
       urgentFor = rulers;
       return finished;
     }
