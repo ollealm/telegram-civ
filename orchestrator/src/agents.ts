@@ -98,7 +98,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     ),
     tool(
       "set_orders",
-      "Change the realm's orders; include only what should change. Standing orders (kept until changed): personality, research, policyBranches, neverBuild, goldReserve, noGifts, garrisonEveryCity. Immediate: queue, build, purchase, declareWar. The reply confirms the resulting queues, research and gold.",
+      "Change the realm's orders; include only what should change. Standing orders (kept until changed): personality, research, policyBranches, neverBuild, goldReserve, noGifts, garrisonEveryCity. Immediate: queue, build, purchase, trade, answerOffers, peace, declareWar. The reply confirms the resulting queues, research and gold.",
       {
         personality: z.object(Object.fromEntries(PERSONALITY_VALUES.map((name) => [name, weight]))).partial().optional().describe(PERSONALITY_HELP),
         research: z.array(z.string()).optional().describe("Technology goals in priority order; the path to each is researched automatically and the officials never deviate while a goal remains."),
@@ -130,6 +130,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
           want: z.array(z.object({ item: z.string(), amount: z.number().optional() })).optional(),
         })).optional().describe("Propose a trade to a major civ; see get_options.diplomacy for tradeable items. They answer on their turn."),
         peace: z.array(z.string()).optional().describe("Peace with civs we are at war with. If their offer is waiting (briefing.peaceOffers) this ACCEPTS it on the terms shown; otherwise it proposes a plain peace. War and peace are never decided by the officials: an offer of peace waits some turns for your answer, and lapses if you give none - which is how you refuse."),
+        answerOffers: z.array(z.object({ power: z.string(), answer: z.enum(["accept", "refuse"]) })).optional().describe("Your answer to a deal another power has laid before this court (briefing.tradeOffers): every offer made to us waits for you, the officials take none. accept binds it as offered; refuse sends it back; to counter, refuse and propose your own with trade. Unanswered, an offer lapses as refused after some turns."),
         friendship: z.array(z.string()).optional().describe("Propose a declaration of friendship."),
         gift: z.array(z.object({ cityState: z.string(), gold: z.number() })).optional().describe("Give gold to a city-state for influence."),
         cityFocus: z.array(z.object({ city: z.string(), focus: z.enum(["NoFocus", "Food", "Production", "Gold", "Science", "Culture", "Happiness", "Faith", "GoldGrowth", "ProductionGrowth"]) })).optional().describe("What a city's citizens work its tiles for. NoFocus lets the officials balance."),
@@ -616,11 +617,11 @@ export const heraldBulletin = (news: string, events: PublicEvent[]) =>
 
 
 /** Out of character, after a game: what the agent made of the tools and the information it had */
-export const playtestReview = (seat: Seat) =>
+export const playtestReview = (seat: Seat, ending?: string) =>
   run(
     "review",
     seat.model ?? ADVISOR_MODEL,
-    `You have just played ${seat.civ} in a game of civilizations through a small set of tools, looking in every few turns. Step out of character and review it as a playtester would, for the people who build the tools. Be concrete and brief (under 300 words): which orders failed or did nothing and why you think so; what information you lacked or could not trust; where the officials (the game's automation) worked against you; what you would change first. Separate what you know from the log from what you merely suspect - earlier reviewers blamed the tools for their own forgotten orders. You may read the briefing and log; change nothing.`,
+    `${ending ? `${ending}\n\n` : ""}You have just played ${seat.civ} in a game of civilizations through a small set of tools, looking in every few turns. Step out of character and review it as a playtester would, for the people who build the tools. Be concrete and brief (under 300 words): which orders failed or did nothing and why you think so; what information you lacked or could not trust; where the officials (the game's automation) worked against you; what you would change first. Separate what you know from the log from what you merely suspect - earlier reviewers blamed the tools for their own forgotten orders. You may read the briefing and log; change nothing.`,
     memory(seat),
     { seat },
   );

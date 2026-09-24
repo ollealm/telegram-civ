@@ -158,16 +158,16 @@ for (;;) {
     say(game.winner ? `${game.winner} (${labelOf(game.winner)}) won a ${game.victoryType} victory` : "The league ends here.");
     const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
     say("\n" + (await chroniclerEpic(await host.events(), standings, "This history has reached its end.")).text);
-    for (const seat of state.seats) {
-      const review = await playtestReview(REFLECT_EFFORT ? { ...seat, effort: REFLECT_EFFORT } : seat).catch((error) => `(review failed: ${error.message})`);
-      say(`\n=== PLAYTEST REVIEW: ${seat.civ} (${labelOf(seat.civ)}, ${seat.character?.name}) ===\n${review}\n`);
-      appendFileSync(`../data/harness/league-${stamp}-reviews.md`, `## ${seat.civ} - ${labelOf(seat.civ)} - ${seat.character?.name}\n\nWill:\n${seat.will}\n\nPlan:\n${seat.plan ?? ""}\n\nJournal:\n${seat.journal.join("\n")}\n\nReview:\n${review}\n\n`);
-    }
     // The world is still live at the end, so the sovereigns may check their briefing before they answer
     // Tell them how it ended: the interview comes after the last turn, and the briefing alone may not say that the game is over
     const ending = game.winner
       ? `The game is over: ${game.winner} won a ${game.victoryType} victory in ${round.year} (turn ${round.turn}); no more turns will be played.`
       : `The game is over: the league was stopped in ${round.year} (turn ${round.turn}) with no winner; no more turns will be played.`;
+    for (const seat of state.seats) {
+      const review = await playtestReview(REFLECT_EFFORT ? { ...seat, effort: REFLECT_EFFORT } : seat, ending).catch((error) => `(review failed: ${error.message})`);
+      say(`\n=== PLAYTEST REVIEW: ${seat.civ} (${labelOf(seat.civ)}, ${seat.character?.name}) ===\n${review}\n`);
+      appendFileSync(`../data/harness/league-${stamp}-reviews.md`, `## ${seat.civ} - ${labelOf(seat.civ)} - ${seat.character?.name}\n\nWill:\n${seat.will}\n\nPlan:\n${seat.plan ?? ""}\n\nJournal:\n${seat.journal.join("\n")}\n\nReview:\n${review}\n\n`);
+    }
     await interviewAll(state.seats, `../data/harness/league-${stamp}-interviews.md`, true, REFLECT_EFFORT, ending);
     break;
   }
