@@ -8,8 +8,8 @@ const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
-import { playRound as runRound, roundLength } from "./round.ts";
-import { forgetPicture, persist, recordPicture, remember, state, type Picture, type Seat } from "./store.ts";
+import { playRound as runRound, turnsAhead } from "./round.ts";
+import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
 
 /** Rival realms played by the game itself, chosen at random; 0 for an all-human world */
 const AI_CIVS = Number(process.env.AI_CIVS ?? 2);
@@ -17,10 +17,9 @@ const MAP_SIZES = ["Tiny", "Small", "Medium", "Large", "Huge"];
 const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
 /** Models for agent-ruled realms, dealt in turn */
 const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-sonnet-5").split(",").map((model) => model.trim());
-/** Per-seat effort for a new game (temporary levers for testing): HUMAN_EFFORTS=high,medium sets each ruler's seat in bot order (an empty entry keeps the per-role setting); AGENT_EFFORT sets every sovereign */
+/** Effort for every sovereign in a new game. (A ruler's seat keeps the per-role settings, so a letter can be written with more care than a reply.) */
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 const asEffort = (value?: string): Effort | undefined => (["low", "medium", "high", "xhigh", "max"].includes(value ?? "") ? (value as Effort) : undefined);
-const HUMAN_EFFORTS = (process.env.HUMAN_EFFORTS ?? "").split(",").map((value) => asEffort(value.trim()));
 const AGENT_EFFORT = asEffort(process.env.AGENT_EFFORT);
 /** How the game's own peoples are handicapped; rulers' realms always get the player's side of the scale */
 const DIFFICULTIES: Record<string, string> = { Even: "Prince", Easy: "Warlord", Gentle: "Chieftain", Hard: "King" };
@@ -37,6 +36,8 @@ const herald = new Bot(process.env.HERALD_BOT_TOKEN);
 const advisors = advisorTokens.map((token) => new Bot(token));
 
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args);
+// A failure nobody caught is logged, not fatal: one lost reply must not take every court down with it
+process.on("unhandledRejection", (error) => log("unhandled rejection:", error));
 
 /** The ruler's seat this advisor bot speaks for in the present game, if any */
 const seatOf = (botIndex: number) => state.seats.find((seat) => seat.bot === botIndex);
@@ -208,8 +209,9 @@ async function playRound() {
   if (state.phase === "passing") return;
   const seated = state.seats.filter((seat) => seat.chatId || seat.kind === "agent");
   type Painting = Promise<Buffer | null>;
-  const letters: { seat: Seat; letter: string; caption?: string; scene: Painting; marches: Painting; painted: Painting; urgent: boolean }[] = [];
-  const chapters: { chapter: string; pictures: { picture: Picture & { note?: string }; png: Buffer | null }[] }[] = [];
+  const letters: { seat: Seat; annal?: Annal; letter: string; caption?: string; scene: Painting; marches: Painting; painted: Painting; urgent: boolean }[] = [];
+  const chapters: { chapter: string; record?: { undelivered?: boolean }; pictures: { picture: Picture & { note?: string }; png: Buffer | null }[] }[] = [];
+  let delivered = false;
   try {
     await runRound(seated, {
       working: (seat, work) => {
@@ -218,6 +220,7 @@ async function playRound() {
       },
       // Nothing is sent as it is written: letters, scenes, maps and the chapter are gathered, painted, and go out together once the age is complete
       dispatch: async (seat, dispatch, round) => {
+        const annal = seat.annals?.at(-1); // the round has just set this letter down
         const bot = botOf(seat);
         if (!bot || !seat.chatId) return;
         const letter = [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
@@ -226,10 +229,11 @@ async function playRound() {
         // With every letter, the marches of the years it covers - ours, drawn by the host, so it costs nothing
         const marches = host.map(seat.civ, "campaign", round.fromTurn).catch((error) => { log("march map failed:", error.message); return null; });
         const painted = !round.stoppedEarly && PAINTED_MAPS ? paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; }) : Promise.resolve(null);
-        letters.push({ seat, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
+        letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
       notice: tell,
       chronicle: async (chapter, images, round) => {
+        const record = state.chapters?.at(-1); // the round has just set this chapter down
         // One or two scenes of the Chronicler's choosing, and every wonder
         // A wonder's picture says what the great work gives its builders
         const wonders = await Promise.all(wonderPictures(round).map(async (picture) => {
@@ -241,7 +245,7 @@ async function playRound() {
         const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders, ...(await eraPictures(round)).map((picture) => ({ ...picture, note: "" }))];
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         const painted = await Promise.all(pictures.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
-        chapters.push({ chapter, pictures: painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn) });
+        chapters.push({ chapter, record, pictures: painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn) });
       },
       log,
     });
@@ -253,20 +257,26 @@ async function playRound() {
       const bot = botOf(post.seat)!;
       const chatId = post.seat.chatId!;
       // An emergency letter goes the moment it is written; its picture follows. A regular letter waits for its paintings
-      if (post.urgent) await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+      const send = async () => {
+        await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+        if (post.annal) { post.annal.undelivered = undefined; persist(); }
+      };
+      if (post.urgent) await send();
       const [scene, marches, painted] = await Promise.all([post.scene, post.marches, post.painted]);
-      if (!post.urgent) await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+      if (!post.urgent) await send();
       if (scene) await bot.api.sendPhoto(chatId, new InputFile(scene, "scene.png"), { caption: post.caption }).catch((error) => log(`scene to ${post.seat.civ} failed:`, error.message));
       if (marches) await bot.api.sendPhoto(chatId, new InputFile(marches, "marches.png")).catch((error) => log(`marches to ${post.seat.civ} failed:`, error.message));
       if (painted) await bot.api.sendPhoto(chatId, new InputFile(painted, "map.png")).catch((error) => log(`map to ${post.seat.civ} failed:`, error.message));
     }
     for (const post of chapters) {
       await broadcastHerald(post.chapter);
+      if (post.record) { post.record.undelivered = undefined; persist(); }
       for (const { picture, png } of post.pictures)
         for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
     }
     state.phase = "audience";
     persist();
+    delivered = true;
     const game = await host.state();
     // A realm that fell this round: its ruler is told once, and gets the saga of their reign
     for (const seat of seated) {
@@ -282,8 +292,6 @@ async function playRound() {
     // The game is over when someone has won, or when no ruler is left at the table. Only then, after the last chapter, comes the epic of the whole world.
     const rulersLeft = (await standing()).filter((seat) => seat.kind !== "agent");
     const over = !!game.winner || rulersLeft.length === 0;
-    // Urgent news that concerns no ruler still at the table (a realm fell): nobody needs to hold council, so time moves on
-    if (state.pendingRound && !over && (await standing()).every((seat) => seat.ready)) return void playRound();
     if (over && !state.epicTold) {
       state.epicTold = true;
       state.pendingRound = undefined;
@@ -299,7 +307,18 @@ async function playRound() {
     log("Round failed:", error);
     state.phase = "audience"; // whatever failed, the rulers must be able to speak again
     persist();
-    for (const seat of seated) await tell(seat, "Something went wrong while time was passing. Send /onward to try again.");
+    // Once the letters are out, the rulers are in audience as usual: what failed after that (a saga, the epic) is the log's business
+    if (!delivered) for (const seat of seated) await tell(seat, "Something went wrong while time was passing. Send /onward to try again.");
+  }
+}
+
+/** Time passes once every standing ruler has dismissed their court: checked after every dismissal, and at startup */
+async function maybeStartRound() {
+  try {
+    if (state.phase !== "audience" || (await standing()).some((seat) => !seat.ready)) return;
+    void playRound();
+  } catch (error) {
+    log("could not tell whether every court has risen:", error);
   }
 }
 
@@ -332,7 +351,11 @@ function setUpAdvisor(bot: Bot, index: number) {
     await bot.api.setMyName(wanted).then(() => { (state.botNames ??= {})[index] = wanted; persist(); }).catch((error) => log("renaming the bot failed:", error.message));
   };
   wearNames[index] = wearName;
+  /** One reply at a time per seat, so they stay in order. A job that fails is logged and the next one still runs. */
   let queue: Promise<unknown> = Promise.resolve();
+  const enqueue = (job: () => Promise<unknown>) => { queue = queue.then(job).catch((error) => log(`${seatOf(index)?.civ ?? `advisor ${index + 1}`}: a reply failed:`, error)); };
+  /** Counts the courts that have risen: a decision picture from a court that was reopened and rose again is not sent */
+  let courtsRisen = 0;
 
   /** First of all: which people? Four drawn at random, fate, or any people named in the ruler's own words */
   const askForPeople = async (ctx: Context) => {
@@ -463,17 +486,19 @@ function setUpAdvisor(bot: Bot, index: number) {
   });
 
   const dismiss = async (reply: (text: string) => Promise<unknown>, silently = false) => {
+    // Whatever the advisor's dismiss_court asked for is being done now, or cannot be: it never outlives this call
+    seat().dismissed = false;
     if (seat().fallen) return reply(`${seat().civ} is no more, Majesty.`);
     if (state.phase === "setup") return reply("The world is not made yet - it begins once every ruler has assembled a court (/start).");
     if (state.phase === "passing") return reply("Time is already passing, Majesty.");
+    if (seat().ready) return reply("The court has already risen, Majesty; the years wait only on the other rulers.");
     // Dismissed without answering the advisor's last question: silence is assent to what it recommended
     const last = seat().chat.at(-1);
-    if (silently && last?.from === "advisor" && (seat().choices?.length || /\?/.test(last.text))) {
-      const message = "[The ruler dismisses the court without another word. The choice is yours now: pick among the ways forward you offered (or act on your last recommendation) as your character and the ruler's will suggest - a cautious advisor takes the safest, a bold one the one they believe in. Apply it, update your plan, and say in one or two sentences which way you went and why.]";
+    if (silently && last?.from === "advisor" && /\?/.test(last.text)) {
+      const message = "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to. Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]";
       try {
-        const answer = await whileTyping(bot, seat().chatId!, advisorReply(seat(), message, roundLength((await host.state()).turn)));
+        const answer = (await whileTyping(bot, seat().chatId!, advisorReply(seat(), message, turnsAhead((await host.state()).turn)))).replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
         remember(seat(), { from: "advisor", text: answer });
-        seat().choices = undefined;
         await reply(answer);
       } catch (error) {
         log("closing pass failed:", error);
@@ -489,32 +514,38 @@ function setUpAdvisor(bot: Bot, index: number) {
     // Every dismissal leaves the ruler a picture to carry off while they wait: the advisor's, or one asked for now if the closing came without. It is painted beside the dismissal, not before it
     const asked = seat().decisionPicture;
     seat().decisionPicture = undefined;
+    const court = ++courtsRisen;
     if (seat().chatId && seat().character) {
       const chatId = seat().chatId!;
       const civ = seat().civ;
       void (async () => {
         const game = await host.state();
         const decided: Picture = asked ? { ...asked, for: civ } : { turn: game.turn, year: game.year, for: civ, ...(await describeDecision(seat())) };
-        paint(decided, (png) => bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }));
+        // A court reopened and dismissed again has a newer decision, and its own picture: this one is overtaken
+        paint(decided, async (png) => { if (court === courtsRisen) await bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }); else forgetPicture(decided); });
       })().catch((error) => log("decision picture failed:", error.message));
     }
     seat().ready = true;
-    seat().dismissed = false;
+    seat().dismissed = false; // a closing pass above may have called dismiss_court again
     persist();
     // The same words whether the other rulers are done or not: what the wait is for is not the ruler's concern
-    await reply("The court is dismissed. Until next time.");
-    if ((await standing()).some((other) => !other.ready)) return;
-    void playRound();
+    await reply("The court is dismissed. Until next time.").catch((error) => log(`telling ${seat().civ} of the dismissal failed:`, error.message));
+    await maybeStartRound();
   };
 
   // "/go" alone dismisses the court; "/go and buy the library first" (or a message that ends in /go) is answered and acted on, then time passes
   const canHoldAudience = () => !seat().fallen && state.phase === "audience" && !!seat().character;
-  // A bare /onward waits its turn behind any reply still being written, like every other message
-  bot.command(LEAVE, (ctx) => (ctx.match.trim() && canHoldAudience() ? audience(ctx, ctx.match.trim(), true) : void (queue = queue.then(() => dismiss((text) => ctx.reply(text), true)).catch((error) => log("dismiss failed:", error)))));
+  // A bare /onward waits its turn behind any reply still being written, like every other message; words after it while time passes go to the clerk
+  bot.command(LEAVE, (ctx) => {
+    const words = ctx.match.trim();
+    if (words && canHoldAudience()) return audience(ctx, words, true);
+    if (words && state.phase === "passing" && seat().character && !seat().fallen) return clerk(ctx, words);
+    enqueue(() => dismiss((text) => ctx.reply(text), true));
+  });
 
   /** The keeper of the rolls answers: while the clocks run, on /clerk, or when addressed by name. Read-only; anything that sounded like an order goes to the council. */
   const clerk = (ctx: Context, message: string) => {
-    queue = queue.then(async () => {
+    enqueue(async () => {
       try {
         if (!seat().clerk) { seat().clerk = await draftClerk(seat().civ, ADVISOR_MODEL, seat().character?.name); persist(); }
         const away = state.phase === "passing" ? "passing" : seat().ready ? "dismissed" : undefined;
@@ -531,7 +562,7 @@ function setUpAdvisor(bot: Bot, index: number) {
           editing = editing.then(async () => {
             if (!draft) draft = await bot.api.sendMessage(chatId, text + " …");
             else await bot.api.editMessageText(chatId, draft.message_id, text + " …").catch(() => {});
-          });
+          }).catch(() => {}); // a draft that could not be shown is only a draft: the full answer is sent at the end
         };
         // Anything that sounded like an order went to the council by the clerk's own tool
         const reply = await whileTyping(bot, chatId, clerkReply(seat(), message, away, show));
@@ -550,43 +581,46 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   /** One audience at a time per seat, so replies stay in order */
   /** thenGo: the ruler ended their message with /go - answer it, act on it, and let time pass without another word from them */
-  const audience = (ctx: Pick<Context, "reply"> & { chat?: { id: number } }, message: string, thenGo = false) => {
+  const audience = (ctx: Pick<Context, "reply"> & { chat?: { id: number } }, message: string, thenGo = false, waiting?: { text: string; thenGo: boolean }) => {
     // Kept on disk until it is answered: a restart in the middle of a reply must not swallow the ruler's words
-    seat().unanswered = { text: message, thenGo };
+    const entry = waiting ?? { text: message, thenGo };
+    if (!waiting) (seat().unanswered ??= []).push(entry);
     persist();
-    queue = queue.then(async () => {
+    const answered = () => { seat().unanswered = seat().unanswered?.filter((other) => other !== entry); if (!seat().unanswered?.length) seat().unanswered = undefined; persist(); };
+    enqueue(async () => {
+      // Decided when the reply is due, not when the message came: a court dismissed or a round begun meanwhile changes who answers
+      if (state.phase === "passing" && seat().character) { answered(); return clerk(ctx as Context, message); }
+      if (seat().ready && state.phase === "audience") {
+        seat().ready = false;
+        const annal = seat().annals?.at(-1);
+        if (annal) annal.settled = undefined; // the closing is talked over again; the next dismissal records the last word
+        persist();
+        log(`${seat().civ}: the court is reopened by a word that came as it rose`);
+      }
       try {
         const game = await host.state();
-        let reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, roundLength(game.turn)));
+        let reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, turnsAhead(game.turn)));
         // A closing's picture of the decision and the ruler's words for the Chronicler went by the advisor's own tools. The picture is painted once
         // the court is dismissed - a closing can still be talked over, and only the last one stands.
         // A court the advisor dismissed by its own call is not also offered the tap
         if (seat().dismissed) reply = reply.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
         remember(seat(), { from: "ruler", text: message });
         remember(seat(), { from: "advisor", text: reply });
-        seat().unanswered = undefined;
-        seat().choices = undefined;
-        persist(); // or the file still says "unanswered" and a restart answers it a second time
+        seat().forCouncil = undefined; // what was left with the clerk was before the advisor in this reply
+        persist();
         await ctx.reply(reply);
+        // Answered once the ruler has it: a restart before this answers it again, which beats never answering it
+        answered();
         await flushDevFeed(herald, `Audience - ${seat().civ}`);
         if (seat().dismissed || thenGo) await dismiss((text) => ctx.reply(text));
       } catch (error) {
         log("advisor failed:", error);
-        seat().unanswered = undefined;
-        persist();
-        await ctx.reply("Forgive me, Majesty, I lost my train of thought. Could you say that again?");
+        seat().dismissed = false;
+        answered();
+        await ctx.reply("Forgive me, Majesty, I lost my train of thought. Could you say that again?").catch(() => {});
       }
     });
   };
-
-  bot.callbackQuery(/^choice:(\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery().catch(() => {}); // a press from before a restart is too old to acknowledge, but still counts
-    const choice = seat().choices?.[Number(ctx.match[1])];
-    if (!choice) return void ctx.reply("That moment has passed, Majesty - tell me what you want now.");
-    if (state.phase === "passing") return void ctx.reply("Time is passing, Majesty.");
-    await ctx.reply(`You chose: ${choice}`);
-    audience(ctx, `I choose this way forward: "${choice}". Make it so, and tell me briefly what you are setting in motion.`);
-  });
 
   bot.command("status", async (ctx) => {
     const game = await host.state();
@@ -674,9 +708,11 @@ function setUpAdvisor(bot: Bot, index: number) {
         return void ctx.editMessageText(`A ${draft.size!.toLowerCase()} world with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.agents ?? 0} sovereign${draft.agents === 1 ? "" : "s"}, ${draft.ai} of the game's own people${draft.ai === 1 ? "" : "s"} played by the game and ${CITY_STATES[draft.size!] ?? 6} lesser cities${draft.wonders === "rulers" ? "; wonders are for the rulers' realms alone" : draft.wonders === "advised" ? "; the game's peoples raise no wonders" : ""}. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
       }
       if (state.phase === "passing" || !draft.humans || !draft.size) return void ctx.editMessageText("Send /newgame to begin again.");
+      // A reply still being written belongs to the old world: it would land in the new one's seat
+      if (state.seats.some((other) => other.unanswered?.length)) return void ctx.reply("An advisor is still answering - press Make it so again in a moment.");
       // A ruler keeps their advisor bot's chat from one game to the next; the first seats go to the first bots
       state.seats = [
-        ...Array.from({ length: draft.humans }, (_, botIndex) => ({ ...blankSeat(), bot: botIndex, chatId: seatOf(botIndex)?.chatId, rulerName: seatOf(botIndex)?.rulerName, effort: HUMAN_EFFORTS[botIndex] })),
+        ...Array.from({ length: draft.humans }, (_, botIndex) => ({ ...blankSeat(), bot: botIndex, chatId: seatOf(botIndex)?.chatId, rulerName: seatOf(botIndex)?.rulerName })),
         ...Array.from({ length: draft.agents ?? 0 }, (_, agentIndex) => ({ ...blankSeat(), kind: "agent" as const, model: AGENT_MODELS[agentIndex % AGENT_MODELS.length], effort: AGENT_EFFORT })),
       ];
       state.difficulty = draft.difficulty;
@@ -723,12 +759,13 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   void wearName();
 
-  // Words the ruler sent just before a restart: answer them now, as if nothing had happened
-  const left = seat()?.unanswered;
-  if (left && seat().chatId && state.phase === "audience") {
+  // Words the ruler sent just before a restart: answer them now, in order, as if nothing had happened
+  const left = seatOf(index)?.unanswered ?? [];
+  if (left.length && seat().chatId && state.phase !== "setup") {
     const chatId = seat().chatId!;
-    log(`${seat().civ}: answering a message left unanswered by the restart`);
-    audience({ chat: { id: chatId }, reply: ((text: string) => bot.api.sendMessage(chatId, text)) as Context["reply"] }, left.text, left.thenGo);
+    log(`${seat().civ}: answering ${left.length} message(s) left unanswered by the restart`);
+    const replyHere = { chat: { id: chatId }, reply: ((text: string) => bot.api.sendMessage(chatId, text)) as Context["reply"] } as Context;
+    for (const waiting of left) audience(replyHere, waiting.text, waiting.thenGo, waiting);
   }
 
   bot.catch((error) => log(`advisor ${index + 1} error:`, error.message));
@@ -755,9 +792,41 @@ function setUpHerald() {
   herald.catch((error) => log("herald error:", error.message));
 }
 
+/** After a restart: letters and chapters that were written but never sent go out now, and an age a restart cut short is taken up again */
+async function recover() {
+  const resent = new Set<Seat>();
+  for (const seat of state.seats)
+    for (const annal of seat.annals ?? [])
+      if (annal.undelivered) {
+        await tell(seat, [annal.heading, annal.story, annal.course, annal.question].filter(Boolean).join("\n\n"));
+        annal.undelivered = undefined;
+        resent.add(seat);
+      }
+  for (const chapter of state.chapters ?? [])
+    if (chapter.undelivered) {
+      await broadcastHerald(chapter.text);
+      chapter.undelivered = undefined;
+    }
+  persist();
+  if (!diedPassing) return;
+  // Died while the age was being played: it is played on, as if the courts had just risen
+  if (state.pendingRound && !state.pendingRound.urgent) {
+    log("Taking up the age a restart cut short");
+    return maybeStartRound();
+  }
+  // Died while the letters were being written or sent: the courts are in session again, and a ruler whose letter never came is told so
+  for (const seat of await standing()) {
+    if (!seat.ready) continue;
+    seat.ready = false;
+    if (!resent.has(seat) && seat.kind !== "agent") await tell(seat, "My letter for these years was lost on the road, Majesty - the realm ran on your standing wishes meanwhile. Ask me anything of these years, and /onward when you are ready.");
+  }
+  persist();
+}
+
 await ensureGame();
 advisors.forEach(setUpAdvisor);
 setUpHerald();
+await recover().catch((error) => log("recovering from the restart failed:", error));
 // Dev feed, start of session: the settings everything below runs with
 const devChat = Number(process.env.DEV_CHAT_ID) || state.heraldChats[0];
 if (devChat && devFeedInChat())

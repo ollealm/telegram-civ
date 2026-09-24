@@ -19,7 +19,9 @@ export type Character = {
 };
 
 /** One age of a reign as it was lived: the advisor's telling, the fork put to the ruler, what the ruler said and what was settled. The saga is written from these. */
-export type Annal = { years: string; story: string; course?: string; question?: string; rulerSaid?: string[]; settled?: string; urgent?: boolean };
+export type Annal = { years: string; heading?: string; story: string; course?: string; question?: string; rulerSaid?: string[]; settled?: string; urgent?: boolean;
+  /** Written but not yet sent: a restart in between sends it at startup rather than let the advisor believe the ruler read it */
+  undelivered?: boolean };
 
 export type Seat = {
   civ: string;
@@ -33,8 +35,8 @@ export type Seat = {
   clerkChat?: { from: "ruler" | "clerk"; text: string }[];
   /** Things said to the clerk that sounded like orders: handed to the advisor at the next dispatch */
   forCouncil?: string[];
-  /** The ruler's message that is being answered right now - survives a restart, so it is answered after one */
-  unanswered?: { text: string; thenGo: boolean };
+  /** The ruler's messages waiting for an answer, oldest first - kept until the reply is sent, so a restart answers them rather than swallow them */
+  unanswered?: { text: string; thenGo: boolean }[];
   /** The picture of what the current audience decided, painted when the court is dismissed */
   decisionPicture?: { turn: number; year: string; caption: string; description: string };
   annals?: Annal[];
@@ -61,8 +63,6 @@ export type Seat = {
   mayDeclareWar?: boolean;
   /** Setup round in progress: the answers given so far */
   setup?: string[];
-  /** The ways forward offered in the last dispatch; buttons refer to these by index */
-  choices?: string[];
   /** The realm has been destroyed; its ruler has been told */
   fallen?: boolean;
   /** The ruler's own words made public this round, for the Chronicler */
@@ -88,7 +88,7 @@ export type State = {
   /** Every ruler's proclamation so far, for the Chronicler's epic */
   proclaimed?: { turn: number; year: string; text: string }[];
   /** The Chronicler's chapters as they were published - the world epic is written from these */
-  chapters?: { years: string; text: string }[];
+  chapters?: { years: string; text: string; undelivered?: boolean }[];
   /** The name the world-history bot currently shows */
   heraldName?: string;
   /** The name each advisor bot currently shows, by bot - it belongs to the bot, which keeps it between games */
@@ -97,8 +97,17 @@ export type State = {
   epicTold?: boolean;
   /** Pictures painted lately, so that nobody is shown the same scene twice */
   pictures?: Picture[];
-  /** A round interrupted by urgent news: what is left of it is played after the urgent audience */
-  pendingRound?: { fromTurn: number; fromYear: string; remaining: number; publicEvents: { turn: number; year: string; text: string }[] };
+  /** The age being played, kept on disk as it goes: after urgent news (urgent) the rest of it is played once the councils have risen; after a restart, the rest of it is played on.
+   *  Cleared once every turn of it is played. remaining is an older file's way of saying where it ends. */
+  pendingRound?: {
+    fromTurn: number; fromYear: string; untilTurn?: number; remaining?: number;
+    publicEvents: { turn: number; year: string; text: string }[];
+    /** The advisors' look-in notes so far, by civ - the letters are written from them */
+    notes?: Record<string, string[]>;
+    /** What the rulers proclaimed before the age began, for its chapter */
+    proclaimed?: string[];
+    urgent?: boolean;
+  };
   /** audience: rulers talk with their advisors; passing: a round is being played */
   phase: "setup" | "audience" | "passing";
   /** Chosen with /newgame; the world is made once every ruler has picked a people */
@@ -114,7 +123,9 @@ export type State = {
 const empty = (): State => ({ seats: [], heraldChats: [], usage: {}, phase: "audience" });
 
 export const state: State = existsSync(FILE) ? { ...empty(), ...JSON.parse(readFileSync(FILE, "utf8")) } : empty();
-if (state.phase === "passing") state.phase = "audience"; // a round cut short by a restart is simply played again
+/** The last run died while time was passing: the round, or the delivery of its letters, is taken up again at startup */
+export const diedPassing = state.phase === "passing";
+if (diedPassing) state.phase = "audience";
 // A seat was once bound to a bot by its place in the list; a state file from then gets the binding written out
 state.seats.forEach((seat, index) => {
   const legacy = seat as Seat & { botName?: string };
@@ -125,6 +136,11 @@ state.seats.forEach((seat, index) => {
   }
 });
 delete (state as { roundInProgress?: unknown }).roundInProgress; // an older version's round guard, long unused
+for (const seat of state.seats) {
+  const legacy = seat as Seat & { unanswered?: unknown; choices?: unknown };
+  if (legacy.unanswered && !Array.isArray(legacy.unanswered)) seat.unanswered = [legacy.unanswered as { text: string; thenGo: boolean }]; // one message, as an older version kept it
+  delete legacy.choices; // buttons for the ways forward, never offered
+}
 
 export function persist() {
   mkdirSync(dirname(FILE), { recursive: true });

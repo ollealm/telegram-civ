@@ -13,6 +13,12 @@ export const GOVERN_EVERY = Number(process.env.GOVERN_EVERY_TURNS ?? 4);
 /** Turns in the round that starts at this turn - longer while the early game is slow */
 export const roundLength = (turn: number) => (turn < EARLY_GAME_UNTIL_TURN ? EARLY_ROUND_TURNS : TURNS_PER_ROUND);
 
+/** Turns that will pass when the court now sitting rises: the rest of an interrupted age, or a whole new one */
+export const turnsAhead = (turn: number) => {
+  const pending = state.pendingRound;
+  return pending ? Math.max(0, (pending.untilTurn ?? turn + (pending.remaining ?? 0)) - turn) : roundLength(turn);
+};
+
 /** Where a round's words go: Telegram in play, the console in the harness */
 export type RoundIO = {
   /** Wraps slow work for one seat, e.g. to show "typing…" */
@@ -34,19 +40,23 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     // A fallen realm has no advisor left to govern or report
     const alive = new Set(opening.majorCivs.filter((civ) => civ.alive).map((civ) => civ.civ));
     const seats = allSeats.filter((seat) => alive.has(seat.civ));
-    const notes = new Map(seats.map((seat) => [seat.civ, [] as string[]]));
-    // What the rulers said aloud before this round began belongs to the chapter about it
-    const proclaimed = seats.flatMap((seat) => seat.proclamations ?? []);
-    for (const seat of seats) seat.proclamations = undefined;
-    // Resuming after urgent news: play what is left of the interrupted round, and report on the whole of it
+    // Resuming after urgent news or a restart: play what is left of the interrupted round, and report on the whole of it
     const pending = state.pendingRound;
-    state.pendingRound = undefined;
     const fromTurn = pending?.fromTurn ?? opening.turn;
-    (state.proclaimed ??= []).push(...proclaimed.map((text) => ({ turn: fromTurn, year: opening.year, text })));
-    const length = pending ? opening.turn - pending.fromTurn + pending.remaining : roundLength(fromTurn);
-    io.log(pending ? `Round resuming at turn ${opening.turn}, ${pending.remaining} turns left` : `Round starting at turn ${fromTurn}, ${length} turns`);
+    const untilTurn = pending ? pending.untilTurn ?? opening.turn + (pending.remaining ?? 0) : fromTurn + roundLength(fromTurn);
+    const length = untilTurn - fromTurn;
+    // What the rulers said aloud before this round began belongs to the chapter about it
+    const spoken = seats.flatMap((seat) => seat.proclamations ?? []);
+    for (const seat of seats) seat.proclamations = undefined;
+    (state.proclaimed ??= []).push(...spoken.map((text) => ({ turn: fromTurn, year: opening.year, text })));
+    const proclaimed = [...(pending?.proclaimed ?? []), ...spoken];
+    const notes = new Map(seats.map((seat) => [seat.civ, [...(pending?.notes?.[seat.civ] ?? [])]]));
+    // The age in progress is on disk from here until its letters are written: whatever stops it - urgent news, a failure, a restart - the rest is played on later
+    const progress: NonNullable<typeof state.pendingRound> = (state.pendingRound = { fromTurn, fromYear: pending?.fromYear ?? opening.year, untilTurn, publicEvents: pending?.publicEvents ?? [], notes: Object.fromEntries(notes), proclaimed });
+    persist();
+    io.log(pending ? `Round resuming at turn ${opening.turn}, ${untilTurn - opening.turn} turns left` : `Round starting at turn ${fromTurn}, ${length} turns`);
     let round: RoundResult | undefined;
-    let carried = pending?.publicEvents ?? [];
+    let carried = progress.publicEvents;
     // A council event (war, a lost city, victory) ends the round early
     // Everyone looks in on schedule; in between, an advisor is sent for only when something happened in their realm
     let woken: Record<string, string[]> = {};
@@ -79,8 +89,10 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       const untilNextLookIn = GOVERN_EVERY - (played % GOVERN_EVERY);
       const chunk = await host.advance(Math.min(untilNextLookIn, length - played), true);
       played = chunk.turn - fromTurn;
-      round = { ...chunk, fromTurn, fromYear: round?.fromYear ?? pending?.fromYear ?? chunk.fromYear, publicEvents: [...(round?.publicEvents ?? carried), ...chunk.publicEvents] };
+      round = { ...chunk, fromTurn, fromYear: progress.fromYear, publicEvents: [...(round?.publicEvents ?? carried), ...chunk.publicEvents] };
       carried = [];
+      progress.publicEvents = round.publicEvents;
+      persist();
       // A wake-up that lands on a scheduled look-in anyway needs no pass of its own
       // ...and an advisor is sent for at most once between two look-ins; whatever else happens waits for the next one
       if (played % GOVERN_EVERY === 0) sentFor.clear();
@@ -90,7 +102,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       io.log(`Advanced to turn ${chunk.turn}`, chunk.stoppedEarly ?? "", Object.keys(woken).length ? `woke ${Object.keys(woken).join(", ")}` : "");
       if (chunk.stoppedEarly || chunk.turn === now) break;
     }
-    if (!round) throw new Error("No turns were played");
+    // Every turn of it was played before a restart: nothing to advance, only the letters to write
+    if (!round) round = { ...(await host.advance(0, true)), fromTurn, fromYear: progress.fromYear, publicEvents: carried };
     const finished = round;
 
     // Urgent news (not a victory): summon only the rulers it concerns, keep the rest of the round for afterwards
@@ -99,25 +112,37 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     if (news && !/has won/.test(news) && remaining > 0) {
       // Every ruler is called to the emergency council - the one it concerns to answer, the others to see whether they will join in, stand aside or change course
       const rulers = seats.filter((seat) => seat.kind !== "agent");
-      state.pendingRound = { fromTurn, fromYear: finished.fromYear, remaining, publicEvents: finished.publicEvents };
+      progress.urgent = true;
+      persist();
       // No chapter for a broken age: the Chronicler writes when the age is whole, and this news is carried into it
-      await Promise.all(
+      // One ruler's failed letter must not cost the others theirs
+      const summoned = await Promise.allSettled(
         rulers.map(async (seat) => {
-          const concerned = news.startsWith(seat.civ);
+          // A ruler whose own order began the war hears how it has begun, not that they were attacked; any other realm the news names was struck
+          const part = finished.declaredBy === seat.civ ? "declarer" : news.includes(seat.civ) ? "struck" : "other";
           const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
-          const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing, concerned));
+          const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing, part));
           // The ruler must see at a glance that this is not the regular audience, and may dismiss it with one tap
           dispatch.heading = `Emergency council, ${finished.year}: ${news.replace(/[.!]+$/, "")}.`;
           dispatch.question = [dispatch.question, "/onward"].filter(Boolean).join("\n\n");
           notes.get(seat.civ)!.push(dispatch.journal);
-          (seat.annals ??= []).push({ years: finished.year, story: dispatch.text, question: dispatch.question, urgent: true });
+          (seat.annals ??= []).push({ years: finished.year, heading: dispatch.heading, story: dispatch.text, question: dispatch.question, urgent: true, undelivered: true });
           remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
           await io.dispatch(seat, dispatch, finished);
         }),
       );
+      summoned.forEach((result, index) => {
+        if (result.status !== "rejected") return;
+        io.log(`emergency letter failed for ${rulers[index].civ}:`, result.reason?.message ?? result.reason);
+        void io.notice(rulers[index], `The clocks have stopped, Majesty: ${news}. My letter on it was lost on the road - ask me what it means for us, and /onward when you are ready.`);
+      });
       urgentFor = rulers;
       return finished;
     }
+
+    // Every turn of the age is played: from here on a restart finds letters to deliver, not an age to resume
+    state.pendingRound = undefined;
+    persist();
 
     // One realm's failed letter must not cost the others theirs
     const settled = await Promise.allSettled([
@@ -132,11 +157,10 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         }
         const ending = finished.stoppedEarly && /has won/.test(finished.stoppedEarly) ? finished.stoppedEarly.replace(/[.!]+$/, "") : undefined;
         const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing, ending));
-        // The letter opens like a summons, so the ruler knows at a glance that a new court has begun and when
-        dispatch.heading = ending ? `The game is over: ${ending}. This is your advisor's last letter; the saga of your reign follows.` : `You are called to court, ${finished.year}.`;
+        // The letter opens with the advisor's own summons, so the ruler knows at a glance that a new court has begun and when
+        dispatch.heading = ending ? `The game is over: ${ending}. This is your advisor's last letter; the saga of your reign follows.` : dispatch.heading || `You are called to court, ${finished.year}.`;
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
-        seat.choices = undefined;
-        (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, story: dispatch.text, course: dispatch.strategy || undefined, question: dispatch.question });
+        (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, heading: dispatch.heading, story: dispatch.text, course: dispatch.strategy || undefined, question: dispatch.question, undelivered: true });
         seat.forCouncil = undefined; // what was left with the clerk has now been answered
         remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n") });
         await io.dispatch(seat, dispatch, finished);
@@ -146,7 +170,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         .events()
         .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed))
         .then(({ chapter, images }) => {
-          (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter });
+          (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter, undelivered: true });
           return io.chronicle(chapter, images, finished);
         }),
     ]);

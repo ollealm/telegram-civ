@@ -4,14 +4,17 @@ const HOST = process.env.RULER_HOST_URL ?? "http://127.0.0.1:8765";
 
 export class HostError extends Error {}
 
-/** A host that is being restarted answers nothing for half a minute; every request waits that out rather than fail the advisor mid-sentence */
+/** A host that is being restarted answers nothing for half a minute; every request waits that out rather than fail the advisor mid-sentence.
+ *  Only a refused connection is tried again - the request never reached the host - so an advance or an order is never carried out twice;
+ *  and a host that takes the connection but never answers fails the request after two minutes rather than hold the round for ever. */
 async function reach(url: string, init?: RequestInit): Promise<Response> {
   const until = Date.now() + Number(process.env.HOST_WAIT_MS ?? 90_000);
   for (;;) {
     try {
-      return await fetch(url, init);
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(Number(process.env.HOST_TIMEOUT_MS ?? 120_000)) });
     } catch (error) {
-      if (Date.now() >= until) throw error;
+      const refused = (error as { cause?: { code?: string } }).cause?.code === "ECONNREFUSED";
+      if (!refused || Date.now() >= until) throw error;
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
@@ -47,6 +50,8 @@ export type RoundResult = {
   turn: number;
   year: string;
   stoppedEarly: string | null;
+  /** The ruled realm whose own order began the war that stopped the round, if one did */
+  declaredBy?: string | null;
   /** civ -> what just happened that its advisor should see before the next scheduled look-in */
   wake?: Record<string, string[]>;
   publicEvents: PublicEvent[];
