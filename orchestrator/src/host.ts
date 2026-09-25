@@ -37,7 +37,7 @@ export type GameState = {
   turn: number;
   year: string;
   ruled: string[];
-  majorCivs: { civ: string; alive: boolean }[];
+  majorCivs: { civ: string; alive: boolean; era?: string }[];
   winner: string | null;
   victoryType: string | null;
 };

@@ -1624,7 +1624,7 @@ index 0000000..40650e4
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..e6bfee3
+index 0000000..24b2b9a
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 @@ -0,0 +1,1279 @@
@@ -1969,7 +1969,7 @@ index 0000000..e6bfee3
 +            "turn" to game.turns,
 +            "year" to yearText(game.turns),
 +            "ruled" to orders.keys.toList(),
-+            "majorCivs" to game.majorCivs().map { mapOf("civ" to it.civName, "alive" to it.isAlive()) },
++            "majorCivs" to game.majorCivs().map { mapOf("civ" to it.civName, "alive" to it.isAlive(), "era" to it.getEra().name) },
 +            "winner" to winner?.civName,
 +            "victoryType" to winner?.victoryManager?.getVictoryTypeAchieved()
 +        )

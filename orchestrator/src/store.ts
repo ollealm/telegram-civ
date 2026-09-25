@@ -114,6 +114,8 @@ export type State = {
   phase: "setup" | "audience" | "passing";
   /** Chosen with /newgame; the world is made once every ruler has picked a people */
   mapSize?: string;
+  /** Set once the first realm reaches the late-game age: ages are shorter from then on, for the rest of the game */
+  lateGame?: boolean;
   aiCivs?: number;
   difficulty?: string;
   /** Who may raise world wonders: everyone, only the rulers' realms, or every realm with an advisor (rulers' and agents') */

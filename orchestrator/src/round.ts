@@ -11,7 +11,18 @@ const EARLY_GAME_UNTIL_TURN = Number(process.env.EARLY_GAME_UNTIL_TURN ?? 24);
 export const GOVERN_EVERY = Number(process.env.GOVERN_EVERY_TURNS ?? 4);
 
 /** Turns in the round that starts at this turn - longer while the early game is slow */
-export const roundLength = (turn: number) => (turn < EARLY_GAME_UNTIL_TURN ? EARLY_ROUND_TURNS : TURNS_PER_ROUND);
+/** Late in the game, once any realm has reached this age, an age is shorter: more happens in a turn, and the ruler should be asked more often */
+const LATE_GAME_FROM_ERA = process.env.LATE_GAME_FROM_ERA ?? "Industrial";
+const LATE_ROUND_TURNS = Number(process.env.LATE_ROUND_TURNS ?? 8);
+const ERAS = ["Ancient", "Classical", "Medieval", "Renaissance", "Industrial", "Modern", "Atomic", "Information", "Future"];
+const eraRank = (era?: string) => ERAS.findIndex((name) => era?.startsWith(name));
+export const roundLength = (turn: number) => (turn < EARLY_GAME_UNTIL_TURN ? EARLY_ROUND_TURNS : state.lateGame ? LATE_ROUND_TURNS : TURNS_PER_ROUND);
+/** Looked at when an age begins: the first realm into the late-game age shortens every age after it */
+export const noteLateGame = (majorCivs: { alive: boolean; era?: string }[]) => {
+  if (state.lateGame || !majorCivs.some((civ) => civ.alive && eraRank(civ.era) >= eraRank(LATE_GAME_FROM_ERA))) return;
+  state.lateGame = true;
+  persist();
+};
 
 /** Turns that will pass when the court now sitting rises: the rest of an interrupted age, or a whole new one */
 export const turnsAhead = (turn: number) => {
@@ -37,6 +48,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
   let urgentFor: Seat[] | undefined;
   try {
     const opening = await host.state();
+    noteLateGame(opening.majorCivs);
     // A fallen realm has no advisor left to govern or report
     const alive = new Set(opening.majorCivs.filter((civ) => civ.alive).map((civ) => civ.civ));
     const seats = allSeats.filter((seat) => alive.has(seat.civ));
