@@ -31,6 +31,8 @@ export type Seat = {
   formerAdvisors?: { name: string; title?: string; pronouns?: string; until: string }[];
   /** The keeper of the rolls: answers questions of fact while time passes (and on /clerk). One per realm per game. */
   clerk?: { name: string; title: string; sheet: string; pronouns?: string };
+  /** Who has the floor in the audience: the clerk, once called with /clerk or by name, until the advisor is called back with /advisor or by name; unset = the advisor */
+  floor?: "clerk";
   /** The last few exchanges with the clerk */
   clerkChat?: { from: "ruler" | "clerk"; text: string }[];
   /** Things said to the clerk that sounded like orders: handed to the advisor at the next dispatch */

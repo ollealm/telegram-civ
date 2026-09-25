@@ -282,7 +282,8 @@ async function playRound() {
       // An emergency letter goes the moment it is written; its picture follows. A regular letter waits for its paintings
       const send = async () => {
         await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
-        if (post.annal) { post.annal.undelivered = undefined; persist(); }
+        if (post.annal) { post.annal.undelivered = undefined; }
+        post.seat.floor = undefined; persist(); // a letter opens the court with the advisor speaking
       };
       if (post.urgent) await send();
       const [scene, marches, painted] = await Promise.all([post.scene, post.marches, post.painted]);
@@ -555,6 +556,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       })().catch((error) => log("decision picture failed:", error.message));
     }
     seat().ready = true;
+    seat().floor = undefined; // a court that rises returns the floor to the advisor
     seat().dismissed = false; // a closing pass above may have called dismiss_court again
     persist();
     // The same words whether the other rulers are done or not: what the wait is for is not the ruler's concern
@@ -599,8 +601,10 @@ function setUpAdvisor(bot: Bot, index: number) {
         if (seat().clerkChat!.length > 12) seat().clerkChat!.splice(0, seat().clerkChat!.length - 12);
         persist();
         await editing;
-        if (draft) await bot.api.editMessageText(chatId, draft.message_id, reply || "(the rolls are silent)").catch(() => ctx.reply(reply));
-        else await ctx.reply(reply);
+        // While the clerk has the floor in an open court, every reply ends with the tap that calls the advisor back
+        const shown = (reply || "(the rolls are silent)") + (seat().floor === "clerk" && state.phase === "audience" && !seat().ready ? "\n\n/advisor" : "");
+        if (draft) await bot.api.editMessageText(chatId, draft.message_id, shown).catch(() => ctx.reply(shown));
+        else await ctx.reply(shown);
       } catch (error) {
         log("clerk failed:", error);
         await ctx.reply("The clerk has mislaid the roll. Ask again in a moment.").catch(() => {});
@@ -668,7 +672,20 @@ function setUpAdvisor(bot: Bot, index: number) {
   });
 
   // The keeper of the rolls, in the middle of an audience or at any hour
-  bot.command("clerk", (ctx) => (ctx.match.trim() ? clerk(ctx, ctx.match.trim()) : ctx.reply(seat().clerk ? `${seat().clerk!.name}, ${seat().clerk!.title}, keeps the rolls here. Ask: /clerk what does the Great Library do` : "The keeper of the rolls answers questions of fact - the rules, our cities, our deals, how this court works. Ask: /clerk what does the Great Library do")));
+  // /clerk gives the clerk the floor: every word after it goes to the clerk until /advisor (or the advisor's name) calls the advisor back
+  bot.command("clerk", (ctx) => {
+    if (!seat().character) return void ctx.reply("The court is not assembled yet, Majesty.");
+    seat().floor = "clerk"; persist();
+    clerk(ctx, ctx.match.trim() || "[The ruler has called you to the desk and said nothing yet: greet them in a line and ask what they want of the rolls.]");
+  });
+  bot.command("advisor", (ctx) => {
+    if (!seat().character) return void ctx.reply("The court is not assembled yet, Majesty.");
+    seat().floor = undefined; persist();
+    const words = ctx.match.trim();
+    if (state.phase === "passing") return void ctx.reply(`${seat().character!.name} is away governing, Majesty, and will report when the age is done. ${seat().clerk?.name ?? "The clerk"} keeps the rolls meanwhile.`);
+    if (words) return audience(ctx, words);
+    audience(ctx, "[The ruler has turned from the clerk back to you and said nothing yet: take up the audience where it stood, in a line or two.]");
+  });
 
   bot.command("usage", (ctx) => ctx.reply(usageSummary()));
 
@@ -768,7 +785,10 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing" && seat().character) return clerk(ctx, ctx.message.text);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
-    if (seat().clerk && (addressed(seat().clerk!.name, ctx.message.text) || addressed("clerk", ctx.message.text))) return clerk(ctx, ctx.message.text);
+    // The floor: the clerk's once called, the advisor's once called back - by command or by name
+    if (seat().clerk && (addressed(seat().clerk!.name, ctx.message.text) || addressed("clerk", ctx.message.text))) { seat().floor = "clerk"; persist(); return clerk(ctx, ctx.message.text); }
+    if (seat().floor === "clerk" && seat().character && addressed(seat().character!.name, ctx.message.text)) { seat().floor = undefined; persist(); }
+    else if (seat().floor === "clerk" && !seat().ready && !new RegExp(`\\s/(${LEAVE.join("|")})\\s*$`, "i").test(ctx.message.text)) return clerk(ctx, ctx.message.text);
     // A dismissed court: the advisor has withdrawn until every ruler is ready, and the clerk keeps the ruler company - unless the advisor is called back by name
     if (seat().ready && seat().character && state.phase === "audience") {
       if (!addressed(seat().character!.name, ctx.message.text)) return clerk(ctx, ctx.message.text);
