@@ -604,6 +604,16 @@ Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever 
     Picture,
   );
 
+/** When a people finished several wonders in one age, which one the Chronicler paints: the most worth seeing, not the first */
+export const chooseWonder = (civ: string, wonders: string[], year: string) =>
+  runStructured(
+    "herald",
+    HERALD_MODEL,
+    `You are the Chronicler. ${civ} finished more than one great work in the age ending ${year}, and the court painter paints one of them. Choose the one most worth a painting: the one whose sight would stop a traveller, or whose making says most about this people in this age. Not the most useful, not the first; the picture.`,
+    `The great works: ${wonders.join("; ")}.`,
+    z.object({ wonder: z.string().describe("Exactly one of the names given") }),
+  ).then(({ wonder }) => wonders.find((name) => name.toLowerCase() === wonder.trim().toLowerCase()) ?? wonders[0]);
+
 /** A saga or an epic: the telling, and one cycle of plates in one medium */
 const Saga = z.object({
   text: z.string(),

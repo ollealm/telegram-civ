@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, pronounLine, realmSaga, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, pronounLine, realmSaga, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -233,14 +233,12 @@ async function playRound() {
         const letter = [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
         const game = await host.state();
         const scene = dispatch.image ? paintAndKeep({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }) : Promise.resolve(null);
-        // The map of the age: in an age with marches or battles, the campaign map painted from the host's reckoning of them; otherwise the known world as it stands.
+        // The map of the age, always in one style: the painted world with the age's movements drawn as an atlas would - or with none, in a quiet age.
         // The host's own exact march map is kept for /map, and comes with the letter only when no painted map does
         const age = dispatch.age;
-        const eventful = !!age && (age.marches.length + age.enemyMarches.length + age.lost.length + age.enemyLost.length + age.citiesTaken.length) > 0;
         const traced = host.map(seat.civ, "campaign", round.fromTurn, round.turn).catch((error) => { log("march map failed:", error.message); return null; });
         const painted = round.stoppedEarly || !PAINTED_MAPS ? Promise.resolve(null)
-          : eventful ? traced.then((png) => (png ? campaignMap(seat.civ, age!, png) : paintedMap(seat.civ))).catch((error) => { log("campaign map failed:", error.message); return null; })
-          : paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; });
+          : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).catch((error) => { log("campaign map failed:", error.message); return null; });
         const marches = PAINTED_MAPS ? Promise.resolve(null) : traced;
         letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
@@ -249,7 +247,19 @@ async function playRound() {
         const record = state.chapters?.at(-1); // the round has just set this chapter down
         // One or two scenes of the Chronicler's choosing, and every wonder
         // A wonder's picture says what the great work gives its builders
-        const wonders = await Promise.all(wonderPictures(round).map(async (picture) => {
+        // One wonder picture per people per age: when a people finished several, the Chronicler chooses the one most worth a painting
+        const candidates = wonderPictures(round);
+        const byCiv = new Map<string, Picture[]>();
+        for (const picture of candidates) { const civ = /completed by (.+?) in /.exec(picture.caption)?.[1] ?? ""; byCiv.set(civ, [...(byCiv.get(civ) ?? []), picture]); }
+        const chosen = (await Promise.all([...byCiv.entries()].map(async ([civ, pictures]) => {
+          if (pictures.length <= 1) return pictures;
+          const names = pictures.map((picture) => picture.caption.split(",")[0]);
+          const pick = await chooseWonder(civ, names, round.year).catch(() => names[0]);
+          log(`${civ} finished ${names.join(", ")}; the Chronicler paints ${pick}`);
+          return pictures.filter((picture) => picture.caption.startsWith(`${pick},`)).slice(0, 1);
+        }))).flat();
+        for (const picture of candidates) if (!chosen.includes(picture)) forgetPicture(picture); // the others go unpainted
+        const wonders = await Promise.all(chosen.map(async (picture) => {
           const wonder = picture.caption.split(",")[0];
           const boon = await host.lookup(state.seats[0]?.civ ?? "", wonder).then((entry) => wonderBoon(wonder, /completed by (.+?) in /.exec(picture.caption)?.[1] ?? "its builders", entry)).catch(() => "");
           return { ...picture, note: boon.trim() };
