@@ -504,16 +504,6 @@ function setUpAdvisor(bot: Bot, index: number) {
       : beginSetup(ctx),
   );
 
-  // The closing's smaller matters: a tap opens one; "As you see fit" leaves them all to the advisor and dismisses the court
-  bot.callbackQuery(/^matter:(\d+|all)$/, async (ctx) => {
-    await ctx.answerCallbackQuery().catch(() => {});
-    if (state.phase !== "audience" || seat().ready) return void ctx.reply("That moment has passed, Majesty.");
-    if (ctx.match[1] === "all") return enqueue(() => dismiss((text) => ctx.reply(text), true));
-    const matter = seat().matters?.[Number(ctx.match[1])];
-    if (!matter) return void ctx.reply("That moment has passed, Majesty - tell me what you want now.");
-    audience(ctx, `About this one: "${matter.matter}" - you lean to ${matter.lean}. Lay it out for me.`);
-  });
-
   bot.callbackQuery(/^people:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
     if (seat().setup && !seat().civ) await choosePeople(ctx, ctx.match[1]);
@@ -652,14 +642,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         remember(seat(), { from: "advisor", text: reply });
         seat().forCouncil = undefined; // what was left with the clerk was before the advisor in this reply
         persist();
-        // The closing's smaller matters get a button each, and one to leave them all to the advisor and rise
-        const matters = seat().matters;
-        if (matters?.length && !seat().dismissed) {
-          const keyboard = new InlineKeyboard();
-          matters.forEach((_matter, index) => { keyboard.text(String(index + 1), `matter:${index}`); if ((index + 1) % 4 === 0) keyboard.row(); });
-          keyboard.row().text("As you see fit", "matter:all");
-          await ctx.reply(reply, { reply_markup: keyboard });
-        } else await ctx.reply(reply);
+        await ctx.reply(reply);
         // Answered once the ruler has it: a restart before this answers it again, which beats never answering it
         answered();
         await flushDevFeed(herald, `Audience - ${seat().civ}`);
