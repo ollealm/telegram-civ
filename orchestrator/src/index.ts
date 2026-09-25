@@ -645,6 +645,18 @@ function setUpAdvisor(bot: Bot, index: number) {
         seat().forCouncil = undefined; // what was left with the clerk was before the advisor in this reply
         persist();
         await ctx.reply(reply);
+        // A closing that never weighed its smaller matters is asked once: list them, or say there are none (an empty list counts as considered)
+        const closed = seat().dismissed || new RegExp(`/(${LEAVE.join("|")})\\s*$`, "i").test(reply);
+        if (closed && seat().matters === undefined && !thenGo && !state.pendingRound?.urgent) {
+          const listed = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the smaller matters. If there are calls you would settle alone once it rises, list them now - numbered, one line each with your lean, checked - and give them to smaller_matters, ending with \"Name any you want to raise; otherwise\" and the /onward line. If there are truly none, call smaller_matters with an empty list and say in one line that nothing small waits. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
+            .catch((error) => { log(`${seat().civ}: the smaller-matters follow-up failed:`, error.message); return ""; });
+          if (listed.trim()) {
+            const shown = seat().dismissed ? listed.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "") : listed;
+            remember(seat(), { from: "advisor", text: shown });
+            persist();
+            await ctx.reply(shown);
+          }
+        }
         // Answered once the ruler has it: a restart before this answers it again, which beats never answering it
         answered();
         await flushDevFeed(herald, `Audience - ${seat().civ}`);
