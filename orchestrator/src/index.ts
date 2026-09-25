@@ -237,7 +237,8 @@ async function playRound() {
         // The host's own exact march map is kept for /map, and comes with the letter beside the painted one
         const age = dispatch.age;
         const traced = host.map(seat.civ, "campaign", round.fromTurn, round.turn).catch((error) => { log("march map failed:", error.message); return null; });
-        const painted = round.stoppedEarly || !PAINTED_MAPS ? Promise.resolve(null)
+        // An emergency council's letter gets the map too - the age so far, with the war's first marches on it - unless the game is over
+        const painted = !PAINTED_MAPS || /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve(null)
           : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).catch((error) => { log("campaign map failed:", error.message); return null; });
         // The host's exact march map comes with every letter as well, beside the painted one, while the painted maps are still being judged (MARCH_MAP=off stops it)
         const marches = process.env.MARCH_MAP === "off" ? Promise.resolve(null) : traced;
