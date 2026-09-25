@@ -116,6 +116,8 @@ export type State = {
   mapSize?: string;
   /** Set once the first realm reaches the late-game age: ages are shorter from then on, for the rest of the game */
   lateGame?: boolean;
+  /** The turns an age has now, once a late-game age has been reached (LATE_AGES); only ever shortens */
+  lateRound?: number;
   aiCivs?: number;
   difficulty?: string;
   /** Who may raise world wonders: everyone, only the rulers' realms, or every realm with an advisor (rulers' and agents') */
