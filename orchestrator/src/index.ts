@@ -234,12 +234,13 @@ async function playRound() {
         const game = await host.state();
         const scene = dispatch.image ? paintAndKeep({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }) : Promise.resolve(null);
         // The map of the age, always in one style: the painted world with the age's movements drawn as an atlas would - or with none, in a quiet age.
-        // The host's own exact march map is kept for /map, and comes with the letter only when no painted map does
+        // The host's own exact march map is kept for /map, and comes with the letter beside the painted one
         const age = dispatch.age;
         const traced = host.map(seat.civ, "campaign", round.fromTurn, round.turn).catch((error) => { log("march map failed:", error.message); return null; });
         const painted = round.stoppedEarly || !PAINTED_MAPS ? Promise.resolve(null)
           : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).catch((error) => { log("campaign map failed:", error.message); return null; });
-        const marches = PAINTED_MAPS ? Promise.resolve(null) : traced;
+        // The host's exact march map comes with every letter as well, beside the painted one, while the painted maps are still being judged (MARCH_MAP=off stops it)
+        const marches = process.env.MARCH_MAP === "off" ? Promise.resolve(null) : traced;
         letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
       notice: tell,
