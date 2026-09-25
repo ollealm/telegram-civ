@@ -524,7 +524,8 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().ready) return reply("The court has already risen, Majesty; the years wait only on the other rulers.");
     // Dismissed without answering the advisor's last question: silence is assent to what it recommended
     const last = seat().chat.at(-1);
-    if (silently && last?.from === "advisor" && /\?/.test(last.text)) {
+    // A question left unanswered, or smaller matters left to the advisor: either needs the closing pass, or the leans are never applied
+    if (silently && last?.from === "advisor" && (/\?/.test(last.text) || seat().matters?.length)) {
       const message = "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to" + (seat().matters?.length ? ", and settle the smaller matters you listed as you see fit" : "") + ". Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]";
       try {
         const answer = (await whileTyping(bot, seat().chatId!, advisorReply(seat(), message, turnsAhead((await host.state()).turn)))).replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
