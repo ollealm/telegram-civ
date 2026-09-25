@@ -6,7 +6,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, asJpeg, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
+import { advisorPortrait, asJpeg, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
 import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
@@ -86,6 +86,12 @@ async function createWorld() {
   const ruled = state.seats.map((seat) => seat.civ);
   const free = shuffled((await host.nations()).map((nation) => nation.name).filter((name) => !ruled.includes(name)));
   const others = free.slice(0, state.aiCivs ?? AI_CIVS);
+  // The Chronicler wears this world's emblem: painted once, beside the making of the world, and set as the bot's face when it is done
+  void chroniclerEmblem([...ruled, ...others]).then(async (png) => {
+    if (!png) return;
+    await herald.api.setMyProfilePhoto({ type: "static", photo: new InputFile(await asJpeg(png), "emblem.jpg") });
+    log("the Chronicler wears the new world's emblem");
+  }).catch((error) => log("the Chronicler's emblem failed:", error.message));
   const mapSize = state.mapSize ?? DEFAULT_MAP_SIZE;
   const noWonders = state.wonders === "rulers" ? [...state.seats.filter((seat) => seat.kind === "agent").map((seat) => seat.civ), ...others]
     : state.wonders === "advised" ? others : [];

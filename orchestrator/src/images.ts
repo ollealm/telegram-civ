@@ -152,6 +152,11 @@ The schematic is built from six-sided cells; the finished map must show no trace
   return (await generateImage(prompt, [{ name: "map.png", png: atlas }])) ?? atlas;
 }
 
+/** The Chronicler's emblem: one plate per world, painted at its making, in the medium of a later age remembering it; no face, since the Chronicler has no person */
+export async function chroniclerEmblem(peoples: string[]): Promise<Buffer | null> {
+  return generateImage(`A round emblem for the chronicler of a world's whole history, made as an illuminated manuscript roundel on aged vellum: deep blues, earth reds and gold leaf. At the centre a stylised map of an unknown world - coastlines, rivers, mountain ranges, forests, small walled cities - that is no real place on Earth. Around the rim, in small painted cartouches, the emblems of the peoples of this world, one each, invented from what each people is known for: ${peoples.join(", ")}. Centred composition that reads at the size of a small round profile picture; no text, no lettering, no numerals anywhere. Realistic painted texture, the gold slightly worn.`);
+}
+
 /** Portraits are kept so the advisor looks the same all game and can be a reference for later scenes */
 const PORTRAITS = join(process.env.RULER_STATE_FILE ? join(process.env.RULER_STATE_FILE, "..") : "../data/game", "portraits");
 export const portraitPath = (civ: string) => join(PORTRAITS, `${civ}.png`);
