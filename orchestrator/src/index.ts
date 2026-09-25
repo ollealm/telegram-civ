@@ -504,6 +504,16 @@ function setUpAdvisor(bot: Bot, index: number) {
       : beginSetup(ctx),
   );
 
+  // The closing's smaller matters: a tap opens one; "As you see fit" leaves them all to the advisor and dismisses the court
+  bot.callbackQuery(/^matter:(\d+|all)$/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    if (state.phase !== "audience" || seat().ready) return void ctx.reply("That moment has passed, Majesty.");
+    if (ctx.match[1] === "all") return enqueue(() => dismiss((text) => ctx.reply(text), true));
+    const matter = seat().matters?.[Number(ctx.match[1])];
+    if (!matter) return void ctx.reply("That moment has passed, Majesty - tell me what you want now.");
+    audience(ctx, `About this one: "${matter.matter}" - you lean to ${matter.lean}. Lay it out for me.`);
+  });
+
   bot.callbackQuery(/^people:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
     if (seat().setup && !seat().civ) await choosePeople(ctx, ctx.match[1]);
@@ -525,7 +535,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     // Dismissed without answering the advisor's last question: silence is assent to what it recommended
     const last = seat().chat.at(-1);
     if (silently && last?.from === "advisor" && /\?/.test(last.text)) {
-      const message = "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to. Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]";
+      const message = "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to" + (seat().matters?.length ? ", and settle the smaller matters you listed as you see fit" : "") + ". Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]";
       try {
         const answer = (await whileTyping(bot, seat().chatId!, advisorReply(seat(), message, turnsAhead((await host.state()).turn)))).replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
         remember(seat(), { from: "advisor", text: answer });
@@ -557,6 +567,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     }
     seat().ready = true;
     seat().floor = undefined; // a court that rises returns the floor to the advisor
+    seat().matters = undefined; // whatever was not taken up was left to the advisor
     seat().dismissed = false; // a closing pass above may have called dismiss_court again
     persist();
     // The same words whether the other rulers are done or not: what the wait is for is not the ruler's concern
@@ -641,7 +652,14 @@ function setUpAdvisor(bot: Bot, index: number) {
         remember(seat(), { from: "advisor", text: reply });
         seat().forCouncil = undefined; // what was left with the clerk was before the advisor in this reply
         persist();
-        await ctx.reply(reply);
+        // The closing's smaller matters get a button each, and one to leave them all to the advisor and rise
+        const matters = seat().matters;
+        if (matters?.length && !seat().dismissed) {
+          const keyboard = new InlineKeyboard();
+          matters.forEach((_matter, index) => { keyboard.text(String(index + 1), `matter:${index}`); if ((index + 1) % 4 === 0) keyboard.row(); });
+          keyboard.row().text("As you see fit", "matter:all");
+          await ctx.reply(reply, { reply_markup: keyboard });
+        } else await ctx.reply(reply);
         // Answered once the ruler has it: a restart before this answers it again, which beats never answering it
         answered();
         await flushDevFeed(herald, `Audience - ${seat().civ}`);
