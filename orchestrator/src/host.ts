@@ -44,6 +44,20 @@ export type GameState = {
 
 export type PublicEvent = { turn: number; year: string; text: string };
 
+export type AgeSummary = {
+  from: number; to: number; fromYear: string; toYear: string;
+  marches: { what: string; from: string; to: string; fromXY: [number, number]; toXY: [number, number] }[];
+  lost: { what: string; where: string; xy: [number, number] }[];
+  enemyMarches: { whose: string; what: string; from: string; to: string; fromXY: [number, number]; toXY: [number, number] }[];
+  enemyLost: { whose: string; what: string; where: string }[];
+  citiesTaken: { city: string; by: string; year: string }[];
+  exploration: { tilesSeen: number; mostly: string; direction?: string; farthest?: number; naturalWonders: string[]; citiesFound: string[] } | null;
+  explorers: { what: string; reached: string }[];
+  met: string[];
+  /** The same, told in sentences */
+  lines: string[];
+};
+
 export type RoundResult = {
   fromTurn: number;
   fromYear: string;
@@ -88,6 +102,8 @@ export const host = {
   options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
+  /** What the realm's people did since a turn: marches, losses, what the scouts and ships found, whom it met - in the world's words */
+  age: (civ: string, from: number) => call<AgeSummary>("GET", `/age${civQuery(civ)}&from=${from}`),
   /** campaign: the atlas with every march since that turn traced on it, and where units fell and cities were taken */
   map: async (civ: string, style: "atlas" | "reference" | "campaign" = "atlas", since?: number) => {
     const response = await reach(`${HOST}/map.png${civQuery(civ)}&style=${style}${since === undefined ? "" : `&since=${since}`}`);

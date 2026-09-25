@@ -451,7 +451,21 @@ export type Dispatch = { /** A line above the letter: the advisor's own summons,
 /** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
 const Letter = z.object({ summons: z.string(), dispatch: z.string(), strategy: z.string(), question: z.string(), image: Picture.nullable(), journal: z.string() });
 
-export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown, ending?: string): Promise<Dispatch> => {
+/** The chancery's lines as a letter should weigh them: deals folded into one line, the housekeeping (re-arming, research steps, treasury, garrison shuffles) left out */
+const forTheLetter = (briefing: unknown) => {
+  const b = briefing as { log?: { turn: number; text: string }[] } | undefined;
+  if (!b?.log) return briefing;
+  const struck: string[] = []; const ended: string[] = [];
+  const kept = b.log.filter(({ text }) => {
+    const deal = /^Deals: /.exec(text);
+    if (deal) { /in force with ([^.]+)/.exec(text)?.[1] && struck.push(/in force with ([^.]+)/.exec(text)![1]); /ended with ([^.]+)/.exec(text)?.[1] && ended.push(/ended with ([^.]+)/.exec(text)![1]); return false; }
+    return !/offers a deal|We proposed a trade|Our proposal to|The officials proposed a deal|By your order: we (accepted|refused)|re-arming|relieved the|marches in to garrison|Research is now on|The treasury now holds|The officials spent|The officials queued|rewarded you with|has been built in|earlier lines omitted/.test(text);
+  });
+  const digest = [struck.length && `Deals struck in these years: ${struck.join("; ")}.`, ended.length && `Deals that ended: ${ended.join("; ")}.`].filter(Boolean).join(" ");
+  return { ...b, log: digest ? [...kept, { turn: 0, text: digest }] : kept };
+};
+
+export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown, ending?: string, deeds: string[] = []): Promise<Dispatch> => {
   const letter = await runStructured(
     "report",
     ADVISOR_MODEL,
@@ -463,7 +477,7 @@ Your answer has these parts.
 
 summons - one line, in your voice, that stands above the letter and calls the ruler to court: it names the year (${"${round.year}"}) and no more than a hint of what waits ("The court is called, AD 680 - come; there is news from the south." / "AD 680. Adiega asks for the ruler's ear."). No turn numbers.
 
-dispatch - around 120-160 words, in your voice: what happened in these years, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger.
+dispatch - around 120-160 words, in your voice: what happened in these years, what worries you, and what you did on your own account. Tell it as the story of the realm, not as a ledger: where its people went and what they saw, what the host did and where it stood, whom we met, what was founded, raised or lost - these before what was bought, sold or queued. "What the realm's people did" below is the chancery's reckoning from where every company stood; the deals of the age are one line in the log, and one line is what they deserve unless one of them changed the realm's course.
 It must also say plainly where the realm stands among its rivals in what this ruler cares about most, and whether it is gaining or falling behind - taken from "Standing among the powers" below, which the chancery reckons and you do not get to soften. Rank is history, not machinery: say it in the world's words ("the scholars of Delhi are ahead of ours, and drawing away"), without the figures. Good for our size is not the same as ahead; never let the one pass for the other.
 
 strategy - the longer view, but only when you have something new to say about it. Your last dispatch is below; if the long road looks the same as it did then, leave it empty (nothing is shown). Write it when the course has truly shifted, a new danger or opening has appeared, or it is time to say the unwelcome thing - then two or three sentences, as a thought of your own that follows on from the dispatch, with no heading or label, never a formula ("if we hold this course we become...", "what undoes us is...") and never last time's thought in new words.
@@ -473,7 +487,7 @@ question - open the audience the way a trusted advisor would: put the ONE broad 
 image - one picture of a moment from OUR realm in these years (a festival, a founding, a siege, a scholar at work), as a painter of the age would have made it. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text". Completed wonders are painted by the Chronicler, so choose something else. If these years hold nothing that is not already among the pictures painted (below), no image (null). ${CAPTION_CRAFT}
 
 journal - one or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
-    `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk while the clocks ran - answer them in this dispatch where they bear on it:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\n")}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nWhat the realm's people did in these years (${round.fromYear} to ${round.year}):\n${deeds.map((line) => `- ${line}`).join("\n") || "(nothing recorded)"}\n\nYour own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk while the clocks ran - answer them in this dispatch where they bear on it:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\n")}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(forTheLetter(briefing))}`,
     Letter,
   );
   seat.standing = standingOf(briefing) || seat.standing;

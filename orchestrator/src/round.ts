@@ -156,7 +156,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           return;
         }
         const ending = finished.stoppedEarly && /has won/.test(finished.stoppedEarly) ? finished.stoppedEarly.replace(/[.!]+$/, "") : undefined;
-        const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing, ending));
+        // What the realm's people did in these years, from where every company stood: the half of the story the ledgers never held
+        const deeds = await host.age(seat.civ, finished.fromTurn).then((age) => age.lines).catch(() => [] as string[]);
+        const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing, ending, deeds));
         // The letter opens with the advisor's own summons, so the ruler knows at a glance that a new court has begun and when
         dispatch.heading = ending ? `The game is over: ${ending}. This is your advisor's last letter; the saga of your reign follows.` : dispatch.heading || `You are called to court, ${finished.year}.`;
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
