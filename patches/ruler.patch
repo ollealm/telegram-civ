@@ -707,10 +707,10 @@ index 0000000..53fd859
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt b/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt
 new file mode 100644
-index 0000000..c5710f2
+index 0000000..0dfff7d
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,326 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.unciv.logic.civilization.Civilization
@@ -832,7 +832,10 @@ index 0000000..c5710f2
 +        val noise = blur(coarse, 7)
 +        for (y in 0 until height) for (x in 0 until width) {
 +            val jitter = ((noise.getRGB(x, y) and 0xff) - 128) / 4 // breaks up the last straight runs of shore
-+            if ((knownMask.getRGB(x, y) and 0xff) + jitter < 128) continue // unknown stays parchment
++            val knownV = (knownMask.getRGB(x, y) and 0xff) + jitter
++            if (knownV < 128) continue // unknown stays parchment
++            // The edge of the known world is dotted, so that it reads as the limit of knowledge and not as a shore
++            if (knownV < 142 && (x / 6 + y / 6) % 2 == 0) { image.setRGB(x, y, ink.rgb); continue }
 +            val land = (landMask.getRGB(x, y) and 0xff) + jitter
 +            image.setRGB(x, y, when {
 +                land in 120..134 -> ink.rgb                     // the shoreline
