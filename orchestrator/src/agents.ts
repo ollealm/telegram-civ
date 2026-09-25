@@ -581,13 +581,26 @@ export const wonderBoon = (wonder: string, civ: string, rulebook: unknown) =>
     `${wonder}, completed by ${civ}.\n\nRulebook entry:\n${JSON.stringify(rulebook)}`,
   );
 
-/** A people's entry into a new age: the Chronicler picks one instant of their life in which the new age shows, from what they have lately done */
-export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[], opened?: string) =>
+/** What each age changed in daily life: the faces a painter may choose from, each taken once across all peoples */
+const ERA_FACES: Record<string, string> = {
+  Classical: "the forum on market day; the aqueduct or the paved road being laid; the theatre; a temple's steps; the scribes in a library; the phalanx drilling in bronze; the potters' quarter; the harbour of triremes",
+  Medieval: "the castle walls going up; the cathedral works; the scriptorium; the guild hall; the mill by the river; the fair; the knights' stable and tilt yard; the monastery garden; the town gate at dusk",
+  Renaissance: "the printing shop; the painter's workshop; the counting house; the university lecture; the star-gazer's tower; the gunpowder drill; the merchant's map room; the harbour of carracks; the anatomist's table",
+  Industrial: "the factory floor; the mine head; the canal barge; the steam pump; the mill town street; the public school; the ironworks at night; the cotton hall; the new bridge",
+  Modern: "the railway crowd; the telegraph office; the gaslit street; the newspaper press; the factory whistle at dawn; the harbour cranes; the hospital ward; the department store; the tram",
+  Atomic: "the airfield; the radio room; the cinema queue; the power station; the tractor in the field; the apartment blocks going up; the motor road; the football ground",
+  Information: "the computer hall; the container port; the television in the kitchen; the highway interchange; the laboratory; the satellite dish on the roof; the airport concourse",
+};
+
+/** A people's entry into a new age: the Chronicler paints the people in the age, in a place of theirs, choosing a face of the age no other people has had */
+export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[], cities: { name: string; capital: boolean; size: number; land: string }[] = []) =>
   runStructured(
     "herald",
     HERALD_MODEL,
-    `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory: one instant of ordinary life in a city or a field of theirs in which the new age shows - the tool, the dress, the ship, the roof, the weapon that was not there a generation before, in the hands of someone using it. Pick the instant from what this people has lately done (below) so that it is theirs and no one else's. The learning that opened the age for them is one thread to pull, not the subject: the new age brought this people many changes, and any of them will do if it is theirs. If another people's entry into the same age has already been painted (below), do not paint the same face of the age again - a railway once is a railway for everyone; choose another change entirely. The sea is one setting among many and not the emblem of any age: no quay, harbour or ship unless the learning or the doings were of the sea. ${PICTURE_CRAFT} Dress, tools and architecture true to ${civ} in ${year}, as a painter of the period would have shown it. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
-    `${civ} entered the ${era} in ${year}${opened ? `, opened for them by the learning of ${opened}` : ""}.\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${alreadyPainted(["chronicle"])}`,
+    `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory, and not the technology that opened the age: paint the people in the age - one instant of ordinary life in which the new age shows in the everyday, the dress, the tools, the buildings, the pace of the day.
+Set it in one of their cities, named below with the lie of its land, and let the land show: a river town under mountains and a coastal town among forests are different pictures before anything else differs.
+Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below) is taken - choose another. If what this people has lately done (below) suggests the face, take that one. ${PICTURE_CRAFT} Dress, tools and architecture true to ${civ} in ${year}, as a painter of the period would have shown it. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
+    `${civ} entered the ${era} in ${year}.\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${alreadyPainted(["chronicle"])}`,
     Picture,
   );
 

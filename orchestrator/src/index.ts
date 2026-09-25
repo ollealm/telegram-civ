@@ -138,16 +138,17 @@ const wonderPictures = (round: RoundResult): Picture[] =>
 /** A people's entry into a new age always gets its picture - once; the Chronicler chooses the instant from what that people has lately done */
 const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
   const entries = round.publicEvents.flatMap((event) => {
-    const [, civ, era, opened] = /^(.+?) entered the (.+?)(?: with the learning of (.+?))?\.?$/.exec(event.text) ?? [];
-    return !era || /^Ancient/i.test(era) ? [] : [{ event, civ, era, opened }];
+    const [, civ, era] = /^(.+?) entered the (.+?)(?: with the learning of (?:.+?))?\.?$/.exec(event.text) ?? [];
+    return !era || /^Ancient/i.test(era) ? [] : [{ event, civ, era }];
   });
   if (!entries.length) return [];
   const all = await host.events().catch(() => [] as PublicEvent[]);
-  return Promise.all(entries.map(async ({ event, civ, era, opened }) => {
+  return Promise.all(entries.map(async ({ event, civ, era }) => {
     const tag = `${civ} enter the ${era}`;
     if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(tag))) return [];
     const recent = all.filter((entry) => entry.turn <= event.turn && entry.text.startsWith(civ)).slice(-12);
-    const scene = await eraScene(civ, era, event.year, recent, opened).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
+    const cities = await host.cities(civ).catch(() => []);
+    const scene = await eraScene(civ, era, event.year, recent, cities).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
     if (!scene) return [];
     return [{ turn: event.turn, year: event.year, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description }];
   })).then((pictures) => pictures.flat());

@@ -102,6 +102,8 @@ export const host = {
   options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
+  /** Any people's cities with their lie of the land, largest first - a painter's anchor */
+  cities: (civ: string) => call<{ name: string; capital: boolean; size: number; land: string }[]>("GET", `/cities${civQuery(civ)}`),
   /** What the realm's people did since a turn: marches, losses, what the scouts and ships found, whom it met - in the world's words */
   age: (civ: string, from: number) => call<AgeSummary>("GET", `/age${civQuery(civ)}&from=${from}`),
   /** campaign: the atlas with every march since that turn traced on it, and where units fell and cities were taken */
