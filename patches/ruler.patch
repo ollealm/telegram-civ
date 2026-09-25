@@ -1619,7 +1619,7 @@ index 0000000..40650e4
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..52b131e
+index 0000000..913b271
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 @@ -0,0 +1,1271 @@
@@ -1730,7 +1730,7 @@ index 0000000..52b131e
 +        RulerOverrides.unitHandler = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && units.handle(unit) }
 +        RulerOverrides.underOrders = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && units.underOrders(unit) }
 +        RulerOverrides.tradeAnswered = { request, receiver, outcome -> diplomacy.settle(request, receiver, outcome) }
-+        RulerOverrides.unitLost = { loss -> losses.getOrPut(loss.civ.civName) { ArrayList() } += loss }
++        RulerOverrides.unitLost = { loss -> losses.getOrPut(loss.civ.civName) { ArrayList() } += loss; trail.lostInBattle += loss.unit.id }
 +
 +        val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
 +        server.executor = Executors.newSingleThreadExecutor() // game state is not thread-safe
@@ -2896,10 +2896,10 @@ index 0000000..52b131e
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerTrail.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerTrail.kt
 new file mode 100644
-index 0000000..8d045fc
+index 0000000..b6fd3f8
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerTrail.kt
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,107 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -2917,6 +2917,8 @@ index 0000000..8d045fc
 +
 +    /** turn -> unit id -> where it stood */
 +    val stands = TreeMap<Int, HashMap<Int, Stand>>()
++    /** Units the battle hook reported killed or captured since the last record: only these are marked fallen - a disbanded or used-up unit is no loss in the field */
++    val lostInBattle = HashSet<Int>()
 +    val marks = ArrayList<Mark>()
 +    /** "x,y" -> owner, as of the last recorded turn */
 +    private var cityOwners = HashMap<String, String>()
@@ -2943,8 +2945,7 @@ index 0000000..8d045fc
 +            for ((id, stand) in before) {
 +                if (id in now || !stand.military) continue
 +                // An upgrade retires the old unit and raises a new one on the same spot: not a loss
-+                val replaced = now.any { (otherId, other) -> otherId !in before && other.civ == stand.civ && other.x == stand.x && other.y == stand.y }
-+                if (!replaced) marks += Mark(game.turns, stand.x, stand.y, "fallen", stand.civ)
++                if (id in lostInBattle) marks += Mark(game.turns, stand.x, stand.y, "fallen", stand.civ)
 +            }
 +            for ((where, owner) in owners) {
 +                val previous = cityOwners[where] ?: continue
@@ -2952,6 +2953,7 @@ index 0000000..8d045fc
 +            }
 +        }
 +        cityOwners = owners
++        lostInBattle.clear()
 +        stands[game.turns] = now
 +        // The known world's growth, for the ruled civs whose ages are told
 +        val seenNow = HashMap<String, IntArray>(); val metNow = HashMap<String, List<String>>()
