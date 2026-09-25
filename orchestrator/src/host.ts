@@ -107,8 +107,8 @@ export const host = {
   /** What the realm's people did since a turn: marches, losses, what the scouts and ships found, whom it met - in the world's words */
   age: (civ: string, from: number) => call<AgeSummary>("GET", `/age${civQuery(civ)}&from=${from}`),
   /** campaign: the atlas with every march since that turn traced on it, and where units fell and cities were taken */
-  map: async (civ: string, style: "atlas" | "reference" | "campaign" = "atlas", since?: number) => {
-    const response = await reach(`${HOST}/map.png${civQuery(civ)}&style=${style}${since === undefined ? "" : `&since=${since}`}`);
+  map: async (civ: string, style: "atlas" | "reference" | "campaign" = "atlas", since?: number, until?: number) => {
+    const response = await reach(`${HOST}/map.png${civQuery(civ)}&style=${style}${since === undefined ? "" : `&since=${since}`}${until === undefined ? "" : `&until=${until}`}`);
     if (!response.ok) throw new Error(`map: ${response.status} ${(await response.text()).slice(0, 200)}`);
     return Buffer.from(await response.arrayBuffer());
   },

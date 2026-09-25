@@ -145,6 +145,20 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     persist();
 
     // One realm's failed letter must not cost the others theirs
+    // What every realm's people did in the age, from the host: the letters are written from their own, the chapter from what the world could see of all of them
+    const ages = new Map(await Promise.all(seats.map(async (seat) => [seat.civ, await host.age(seat.civ, finished.fromTurn).catch(() => undefined)] as const)));
+    const campaigns = seats.flatMap((seat) => {
+      const age = ages.get(seat.civ);
+      if (!age) return [];
+      return [
+        ...age.marches.map((m) => `${seat.civ}: ${m.what} marched from ${m.from} to ${m.to}.`),
+        ...age.lost.map((l) => `${seat.civ} lost ${l.what} at ${l.where}.`),
+        ...age.enemyMarches.map((m) => `${m.whose}: ${m.what} came from ${m.from} to ${m.to}.`),
+        ...age.enemyLost.map((l) => `${l.whose} lost ${l.what} at ${l.where}.`),
+        ...age.citiesTaken.map((t) => `${t.city} fell to ${t.by} in ${t.year}.`),
+        ...age.explorers.map((e) => `A ${seat.civ} ${e.what} was seen as far as ${e.reached}.`),
+      ];
+    }).filter((line, index, all) => all.indexOf(line) === index);
     const settled = await Promise.allSettled([
       ...seats.map(async (seat) => {
         const governLogs = notes.get(seat.civ)!;
@@ -157,8 +171,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         }
         const ending = finished.stoppedEarly && /has won/.test(finished.stoppedEarly) ? finished.stoppedEarly.replace(/[.!]+$/, "") : undefined;
         // What the realm's people did in these years, from where every company stood: the half of the story the ledgers never held
-        const deeds = await host.age(seat.civ, finished.fromTurn).then((age) => age.lines).catch(() => [] as string[]);
-        const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing, ending, deeds));
+        const age = ages.get(seat.civ);
+        const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing, ending, age?.lines ?? []));
+        dispatch.age = age;
         // The letter opens with the advisor's own summons, so the ruler knows at a glance that a new court has begun and when
         dispatch.heading = ending ? `The game is over: ${ending}. This is your advisor's last letter; the saga of your reign follows.` : dispatch.heading || `You are called to court, ${finished.year}.`;
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
@@ -170,7 +185,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
       host
         .events()
-        .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed))
+        .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed, campaigns))
         .then(({ chapter, images }) => {
           (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter, undelivered: true });
           return io.chronicle(chapter, images, finished);

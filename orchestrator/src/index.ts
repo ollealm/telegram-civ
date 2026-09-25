@@ -6,7 +6,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, asJpeg, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
+import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
 import { host, type PublicEvent, type RoundResult } from "./host.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
 import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
@@ -233,9 +233,15 @@ async function playRound() {
         const letter = [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
         const game = await host.state();
         const scene = dispatch.image ? paintAndKeep({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }) : Promise.resolve(null);
-        // With every letter, the marches of the years it covers - ours, drawn by the host, so it costs nothing
-        const marches = host.map(seat.civ, "campaign", round.fromTurn).catch((error) => { log("march map failed:", error.message); return null; });
-        const painted = !round.stoppedEarly && PAINTED_MAPS ? paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; }) : Promise.resolve(null);
+        // The map of the age: in an age with marches or battles, the campaign map painted from the host's reckoning of them; otherwise the known world as it stands.
+        // The host's own exact march map is kept for /map, and comes with the letter only when no painted map does
+        const age = dispatch.age;
+        const eventful = !!age && (age.marches.length + age.enemyMarches.length + age.lost.length + age.enemyLost.length + age.citiesTaken.length) > 0;
+        const traced = host.map(seat.civ, "campaign", round.fromTurn, round.turn).catch((error) => { log("march map failed:", error.message); return null; });
+        const painted = round.stoppedEarly || !PAINTED_MAPS ? Promise.resolve(null)
+          : eventful ? traced.then((png) => (png ? campaignMap(seat.civ, age!, png) : paintedMap(seat.civ))).catch((error) => { log("campaign map failed:", error.message); return null; })
+          : paintedMap(seat.civ).catch((error) => { log("map failed:", error.message); return null; });
+        const marches = PAINTED_MAPS ? Promise.resolve(null) : traced;
         letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
       notice: tell,

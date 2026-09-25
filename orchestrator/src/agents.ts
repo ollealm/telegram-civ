@@ -5,7 +5,7 @@ import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk"
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { host, type PublicEvent, type RoundResult } from "./host.ts";
+import { host, type AgeSummary, type PublicEvent, type RoundResult } from "./host.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -446,7 +446,7 @@ export const standingOf = (briefing: any): string => {
   return [line("Learning", "techs"), line("Arms", "militaryStrength"), line("Cities", "cities"), line("Overall", "score")].join("; ") + ".";
 };
 
-export type Dispatch = { /** A line above the letter: the advisor's own summons, or the round's reason for an emergency council */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
+export type Dispatch = { /** What the realm's people did in the age, from the host; the campaign map is painted from it */ age?: AgeSummary; /** A line above the letter: the advisor's own summons, or the round's reason for an emergency council */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
 
 /** The dispatch after a round: the letter, where things are heading, the question that opens the audience, a picture, and the advisor's own journal line */
 const Letter = z.object({ summons: z.string(), dispatch: z.string(), strategy: z.string(), question: z.string(), image: Picture.nullable(), journal: z.string() });
@@ -554,16 +554,16 @@ export const advisorGreeting = (seat: Seat, replaced?: string) =>
     ? `You have just been taken on as chief advisor to ${seat.rulerName ?? "the ruler"} of ${seat.civ}, in place of ${replaced}, partway through this realm's history. Their record of the ruler's wishes and their journal are now yours (below). Introduce yourself in four or five sentences in your own voice, say one thing about how you find the realm, and ask what the ruler wants of you first. No tools.\n\n${memory(seat)}`
     : `You are meeting ${seat.rulerName ?? "the ruler"} for the first time, at the very beginning of ${seat.civ}'s history. Introduce yourself in four or five sentences in your own voice, say how you like to work, and ask what they want this realm to become. No tools.`);
 
-export const heraldNewspaper = (round: RoundResult, earlier: PublicEvent[], proclamations: string[] = []) =>
+export const heraldNewspaper = (round: RoundResult, earlier: PublicEvent[], proclamations: string[] = [], campaigns: string[] = []) =>
   runStructured(
     "herald",
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. Each round you add a new chapter covering the years below, in the voice of a historian looking back: what happened, what it meant, how the world's shape is changing. Name the years when they matter ("In 1240 BC..."), never turn numbers. Give it a short chapter title. Under 160 words; two to four paragraphs; wry, unhurried, occasionally grand. A quiet age deserves a quiet chapter, not padding.
 When a ruler's proclamation belongs to one of these events, give their words as history keeps them ("Rome went to war with the words..."): the meaning and the speaker are sacred, the wording is yours to dress - a line typed in haste in a chat becomes the sentence the chronicle remembers, in its own cadence and register, a little grander than it was said. Use at most two, only where they fit; never put a sentiment in a ruler's mouth that they did not voice, and never invent a proclamation that was not made.
 Once in the chapter, in a sentence of your own judgement, say how the great powers are accounted against one another now (from the standing below) - who is foremost, who is rising, who has slipped - without figures. You flatter no court.
-Report only the events listed - these are things the whole world could witness. Never speculate about any realm's plans, treasury, research or armies. ${TELEGRAM_STYLE}
+Report only the events listed - these are things the whole world could witness. An army on the march, a battle, a company lost in the field, a city that fell and a ship on a far sea are witnessed too: "What the armies and ships did" below is the world's account of them, and a chapter with a war in it tells where the host went and where it fought, not only that war was declared. Never speculate about any realm's plans, treasury, research or the armies nobody saw. ${TELEGRAM_STYLE}
 With the chapter go one or two images: pictures for it, as a painter of the period would have made them. The first is a scene from its chief event; add a second only if the chapter holds another event of a different kind that is worth seeing - never two pictures of one event. Every completed wonder gets its own picture from the court painter, and so does each people's entry into a new age, so leave both out of yours; in an age of nothing but wonders, paint a moment of ordinary life in the foremost realm. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events. ${CAPTION_CRAFT}`,
-    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\n${alreadyPainted(["chronicle"])}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
+    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nWhat the armies and ships did in these years, as the world saw it:\n${campaigns.map((line) => `- ${line}`).join("\n") || "(no army left its home fields, and no ship was seen on a far sea)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\n${alreadyPainted(["chronicle"])}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
     z.object({ chapter: z.string().describe("The chapter, with its title"), images: z.array(Picture).min(1).max(2) }),
   );
 

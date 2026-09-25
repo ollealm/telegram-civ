@@ -707,7 +707,7 @@ index 0000000..53fd859
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt b/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt
 new file mode 100644
-index 0000000..1357dc2
+index 0000000..0affd4b
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/MapRenderer.kt
 @@ -0,0 +1,331 @@
@@ -750,7 +750,7 @@ index 0000000..1357dc2
 +     *  overlay: borders, units, cities and names drawn on top of [base] (a repaint of the reference, any size).
 +     *  campaign: the atlas with the marches since turn [since] traced on it, from [trail].
 +     */
-+    fun render(civ: Civilization, style: String = "atlas", base: BufferedImage? = null, trail: RulerTrail? = null, since: Int = 0, sinceYear: String = ""): ByteArray {
++    fun render(civ: Civilization, style: String = "atlas", base: BufferedImage? = null, trail: RulerTrail? = null, since: Int = 0, sinceYear: String = "", until: Int = Int.MAX_VALUE, untilYear: String = ""): ByteArray {
 +        val drawTerrain = style != "overlay"
 +        val drawOverlay = style != "reference"
 +        val game = civ.gameInfo
@@ -922,7 +922,7 @@ index 0000000..1357dc2
 +            for (tile in visible) for (unit in tile.getUnits()) {
 +                val own = unit.civ == civ
 +                if (!unit.isMilitary() && "Settler" !in unit.name) continue // workers and caravans wander; nobody wants their scribbles
-+                val path = trail.path(unit.id, since).mapNotNull { game.tileMap.getIfTileExistsOrNull(it.x, it.y) }
++                val path = trail.path(unit.id, since, until).mapNotNull { game.tileMap.getIfTileExistsOrNull(it.x, it.y) }
 +                    .filter { it in points && (own || it.isExplored(civ)) }
 +                if (path.size < 2 || path.first().aerialDistanceTo(path.last()) < 2) continue
 +                val xs = path.map { px(it) }; val ys = path.map { py(it) }
@@ -1009,7 +1009,7 @@ index 0000000..1357dc2
 +        val year = game.getYear()
 +        val yearText = if (year < 0) "${-year} BC" else "AD $year"
 +        g.font = Font(Font.SERIF, Font.BOLD, 18)
-+        val title = if (style == "campaign") "The Marches of ${civ.civName}, $sinceYear to $yearText" else "The Known World of ${civ.civName}, $yearText"
++        val title = if (style == "campaign") "The Marches of ${civ.civName}, $sinceYear to ${untilYear.ifEmpty { yearText }}" else "The Known World of ${civ.civName}, $yearText"
 +        g.color = Color(parchment.red, parchment.green, parchment.blue, 220)
 +        g.fillRoundRect(10, 10, g.fontMetrics.stringWidth(title) + 20, 30, 8, 8)
 +        g.color = ink; g.stroke = BasicStroke(1.2f)
@@ -1624,10 +1624,10 @@ index 0000000..40650e4
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..a0088a2
+index 0000000..e6bfee3
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1278 @@
+@@ -0,0 +1,1279 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -1798,7 +1798,8 @@ index 0000000..a0088a2
 +                if (lines.size <= 150) lines else listOf(mapOf("turn" to lines[lines.size - 150]["turn"], "text" to "(${lines.size - 150} earlier lines omitted; ask from a later turn or year)")) + lines.takeLast(150) }
 +            "GET /lookup" -> lookup(civ(), query["name"] ?: throw ApiError(400, "Missing name"))
 +            "GET /map.png" -> (query["since"]?.toIntOrNull() ?: (game().turns - 10)).coerceAtLeast(0).let { from ->
-+                Png(MapRenderer.render(civ(), query["style"] ?: "atlas", trail = trail, since = from, sinceYear = yearText(from))) }
++                val until = query["until"]?.toIntOrNull()
++                Png(MapRenderer.render(civ(), query["style"] ?: "atlas", trail = trail, since = from, sinceYear = yearText(from), until = until ?: Int.MAX_VALUE, untilYear = until?.let { yearText(it) } ?: "")) }
 +            "GET /orders" -> civ().let { orders.getOrPut(it.civName) { StandingOrders() }.toMap(it) }
 +            "POST /orders" -> setOrders(civ(), json)
 +            "POST /grant" -> grant(civ(), json)
@@ -2908,7 +2909,7 @@ index 0000000..a0088a2
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerTrail.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerTrail.kt
 new file mode 100644
-index 0000000..b6fd3f8
+index 0000000..8f72b9b
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerTrail.kt
 @@ -0,0 +1,107 @@
@@ -2986,9 +2987,9 @@ index 0000000..b6fd3f8
 +    }
 +
 +    /** One unit's path from [since] to now: a point per turn, standing still left out */
-+    fun path(id: Int, since: Int): List<Stand> {
++    fun path(id: Int, since: Int, until: Int = Int.MAX_VALUE): List<Stand> {
 +        val path = ArrayList<Stand>()
-+        for (turn in stands.tailMap(since, true).values) {
++        for (turn in stands.subMap(since, true, until, true).values) {
 +            val stand = turn[id] ?: continue
 +            if (path.lastOrNull()?.let { it.x == stand.x && it.y == stand.y } != true) path += stand
 +        }
