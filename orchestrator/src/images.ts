@@ -158,18 +158,29 @@ The schematic is built from six-sided cells; the finished map must show no trace
 /** Nothing but bare parchment beyond what the realm has seen: how a painter is to treat it */
 const UNKNOWN_COUNTRY = (civ: string) => `The bare parchment beyond the soft grey line is unknown country, not water: the ${civ} do not know what lies there. Treat it as the map-makers of the age did - you may sketch conjectured land there, coasts and islands nobody has seen, but only in dotted, unshaded outline, faint and unlabelled, so that what is guessed is plainly told from what is known; never solid painted land or open sea. A city that stands on the bare parchment is known to exist and stands on such conjectured ground, at the place the schematic gives it.`;
 
-/** An age's campaigns on the painted map, as a history atlas prints them: broad arrows from the host's own reckoning of where every company went, not the chancery's every wiggle */
+/** An age's campaigns on the painted map, as a history atlas prints them: the host reckons the forces and draws their arrows; the painter only repaints them */
 export async function campaignMap(civ: string, age: AgeSummary, marches: Buffer): Promise<Buffer> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
   const title = `The Marches of ${civ}, ${age.fromYear} to ${age.toYear}`;
   const late = /Industrial|Modern|Atomic|Information|Future/.test(String(briefing.era ?? ""));
-  const prompt = `Two attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${age.toYear}; marches.png is the same map with every march of the age traced on it exactly, as the chancery recorded them.
+  const campaigns = [...age.marches, ...age.enemyMarches];
+  // Only the endings this map has: a painter told of a way home draws one
+  const endings = [
+    campaigns.some((c) => c.outcome === "took") && "a head against a red ring - the city was taken",
+    campaigns.some((c) => c.outcome === "broken") && "a bar with crossed swords - the force was broken there",
+    campaigns.some((c) => c.outcome === "back") && "a dashed line on from it - the way home",
+  ].filter(Boolean);
+  const arrows = campaigns.length
+    ? `marches.png is the same map with the campaigns of these years already drawn on it as a history atlas draws them: one broad arrow for each force that went somewhere, in its realm's colour, broader for a larger force.${endings.length ? ` How an arrow ends tells how the campaign ended: ${endings.join("; ")}.` : ""}
+Paint exactly the ${campaigns.length} arrow${campaigns.length === 1 ? "" : "s"} marches.png has, over the painted world: each from where it starts to where it ends, along the same curve, in the same colour, with the same ending - broad, bold arrows that read at a glance, as a history atlas prints them, painted in the manner of the age. The arrows come from marches.png alone, not from the places the words below name: add no other arrow, route, trail or battle mark, and leave none out. Each arrow has one head, where marches.png puts it.`
+    : "marches.png has no arrows: no force went anywhere worth an arrow in these years. Draw none.";
+  const prompt = `Two attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${age.toYear}; marches.png is the same map with the campaigns of these years drawn on it.
 Paint the world first as ${cartography(String(briefing.era ?? ""))} - something a ruler would hang in the throne room: the same landmasses, coasts, rivers, mountains and forests in the same places; every city where the schematic has it, drawn as a small illustrated town in the manner of the age's map-makers (${late ? "streets and blocks, chimneys, towers or a station, a harbour with quays" : "walls, roofs, a spire or a keep"}; the capital larger), with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner); each realm's territory with a soft tinted border in its colour. Then, over it, the campaigns of the age.
 The schematic's shields and discs are armies and travellers: draw them as small illustrated companies in the arms of the age - ${late ? "a squad of riflemen or a tank, a field gun and its crew, a steamship or a grey warship, an aircraft where the age has them" : "a few soldiers with a banner, a cannon and its crew, a ship under sail"} - where the schematic has them, never as dots or shields.
 ${UNKNOWN_COUNTRY(civ)} Do not name seas or oceans, draw no scale bar, and use no real-world coat of arms or flag.
-Draw the campaigns as an atlas does, not as the chancery did: a few broad sweeping arrows for the main movements, one arrow per force from where it began the age to where it ended. Crossed swords only where the chancery's words below say a company was lost or a city fell, and a ring only around a city that was besieged; a march that met no one gets its arrow and nothing else. Far fewer lines than marches.png has: it shows every wiggle of every unit, you show the sweep. Use marches.png only to place the arrows truthfully. Ignore its ship traces at sea unless they tell a story.
-What happened in these years, in the chancery's words: ${age.lines.join(" ")}
-Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age - no figures, no "tiles", no names in brackets: "A company of pikemen wandered from the Russian marches to the walls of Genoa; ships found new waters to the south-east." A quiet age says so in one line. The schematic is built from six-sided cells; the finished map must show no trace of them; natural coastlines, no honeycomb.`;
+${arrows}
+Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age, keeping to what the chancery's words say - no figures, no "tiles", no names in brackets: "A company of pikemen wandered from the Russian marches to the walls of Genoa; ships found new waters to the south-east." A quiet age says so in one line. What happened in these years, in the chancery's words: ${age.lines.join(" ")}
+The schematic is built from six-sided cells; the finished map must show no trace of them; natural coastlines, no honeycomb.`;
   return (await generateImage(prompt, [{ name: "map.png", png: atlas }, { name: "marches.png", png: marches }])) ?? marches;
 }
 

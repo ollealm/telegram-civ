@@ -46,9 +46,12 @@ export type PublicEvent = { turn: number; year: string; text: string };
 
 export type AgeSummary = {
   from: number; to: number; fromYear: string; toYear: string;
-  marches: { what: string; from: string; to: string; fromXY: [number, number]; toXY: [number, number] }[];
+  /** Our campaigns: the few forces that went somewhere together, as the campaign map draws them - the weightiest first */
+  marches: Campaign[];
+  /** Losses no campaign already tells */
   lost: { what: string; where: string; xy: [number, number] }[];
-  enemyMarches: { whose: string; what: string; from: string; to: string; fromXY: [number, number]; toXY: [number, number] }[];
+  /** The enemy's campaigns we could see */
+  enemyMarches: Campaign[];
   enemyLost: { whose: string; what: string; where: string }[];
   citiesTaken: { city: string; by: string; year: string }[];
   exploration: { tilesSeen: number; mostly: string; direction?: string; farthest?: number; naturalWonders: string[]; citiesFound: string[] } | null;
@@ -58,6 +61,14 @@ export type AgeSummary = {
   lines: string[];
   /** Candidates for the Chronicler's oddity of the age: the world's own lines, and ours (they begin "Our"); empty most ages */
   curiosities?: string[];
+};
+
+/** A force's march in an age. outcome: took the city it marched on, broken there (half or more fell), turned back, or still out */
+export type Campaign = {
+  whose: string; what: string; from: string; to: string; outcome: "took" | "broken" | "back" | "out"; size: number; fell: number; sea: boolean;
+  /** The campaign in one sentence */
+  told: string;
+  fromXY: [number, number]; toXY: [number, number]; route: [number, number][];
 };
 
 export type RoundResult = {
@@ -108,8 +119,8 @@ export const host = {
   cities: (civ: string) => call<{ name: string; capital: boolean; size: number; land: string }[]>("GET", `/cities${civQuery(civ)}`),
   /** What the realm's people did since a turn: marches, losses, what the scouts and ships found, whom it met - in the world's words */
   age: (civ: string, from: number) => call<AgeSummary>("GET", `/age${civQuery(civ)}&from=${from}`),
-  /** campaign: the atlas with every march since that turn traced on it, and where units fell and cities were taken */
-  map: async (civ: string, style: "atlas" | "reference" | "campaign" = "atlas", since?: number, until?: number) => {
+  /** campaign: the atlas with the age's campaigns since that turn drawn as broad arrows, and the cities taken. trace: every unit's march traced exactly, and where units fell */
+  map: async (civ: string, style: "atlas" | "reference" | "campaign" | "trace" = "atlas", since?: number, until?: number) => {
     const response = await reach(`${HOST}/map.png${civQuery(civ)}&style=${style}${since === undefined ? "" : `&since=${since}`}${until === undefined ? "" : `&until=${until}`}`);
     if (!response.ok) throw new Error(`map: ${response.status} ${(await response.text()).slice(0, 200)}`);
     return Buffer.from(await response.arrayBuffer());
