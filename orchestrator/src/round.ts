@@ -41,7 +41,8 @@ export type RoundIO = {
   dispatch: (seat: Seat, dispatch: Dispatch, round: RoundResult) => Promise<void>;
   /** A two-line note to a ruler whom the urgent news does not concern */
   notice: (seat: Seat, text: string) => Promise<void>;
-  chronicle: (chapter: string, images: { caption: string; description: string }[], round: RoundResult) => Promise<void>;
+  /** seen: what the whole world could see of the age besides its events - the armies' marches, and the chancery's flagged curiosities for the oddity of the age */
+  chronicle: (chapter: string, images: { caption: string; description: string }[], round: RoundResult, seen: { campaigns: string[]; curiosities: string[] }) => Promise<void>;
   log: (...args: unknown[]) => void;
 };
 
@@ -175,6 +176,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         ...age.explorers.map((e) => `A ${seat.civ} ${e.what} was seen as far as ${e.reached}.`),
       ];
     }).filter((line, index, all) => all.indexOf(line) === index);
+    // Candidates for the oddity of the age, from every realm: the world's lines once, a realm's own lines under its name
+    const curiosities = seats.flatMap((seat) => (ages.get(seat.civ)?.curiosities ?? []).map((line) => (/^Our /.test(line) ? `${seat.civ}: ${line}` : line)))
+      .filter((line, index, all) => all.indexOf(line) === index);
     const settled = await Promise.allSettled([
       ...seats.map(async (seat) => {
         const governLogs = notes.get(seat.civ)!;
@@ -204,7 +208,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed, campaigns))
         .then(({ chapter, images }) => {
           (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter, undelivered: true });
-          return io.chronicle(chapter, images, finished);
+          return io.chronicle(chapter, images, finished, { campaigns, curiosities });
         }),
     ]);
     settled.forEach((result, index) => {

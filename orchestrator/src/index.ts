@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -168,6 +168,17 @@ const victoryPictures = async (round: RoundResult): Promise<Picture[]> => {
   return [{ turn: round.turn, year: round.year, for: "chronicle", caption: `${title}. ${scene.caption.trim()}`, description: scene.description }];
 };
 
+/** The oddity of the age: none most ages, by the Chronicler's own judgement. Every decision is logged, so a game's worth can be counted */
+const oddityPictures = async (round: RoundResult, seen: { campaigns: string[]; curiosities: string[] }, painting: string[]): Promise<(Picture & { note: string })[]> => {
+  const answer = await oddityScene(round, round.publicEvents, seen.campaigns, seen.curiosities, painting).catch((error) => { log("the oddity of the age failed:", error.message); return null; });
+  if (!answer) return [];
+  if (!answer.oddity) { log(`no oddity this age (${round.fromYear} to ${round.year}): ${answer.why}`); return []; }
+  const caption = `The oddity of the age. ${answer.oddity.caption.trim()}`;
+  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption === caption)) { log(`the Chronicler's oddity was painted before: ${answer.why}`); return []; }
+  log(`the Chronicler found an oddity (${round.fromYear} to ${round.year}): ${answer.why}`);
+  return [{ turn: round.turn, year: round.year, for: "chronicle", caption, description: answer.oddity.description, note: "" }];
+};
+
 /** /map: our own drawing at once (the painted one comes with each dispatch) */
 async function sendMap(bot: Bot, seat: Seat) {
   const png = await host.map(seat.civ);
@@ -269,7 +280,7 @@ async function playRound() {
         letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
       notice: tell,
-      chronicle: async (chapter, images, round) => {
+      chronicle: async (chapter, images, round, seen) => {
         const record = state.chapters?.at(-1); // the round has just set this chapter down
         // One or two scenes of the Chronicler's choosing, and every wonder
         // A wonder's picture says what the great work gives its builders
@@ -295,9 +306,16 @@ async function playRound() {
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         // A victory's picture leads the last age's pictures, whatever the years of the others
         const victory = (await victoryPictures(round)).map((picture) => ({ ...picture, note: "" }));
-        const painted = await Promise.all([...victory, ...pictures].map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
+        // The oddity of the age, rarely: asked of the Chronicler after the rest are chosen, never in the victory's age, and sent last
+        // (it is weighed while the others are being painted)
+        const paintAll = (list: (Picture & { note: string })[]) => Promise.all(list.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
+        const [painted, odd] = await Promise.all([
+          paintAll([...victory, ...pictures]),
+          /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve([]) : oddityPictures(round, seen, [...victory, ...pictures].map((picture) => picture.caption)).then(paintAll),
+        ]);
         const first = painted.filter((entry) => entry.png && victory.includes(entry.picture));
-        chapters.push({ chapter, record, pictures: [...first, ...painted.filter((entry) => entry.png && !victory.includes(entry.picture)).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn)] });
+        const middle = painted.filter((entry) => entry.png && !victory.includes(entry.picture));
+        chapters.push({ chapter, record, pictures: [...first, ...middle.sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn), ...odd.filter((entry) => entry.png)] });
       },
       log,
     });

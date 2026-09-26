@@ -631,6 +631,19 @@ The caption is read under the picture, after a title that is set for you ("${win
     Picture,
   );
 
+/** The oddity of the age: the strange, comic or unheard-of thing the world would still tell of - rare by instruction, and none is the usual answer.
+ *  painting: captions of the pictures already going with this chapter, so the oddity is never one of them */
+export const oddityScene = (round: RoundResult, events: PublicEvent[], campaigns: string[], curiosities: string[], painting: string[] = []) =>
+  runStructured(
+    "herald",
+    HERALD_MODEL,
+    `You are the Chronicler. Was there anything in these years the world would still tell of as strange, comic or unheard-of? Most ages have none, and then the answer is none; at most one when there is; a good chapter needs no oddity. What counts is something retold for its own sake, not for its weight in the story - the age's great events are the chapter's business, never the oddity's, however dramatic. Below are the age's events, what the armies and ships did, and the chancery's own flagged curiosities: the flags are candidates, not orders, and you may choose something none of them caught.
+If there is one, paint it as a painter of the period would have made it. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the peoples, their age and the year - where a people's age and the calendar disagree, the age wins for everything made. Realistic oil painting, no text. ${CAPTION_CRAFT} The caption may carry a dry historian's humour.
+why - one line for the chancery's log: what you chose and why it is strange, or why there was nothing.`,
+    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nWhat the armies and ships did in these years:\n${campaigns.map((line) => `- ${line}`).join("\n") || "(nothing)"}\n\nThe chancery's flagged curiosities:\n${curiosities.map((line) => `- ${line}`).join("\n") || "(none flagged)"}\n\nAlready going with this chapter (never the oddity):\n${painting.map((caption) => `- ${caption}`).join("\n") || "(nothing)"}\n\n${alreadyPainted(["chronicle"])}`,
+    z.object({ oddity: Picture.nullable(), why: z.string() }),
+  );
+
 /** When a people finished several wonders in one age, which one the Chronicler paints: the most worth seeing, not the first */
 export const chooseWonder = (civ: string, wonders: string[], year: string) =>
   runStructured(
