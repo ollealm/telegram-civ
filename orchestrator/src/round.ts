@@ -13,7 +13,7 @@ export const GOVERN_EVERY = Number(process.env.GOVERN_EVERY_TURNS ?? 4);
 /** Turns in the round that starts at this turn - longer while the early game is slow */
 /** Later in the game an age is shorter: more happens in a turn, and the ruler should be asked more often. LATE_AGES="Industrial:8,Information:4" -
  *  once any realm has reached an age named here, every age after it has that many turns, for the rest of the game */
-const LATE_AGES = (process.env.LATE_AGES ?? "Industrial:8,Information:4").split(",").map((entry) => entry.trim().split(":")).map(([era, turns]) => ({ era, turns: Number(turns) }));
+const LATE_AGES = (process.env.LATE_AGES ?? "").split(",").map((entry) => entry.trim().split(":")).map(([era, turns]) => ({ era, turns: Number(turns) })).filter((entry) => entry.era && Number.isFinite(entry.turns) && entry.turns > 0); // empty: every age after the first is TURNS_PER_ROUND
 const ERAS = ["Ancient", "Classical", "Medieval", "Renaissance", "Industrial", "Modern", "Atomic", "Information", "Future"];
 const eraRank = (era?: string) => ERAS.findIndex((name) => era?.startsWith(name));
 export const roundLength = (turn: number) => (turn < EARLY_GAME_UNTIL_TURN ? EARLY_ROUND_TURNS : state.lateRound ?? (state.lateGame ? 8 : TURNS_PER_ROUND));
