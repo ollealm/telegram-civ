@@ -296,6 +296,9 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
     },
   });
   let streamed = "";
+  // Every text the model wrote, in order: message.result holds only what came after the last tool call, and a reply written before a
+  // closing tool call (smaller_matters, paint_decision) would otherwise be lost
+  const spoken: string[] = [];
   for await (const message of stream) {
     if (onText && message.type === "stream_event") {
       const event = message.event as { type: string; delta?: { type?: string; text?: string } };
@@ -312,8 +315,10 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
       throw new Error(`${role} agent never got its tools`);
     }
     if (message.type === "assistant")
-      for (const block of message.message.content as { type: string; name?: string; input?: unknown }[])
+      for (const block of message.message.content as { type: string; name?: string; input?: unknown; text?: string }[]) {
         if (block.type === "tool_use") toolCalls.push({ name: String(block.name).replace("mcp__realm__", ""), input: block.input });
+        if (block.type === "text" && block.text?.trim()) spoken.push(block.text.trim());
+      }
     if (message.type === "user" && Array.isArray(message.message.content))
       for (const block of message.message.content as { type: string; content?: unknown }[])
         if (block.type === "tool_result") {
@@ -329,11 +334,13 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
     };
     addUsage(role, spent);
     const data = message.subtype === "success" ? message.structured_output : undefined;
-    const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : message.result.trim();
+    // The whole reply as written, not only the tail after the last tool call; the result is used when nothing was collected (a structured answer, or an SDK that did not stream the blocks)
+    const whole = spoken.join("\n\n").trim() || message.result.trim();
+    const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : whole;
     traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
     if (message.subtype !== "success") throw new Error(`${role} agent failed: ${message.subtype}`);
     if (outputSchema && data === undefined) throw new Error(`${role} agent gave no structured answer`);
-    return { text: message.result.trim(), data };
+    return { text: whole, data };
   }
   throw new Error(`${role} agent returned nothing`);
 }
