@@ -132,11 +132,14 @@ async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer
 
 /** How a mapmaker of the age would have drawn it */
 const cartography = (era: string) =>
-  /Ancient|Classical/.test(era) ? "an ancient map painted on papyrus or a wall fresco, with earth pigments, little drawn cities and stylised waves"
-  : /Medieval/.test(era) ? "an illuminated medieval map on vellum, with gold leaf, tiny castles for cities, sea monsters and ornate borders"
-  : /Renaissance/.test(era) ? "a hand-coloured copperplate map of the age of discovery, with engraved relief, sailing ships, a compass rose and a decorated cartouche"
-  : /Industrial/.test(era) ? "a finely engraved nineteenth-century atlas plate with hachured mountains, delicate tinted borders and elegant lettering"
-  : "a printed twentieth-century atlas plate with shaded relief and clean typography";
+  /Ancient/.test(era) ? "a map painted on papyrus in earth pigments, in the manner of the oldest maps: stylised waves, little drawn towns of mud and stone, rivers as blue ribbons, the edges worn"
+  : /Classical/.test(era) ? "a map in the manner of a classical mosaic or a painted wall map: tesserae-like colour, columned cities, galleys on a wine-dark sea, a laurel border"
+  : /Medieval/.test(era) ? "an illuminated medieval map on vellum, with gold leaf, tiny castles and cathedrals for cities, sea monsters, a knotwork border and gothic lettering"
+  : /Renaissance/.test(era) ? "a hand-coloured copperplate map of the age of discovery, with engraved relief, carracks under sail, wind heads, a compass rose and a decorated cartouche"
+  : /Industrial/.test(era) ? "a finely engraved and hand-tinted nineteenth-century atlas plate: hachured mountains, delicate washes, elegant copperplate lettering, a vignette of steam and iron in the cartouche"
+  : /Modern/.test(era) ? "a lithographed pictorial map of the early twentieth century, in the manner of the great railway and shipping-line posters: bold flat colour, illustrated vignettes of factories, liners and stations, an art-nouveau cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
+  : /Atomic/.test(era) ? "a mid-century illustrated pictorial map, in the manner of the airline and world's-fair maps: clean shapes, confident colour, isometric buildings, aircraft and radio masts drawn small, a modern sans-serif cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
+  : "a richly illustrated contemporary atlas map: satellite-like shaded relief in natural colour, cities drawn as small illustrated skylines seen from above, clean modern lettering, a restrained cartouche; entirely of its own age - no sea monsters, wind heads, parchment or medieval figures, and the companies drawn as modern soldiers, armour and ships";
 
 /**
  *  The civ's known world as a mapmaker of its age would have made it. The image model paints the whole thing - land,
