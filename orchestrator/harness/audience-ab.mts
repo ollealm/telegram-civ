@@ -24,7 +24,7 @@ onTrace((trace) => traces.push(trace));
 /** What a tool call carried, short enough to read beside the reply */
 const shown = (call: Trace["toolCalls"][number]) => {
   const input = call.input as Record<string, unknown>;
-  if (call.name === "smaller_matters") return `smaller_matters: ${((input.matters as { matter: string; lean: string }[]) ?? []).map((m, i) => `${i + 1}. ${m.matter} -> ${m.lean}`).join(" | ") || "(none)"}`;
+  if (call.name === "smaller_matters") return `smaller_matters: ${(Array.isArray(input.matters) ? (input.matters as { matter: string; lean: string }[]) : []).map((m, i) => `${i + 1}. ${m.matter} -> ${m.lean}`).join(" | ") || "(none)"}`;
   if (call.name === "paint_decision") return `paint_decision: ${input.caption}`;
   if (call.name === "proclaim") return `proclaim: ${input.words}`;
   if (call.name === "set_orders") return `set_orders: ${JSON.stringify(input).slice(0, 400)}`;
