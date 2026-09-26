@@ -190,8 +190,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         const age = ages.get(seat.civ);
         const dispatch = await io.working(seat, advisorReport(seat, finished, governLogs, briefing, ending, age?.lines ?? []));
         dispatch.age = age;
-        // The letter opens with the advisor's own summons, so the ruler knows at a glance that a new court has begun and when
-        dispatch.heading = ending ? `The game is over: ${ending}. This is your advisor's last letter; the saga of your reign follows.` : dispatch.heading || `You are called to court, ${finished.year}.`;
+        // The letter opens with the advisor's own summons, so the ruler knows at a glance that a new court has begun and when - or, in the last letter, that the game is over
+        dispatch.heading ||= ending ? `The game is over: ${ending}.` : `You are called to court, ${finished.year}.`;
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
         (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, heading: dispatch.heading, story: dispatch.text, course: dispatch.strategy || undefined, question: dispatch.question, undelivered: true });
         seat.forCouncil = undefined; // what was left with the clerk has now been answered

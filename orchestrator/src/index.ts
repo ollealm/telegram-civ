@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, pronounLine, realmSaga, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -154,6 +154,20 @@ const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
   })).then((pictures) => pictures.flat());
 };
 
+/** The world is won: the Chronicler paints the moment - once - and it leads the last age's pictures */
+const victoryPictures = async (round: RoundResult): Promise<Picture[]> => {
+  if (!/has won/.test(round.stoppedEarly ?? "")) return [];
+  const game = await host.state();
+  if (!game.winner) return [];
+  const title = `${game.winner} wins the world: ${game.victoryType} victory, ${round.year}`;
+  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(`${game.winner} wins the world`))) return [];
+  const era = game.majorCivs.find((civ) => civ.civ === game.winner)?.era ?? "age it had reached";
+  const cities = await host.cities(game.winner).catch(() => []);
+  const scene = await victoryScene(game.winner, game.victoryType ?? "", era, round.year, cities).catch((error) => { log("victory picture failed:", error.message); return null; });
+  if (!scene) return [];
+  return [{ turn: round.turn, year: round.year, for: "chronicle", caption: `${title}. ${scene.caption.trim()}`, description: scene.description }];
+};
+
 /** /map: our own drawing at once (the painted one comes with each dispatch) */
 async function sendMap(bot: Bot, seat: Seat) {
   const png = await host.map(seat.civ);
@@ -189,13 +203,23 @@ async function sendSaga(seat: Seat, outcome: string, publicly = true) {
   const events = await host.events();
   const history = events.filter((event) => event.text.includes(seat.civ));
   const { text: rawSaga, medium, plates } = await realmSaga(seat, history, outcome);
-  const saga = `THE SAGA OF ${seat.civ.toUpperCase()}${seat.rulerName ? ` UNDER ${seat.rulerName.toUpperCase()}` : ""}\nas the Chronicler tells it\n\n${rawSaga}`;
+  const ruler = seat.kind === "agent" ? seat.character?.name : seat.rulerName;
+  const saga = `THE SAGA OF ${seat.civ.toUpperCase()}${ruler ? ` UNDER ${ruler.toUpperCase()}` : ""}\nas the Chronicler tells it\n\n${rawSaga}`;
   const bot = botOf(seat);
-  if (bot && seat.chatId) await bot.api.sendMessage(seat.chatId, saga).catch((error: Error) => log("saga send failed", error.message));
-  if (publicly) await broadcastHerald(saga); // a living realm's saga draws on its private journal, so it stays with its ruler
+  // Its ruler reads it first. Made public (a living realm's saga draws on its private journal, so it stays with its ruler until the end) it goes to the
+  // players' group too, posted by the realm's own advisor; a sovereign's realm has no advisor bot, so the Chronicler posts that one, naming the realm first
+  const readers: { bot: Bot; chatId: number; intro?: string }[] = [];
+  if (bot && seat.chatId) readers.push({ bot, chatId: seat.chatId });
+  if (publicly && bot) {
+    if (state.groupChat && seat.bot !== undefined && state.groupBots?.includes(seat.bot)) readers.push({ bot, chatId: state.groupChat });
+    else log(`${seat.civ}'s saga stays with its ruler: its advisor bot is not in the players' group`);
+  }
+  if (publicly && seat.kind === "agent")
+    for (const chatId of state.heraldChats) readers.push({ bot: herald, chatId, intro: `The saga of ${seat.civ}, which ${seat.character?.name ?? "its sovereign"} ruled alone, with no ruler at this table:` });
+  for (const reader of readers)
+    await reader.bot.api.sendMessage(reader.chatId, [reader.intro, saga].filter(Boolean).join("\n\n")).catch((error: Error) => log(`saga of ${seat.civ} to chat ${reader.chatId} failed:`, error.message));
   await sendPlates(medium, plates, async (png, caption) => {
-    if (bot && seat.chatId) await bot.api.sendPhoto(seat.chatId, new InputFile(png, "plate.png"), { caption });
-    if (publicly) for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
+    for (const reader of readers) await reader.bot.api.sendPhoto(reader.chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
   });
 }
 
@@ -269,8 +293,11 @@ async function playRound() {
         // All of the age's pictures are painted together and then sent in the order of the years they show
         const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders, ...(await eraPictures(round)).map((picture) => ({ ...picture, note: "" }))];
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
-        const painted = await Promise.all(pictures.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
-        chapters.push({ chapter, record, pictures: painted.filter((entry) => entry.png).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn) });
+        // A victory's picture leads the last age's pictures, whatever the years of the others
+        const victory = (await victoryPictures(round)).map((picture) => ({ ...picture, note: "" }));
+        const painted = await Promise.all([...victory, ...pictures].map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
+        const first = painted.filter((entry) => entry.png && victory.includes(entry.picture));
+        chapters.push({ chapter, record, pictures: [...first, ...painted.filter((entry) => entry.png && !victory.includes(entry.picture)).sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn)] });
       },
       log,
     });
@@ -310,7 +337,7 @@ async function playRound() {
       if (fell && !seat.fallen) {
         seat.fallen = true;
         await tell(seat, `${seat.civ} is no more, Majesty. Its cities belong to others now, and I have no realm left to counsel. History will remember what you said and did - the Chronicler is writing the saga of your reign now.`);
-        if (seat.kind !== "agent") await sendSaga(seat, `${seat.civ} has fallen.`).catch((error) => log("saga failed:", error.message));
+        await sendSaga(seat, `${seat.civ} has fallen.`).catch((error) => log("saga failed:", error.message));
       }
     }
     persist();
@@ -326,7 +353,9 @@ async function playRound() {
       const closing = game.winner ? `The game is over: ${game.winner} has won a ${game.victoryType} victory.` : "The game is over: the last ruler's realm has fallen.";
       await broadcastHerald(closing);
       for (const seat of state.seats) if (!rulersLeft.includes(seat)) await tell(seat, closing);
-      for (const seat of rulersLeft) await sendSaga(seat, game.winner === seat.civ ? `${seat.civ} has won the world - a ${game.victoryType} victory.` : `The world has been won by ${game.winner}; ${seat.civ} still stands, but not first.`).catch((error) => log("saga failed:", error.message));
+      // Every realm still standing gets its saga: a ruler's from its own advisor, a sovereign's from the Chronicler
+      const sovereignsLeft = state.seats.filter((seat) => seat.kind === "agent" && game.majorCivs.find((civ) => civ.civ === seat.civ)?.alive);
+      for (const seat of [...rulersLeft, ...sovereignsLeft]) await sendSaga(seat, game.winner === seat.civ ? `${seat.civ} has won the world - a ${game.victoryType} victory.` : game.winner ? `The world has been won by ${game.winner}; ${seat.civ} still stands, but not first.` : `The last ruler's realm has fallen; ${seat.civ} still stands.`).catch((error) => log("saga failed:", error.message));
       await sendEpic(game.winner ? `${game.winner} has won a ${game.victoryType} victory, and the story is complete.` : "The last ruler's realm has fallen, and with it the story the rulers were telling ends; the world goes on without them.").catch((error) => log("epic failed:", error.message));
     }
   } catch (error) {
@@ -360,9 +389,44 @@ function usageSummary() {
 /** Each advisor bot's name-changer, so that a new game can re-dress them all */
 const wearNames: (() => Promise<void>)[] = [];
 
+/** Whether a message opens by calling someone by their first name */
+const addressed = (name: string, text: string) => new RegExp(`^[^\\p{L}\\p{N}]*${name.split(" ")[0].replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![\\p{L}\\p{N}])`, "iu").test(text);
+
 function setUpAdvisor(bot: Bot, index: number) {
   // Only past the first middleware below, which turns away a bot with no ruler's seat in this game
   const seat = (): Seat => seatOf(index)!;
+
+  // The players' group: an advisor bot added to it learns where the game's public words go - one group per game, the latest wins. Only this
+  // membership update counts: a word in some group never makes it the players' group, as the Chronicler's own list works
+  bot.on("my_chat_member", (ctx) => {
+    if (ctx.chat.type === "private") return;
+    const member = ctx.myChatMember.new_chat_member;
+    const present = ["member", "administrator", "creator"].includes(member.status) || (member.status === "restricted" && member.is_member);
+    if (present) {
+      if (state.groupChat !== ctx.chat.id) {
+        log(state.groupChat ? `The players' group is now chat ${ctx.chat.id} (was ${state.groupChat}): advisor ${index + 1} was added there` : `The players' group is chat ${ctx.chat.id}: advisor ${index + 1} was added there`);
+        state.groupChat = ctx.chat.id;
+        state.groupBots = [];
+      }
+      if (!state.groupBots?.includes(index)) (state.groupBots ??= []).push(index);
+    } else if (state.groupChat === ctx.chat.id && state.groupBots?.includes(index)) {
+      state.groupBots = state.groupBots.filter((other) => other !== index);
+      log(`Advisor ${index + 1} left the players' group (chat ${ctx.chat.id})`);
+      if (!state.groupBots.length) { state.groupChat = undefined; state.groupBots = undefined; log("No advisor is left in the players' group; the sagas stay with their rulers"); }
+    }
+    persist();
+  });
+  // In a group the court never sits: a word there is no audience. Only a word meant for this advisor - by name, by @mention, as a reply to it, or a
+  // command sent to it by its own @name - gets a line saying so; a bare /command is meant for whichever bot, and every advisor would answer it
+  bot.use(async (ctx, next) => {
+    if (!ctx.chat || ctx.chat.type === "private") return next();
+    const text = ctx.message?.text ?? "";
+    const me = ctx.me.username;
+    const here = seatOf(index);
+    if (!here?.character) return;
+    const meant = new RegExp(`@${me}(?![\\w])`, "i").test(text) || ctx.message?.reply_to_message?.from?.id === ctx.me.id || addressed(here.character.name, text);
+    if (meant) await ctx.reply(`${here.character.name} counsels ${here.rulerName ?? `the ruler of ${here.civ}`} in private, never before the assembled courts.`).catch(() => {});
+  });
   bot.use(async (ctx, next) => {
     if (seatOf(index)) return next();
     if (ctx.chat?.type === "private" && ctx.message) await ctx.reply("There is no ruler's seat behind this door in the present game. (A new game with more rulers would open it.)").catch(() => {});
@@ -795,8 +859,6 @@ function setUpAdvisor(bot: Bot, index: number) {
     });
   } else bot.command("newgame", (ctx) => ctx.reply("Only the ruler of the first seat may start a new game."));
 
-  /** Whether a message opens by calling someone by their first name */
-  const addressed = (name: string, text: string) => new RegExp(`^[^\\p{L}\\p{N}]*${name.split(" ")[0].replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![\\p{L}\\p{N}])`, "iu").test(text);
   bot.on("message:text", async (ctx) => {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
     if (state.phase === "passing" && seat().character) return clerk(ctx, ctx.message.text);

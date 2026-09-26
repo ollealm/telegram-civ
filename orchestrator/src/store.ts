@@ -88,6 +88,10 @@ export type State = {
   /** The realms at the table: each ruler's seat bound to its advisor bot, and the sovereigns', which have none */
   seats: Seat[];
   heraldChats: number[];
+  /** The players' group, where the rulers and the Chronicler read together: learned when an advisor bot is added to it (the latest group wins) */
+  groupChat?: number;
+  /** The advisor bots that are members of that group, by bot index: only these post there */
+  groupBots?: number[];
   usage: Record<string, Usage>;
   /** Every ruler's proclamation so far, for the Chronicler's epic */
   proclaimed?: { turn: number; year: string; text: string }[];

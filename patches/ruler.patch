@@ -1624,10 +1624,10 @@ index 0000000..40650e4
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..6aee630
+index 0000000..d9e0e4a
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1280 @@
+@@ -0,0 +1,1285 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -2571,6 +2571,11 @@ index 0000000..6aee630
 +            val winner = game.majorCivs().firstOrNull { it.victoryManager.hasWon() }
 +            val council = if (winner == null) orders.keys.firstNotNullOfOrNull { ruled -> councilEvent(ruled, roundStart, after) } else null
 +            stopReason = if (winner != null) "${winner.civName} has won a ${winner.victoryManager.getVictoryTypeAchieved()} victory" else council?.news
++            // The world's history must hear of it too, or the last chapter never knows the story ended. Once: the events are saved with the host, and a restart must not add it again
++            if (winner != null && publicEvents.none { (it["text"] as String).startsWith("${winner.civName} has won a ") }) {
++                settling = true // it belongs to the turn just played
++                try { addPublicEvent("$stopReason.") } finally { settling = false }
++            }
 +            declaredBy = council?.declaredBy
 +            if (stopReason != null || (wakeOnEvents && wake.isNotEmpty())) break
 +        }
