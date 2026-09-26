@@ -609,10 +609,11 @@ function setUpAdvisor(bot: Bot, index: number) {
       // A question unanswered needs a word on which way the advisor went; matters alone do not: the ruler has read the leans and needs no retelling
       const message = /\?/.test(last.text)
         ? "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to" + (seat().matters?.length ? ", and settle the smaller matters you listed as you see fit" : "") + ". Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]"
-        : "[The ruler dismisses the court without another word, leaving the smaller matters to you. Settle each by your lean and update your plan. The ruler has read your leans and needs no retelling: say nothing at all, unless you went another way on one or one could not be done - then a sentence on that alone. Do not offer /onward - the court is already dismissed.]";
+        : "[The ruler dismisses the court without another word, leaving the smaller matters to you. Settle each by your lean and update your plan. Nothing you write here reaches the ruler, who has read your leans; if one had to go another way, your plan carries it to your next dispatch.]";
+      const shown = /\?/.test(last.text); // matters settled by their leans are not told again: the ruler read them under the closing
       try {
-        const answer = (await whileTyping(bot, seat().chatId!, advisorReply(seat(), message, turnsAhead((await host.state()).turn)))).replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "").trim();
-        if (answer) {
+        const answer = (await (shown ? whileTyping(bot, seat().chatId!, advisorReply(seat(), message, turnsAhead((await host.state()).turn))) : advisorReply(seat(), message, turnsAhead((await host.state()).turn)))).replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "").trim();
+        if (shown && answer) {
           remember(seat(), { from: "advisor", text: answer });
           await reply(answer);
         }
