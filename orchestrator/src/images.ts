@@ -144,7 +144,7 @@ const cartography = (era: string) =>
 /** The schematic's badges in words, so that the painter paints the companies that are there, as what they are, and no others */
 function companies(civ: string, inSight: AgeSummary["inSight"] | undefined): string {
   if (!inSight?.length) return "No company is in sight: paint no soldiers, ships, machines or aircraft anywhere on the map.";
-  const shown = inSight.slice(0, 24).map((c) => `${c.whose === civ ? "ours" : c.whose}: ${c.what} at ${c.where}`);
+  const shown = inSight.slice(0, 24).map((c) => `${c.whose === civ ? "ours" : c.whose}: ${c.what} ${c.at}`);
   return `The schematic's round badges are the companies in sight, the icon in each telling what it is. Paint each as a small group of figures of what it is, in the dress and arms of this age, where its badge is: ${shown.join("; ")}${inSight.length > shown.length ? `; and ${inSight.length - shown.length} more where the badges show` : ""}. No other soldiers, ships, machines or aircraft anywhere on the map, and no badges or dots.`;
 }
 

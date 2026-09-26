@@ -169,10 +169,10 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       if (!age) return [];
       return [
         ...age.marches.map((m) => `${seat.civ}: ${m.told}`),
-        ...age.lost.map((l) => `${seat.civ} lost ${l.what} at ${l.where}.`),
+        ...age.lost.map((l) => `${seat.civ} lost ${l.what} ${l.at}.`),
         // A ruled realm tells its own campaigns; the others' are told by those who saw them
         ...age.enemyMarches.filter((m) => !seats.some((other) => other.civ === m.whose)).map((m) => m.told),
-        ...age.enemyLost.map((l) => `${l.whose} lost ${l.what} at ${l.where}.`),
+        ...age.enemyLost.map((l) => `${l.whose} lost ${l.what} ${l.at}.`),
         ...age.citiesTaken.map((t) => `${t.city} fell to ${t.by} in ${t.year}.`),
         ...age.explorers.map((e) => `A ${seat.civ} ${e.what} was seen as far as ${e.reached}.`),
       ];

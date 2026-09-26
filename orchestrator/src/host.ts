@@ -49,16 +49,16 @@ export type AgeSummary = {
   /** Our campaigns: the few forces that went somewhere together, as the campaign map draws them - the weightiest first */
   marches: Campaign[];
   /** Losses no campaign already tells */
-  lost: { what: string; where: string; xy: [number, number] }[];
+  lost: { what: string; where: string; /** the place with its word before it: "at the walls of Tokyo", "in the country south of Novgorod" */ at: string; xy: [number, number] }[];
   /** The enemy's campaigns we could see */
   enemyMarches: Campaign[];
-  enemyLost: { whose: string; what: string; where: string }[];
+  enemyLost: { whose: string; what: string; where: string; at: string }[];
   citiesTaken: { city: string; by: string; year: string }[];
   exploration: { tilesSeen: number; mostly: string; direction?: string; farthest?: number; naturalWonders: string[]; citiesFound: string[] } | null;
   explorers: { what: string; reached: string }[];
   met: string[];
   /** The companies in sight now, as the map's badges show them (none inside a city, no aircraft) */
-  inSight: { whose: string; what: string; where: string; sea: boolean }[];
+  inSight: { whose: string; what: string; where: string; at: string; sea: boolean }[];
   /** The same, told in sentences */
   lines: string[];
   /** Candidates for the Chronicler's oddity of the age: the world's own lines, and ours (they begin "Our"); empty most ages */
