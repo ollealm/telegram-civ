@@ -335,7 +335,7 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
     addUsage(role, spent);
     const data = message.subtype === "success" ? message.structured_output : undefined;
     // The whole reply as written, not only the tail after the last tool call; the result is used when nothing was collected (a structured answer, or an SDK that did not stream the blocks)
-    const whole = spoken.join("\n\n").trim() || message.result.trim();
+    const whole = spoken.join("\n\n").trim() || (message.subtype === "success" ? message.result.trim() : "");
     const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : whole;
     traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
     if (message.subtype !== "success") throw new Error(`${role} agent failed: ${message.subtype}`);
