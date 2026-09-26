@@ -416,16 +416,10 @@ function setUpAdvisor(bot: Bot, index: number) {
     }
     persist();
   });
-  // In a group the court never sits: a word there is no audience. Only a word meant for this advisor - by name, by @mention, as a reply to it, or a
-  // command sent to it by its own @name - gets a line saying so; a bare /command is meant for whichever bot, and every advisor would answer it
+  // In a group the court never sits and the advisor says nothing, whoever addresses it: it posts its realm's saga there at the end and no more.
+  // Speaking before the assembled courts would be a feature of its own (a public voice that knows every rival reads it), not yet designed
   bot.use(async (ctx, next) => {
     if (!ctx.chat || ctx.chat.type === "private") return next();
-    const text = ctx.message?.text ?? "";
-    const me = ctx.me.username;
-    const here = seatOf(index);
-    if (!here?.character) return;
-    const meant = new RegExp(`@${me}(?![\\w])`, "i").test(text) || ctx.message?.reply_to_message?.from?.id === ctx.me.id || addressed(here.character.name, text);
-    if (meant) await ctx.reply(`${here.character.name} counsels ${here.rulerName ?? `the ruler of ${here.civ}`} in private, never before the assembled courts.`).catch(() => {});
   });
   bot.use(async (ctx, next) => {
     if (seatOf(index)) return next();
