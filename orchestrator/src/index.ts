@@ -87,8 +87,10 @@ async function createWorld() {
   const free = shuffled((await host.nations()).map((nation) => nation.name).filter((name) => !ruled.includes(name)));
   const others = free.slice(0, state.aiCivs ?? AI_CIVS);
   // The Chronicler wears this world's emblem: painted once, beside the making of the world, and set as the bot's face when it is done
+  // The emblem is the world's first picture: posted to every Chronicler chat as the history opens, then worn as the bot's face
   void chroniclerEmblem([...ruled, ...others]).then(async (png) => {
     if (!png) return;
+    for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "emblem.png"), { caption: `The emblem of this world: ${[...ruled, ...others].join(", ")}.` }).catch((error) => log("emblem post failed:", error.message));
     await herald.api.setMyProfilePhoto({ type: "static", photo: new InputFile(await asJpeg(png), "emblem.jpg") });
     log("the Chronicler wears the new world's emblem");
   }).catch((error) => log("the Chronicler's emblem failed:", error.message));
