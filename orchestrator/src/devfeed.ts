@@ -14,7 +14,8 @@ onTrace((trace) => traces.push(trace));
 export const devFeedInChat = () => process.env.DEV_FEED === "chat";
 const FOLDER = "../data/game/devfeed";
 
-const devChat = () => Number(process.env.DEV_CHAT_ID) || state.heraldChats[0];
+/** DEV_CHAT_ID, or else the first private chat that follows the Chronicler - never a group the players read */
+const devChat = () => Number(process.env.DEV_CHAT_ID) || state.heraldChats.find((id) => id > 0);
 const money = (usd: number) => `$${usd.toFixed(2)}`;
 
 const asMarkdown = (trace: Trace) =>

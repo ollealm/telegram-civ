@@ -837,20 +837,45 @@ function setUpAdvisor(bot: Bot, index: number) {
 }
 
 function setUpHerald() {
-  const subscribe = async (ctx: Context) => {
-    if (!ctx.chat || state.heraldChats.includes(ctx.chat.id)) return;
-    state.heraldChats.push(ctx.chat.id);
-    persist();
-    log("Herald now publishes to chat", ctx.chat.id);
-    await ctx.reply("The Chronicler will set down every chapter of the world's history here.");
+  const GREETING = "The Chronicler will set down every chapter of the world's history here. Send /stop to end it.";
+  /** Puts this chat on the Chronicler's list. With greet, it says so even when the chat was already there: that line is the only sign it worked */
+  const subscribe = async (ctx: Context, greet: boolean) => {
+    if (!ctx.chat) return;
+    if (!state.heraldChats.includes(ctx.chat.id)) {
+      state.heraldChats.push(ctx.chat.id);
+      persist();
+      log("Herald now publishes to chat", ctx.chat.id);
+      greet = true;
+    }
+    if (greet) await ctx.reply(GREETING).catch((error) => log("herald greeting failed:", error.message));
   };
+  const unsubscribe = (chatId: number, why: string) => {
+    if (!state.heraldChats.includes(chatId)) return;
+    state.heraldChats = state.heraldChats.filter((id) => id !== chatId);
+    persist();
+    log(`Herald no longer publishes to chat ${chatId} (${why})`);
+  };
+  herald.command("start", (ctx) => subscribe(ctx, true));
+  herald.command("stop", async (ctx) => {
+    unsubscribe(ctx.chat.id, "/stop");
+    await ctx.reply("The Chronicler will write here no more. Send /start to have the chronicle here again.");
+  });
   herald.command("epic", async (ctx) => {
-    await subscribe(ctx);
+    await subscribe(ctx, false);
     await ctx.replyWithChatAction("typing").catch(() => {});
     await sendEpic("A reader has asked for the story so far.").catch((error) => log("epic failed:", error.message));
   });
-  herald.on("my_chat_member", subscribe);
-  herald.on("message", subscribe);
+  // Added to a group (or unblocked in a private chat) the Chronicler subscribes and says so; removed (or blocked), it stops writing there
+  herald.on("my_chat_member", async (ctx) => {
+    const member = ctx.myChatMember.new_chat_member;
+    const present = ["member", "administrator", "creator"].includes(member.status) || (member.status === "restricted" && member.is_member);
+    if (present) await subscribe(ctx, true);
+    else unsubscribe(ctx.chat.id, member.status === "kicked" ? "removed or blocked" : "removed");
+  });
+  // Any other word: a chat not on the list is told how to join it. Nothing subscribes by accident, so /stop stays stopped
+  herald.on("message", async (ctx) => {
+    if (!state.heraldChats.includes(ctx.chat.id)) await ctx.reply("Send /start to have the Chronicler set down the world's history here.").catch(() => {});
+  });
   // The one voice all rulers read is the Chronicler; the bot carries that name (renames are rationed by Telegram, so only once)
   if (state.heraldName !== "The Chronicler")
     void herald.api.setMyName("The Chronicler").then(() => { state.heraldName = "The Chronicler"; persist(); }).catch((error) => log("renaming the Chronicler failed:", error.message));
@@ -893,7 +918,7 @@ advisors.forEach(setUpAdvisor);
 setUpHerald();
 await recover().catch((error) => log("recovering from the restart failed:", error));
 // Dev feed, start of session: the settings everything below runs with
-const devChat = Number(process.env.DEV_CHAT_ID) || state.heraldChats[0];
+const devChat = Number(process.env.DEV_CHAT_ID) || state.heraldChats.find((id) => id > 0); // a private chat, never the players' group
 if (devChat && devFeedInChat())
   void host.state().then((game) =>
     herald.api.sendMessage(devChat, [
