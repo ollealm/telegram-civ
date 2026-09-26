@@ -56,6 +56,8 @@ export type AgeSummary = {
   met: string[];
   /** The same, told in sentences */
   lines: string[];
+  /** Candidates for the Chronicler's oddity of the age: the world's own lines, and ours (they begin "Our"); empty most ages */
+  curiosities?: string[];
 };
 
 export type RoundResult = {
