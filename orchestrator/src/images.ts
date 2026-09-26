@@ -133,13 +133,20 @@ async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer
 /** How a mapmaker of the age would have drawn it */
 const cartography = (era: string) =>
   /Ancient/.test(era) ? "a map painted on papyrus in earth pigments, in the manner of the oldest maps: stylised waves, little drawn towns of mud and stone, rivers as blue ribbons, the edges worn"
-  : /Classical/.test(era) ? "a map in the manner of a classical mosaic or a painted wall map: tesserae-like colour, columned cities, galleys on a wine-dark sea, a laurel border"
+  : /Classical/.test(era) ? "a map in the manner of a classical mosaic or a painted wall map: tesserae-like colour, columned cities, a wine-dark sea, a laurel border"
   : /Medieval/.test(era) ? "an illuminated medieval map on vellum, with gold leaf, tiny castles and cathedrals for cities, sea monsters, a knotwork border and gothic lettering"
-  : /Renaissance/.test(era) ? "a hand-coloured copperplate map of the age of discovery, with engraved relief, carracks under sail, wind heads, a compass rose and a decorated cartouche"
+  : /Renaissance/.test(era) ? "a hand-coloured copperplate map of the age of discovery, with engraved relief, wind heads, a compass rose and a decorated cartouche"
   : /Industrial/.test(era) ? "a finely engraved and hand-tinted nineteenth-century atlas plate: hachured mountains, delicate washes, elegant copperplate lettering, a vignette of steam and iron in the cartouche"
-  : /Modern/.test(era) ? "a lithographed pictorial map of the early twentieth century, in the manner of the great railway and shipping-line posters: bold flat colour, illustrated vignettes of factories, liners and stations, an art-nouveau cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
-  : /Atomic/.test(era) ? "a mid-century illustrated pictorial map, in the manner of the airline and world's-fair maps: clean shapes, confident colour, isometric buildings, aircraft and radio masts drawn small, a modern sans-serif cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
-  : "a richly illustrated contemporary atlas map: satellite-like shaded relief in natural colour, cities drawn as small illustrated skylines seen from above, clean modern lettering, a restrained cartouche; entirely of its own age - no sea monsters, wind heads, parchment or medieval figures, and the companies drawn as modern soldiers, armour and ships";
+  : /Modern/.test(era) ? "a lithographed pictorial map of the early twentieth century, in the manner of the great railway and shipping-line posters: bold flat colour, illustrated vignettes of factories and stations in the margins, an art-nouveau cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
+  : /Atomic/.test(era) ? "a mid-century illustrated pictorial map, in the manner of the airline and world's-fair maps: clean shapes, confident colour, isometric buildings, radio masts and airfields drawn small, a modern sans-serif cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
+  : "a richly illustrated contemporary atlas map: satellite-like shaded relief in natural colour, cities drawn as small illustrated skylines seen from above, clean modern lettering, a restrained cartouche; entirely of its own age - no sea monsters, wind heads, parchment or medieval figures";
+
+/** The schematic's badges in words, so that the painter paints the companies that are there, as what they are, and no others */
+function companies(civ: string, inSight: AgeSummary["inSight"] | undefined): string {
+  if (!inSight?.length) return "No company is in sight: paint no soldiers, ships, machines or aircraft anywhere on the map.";
+  const shown = inSight.slice(0, 24).map((c) => `${c.whose === civ ? "ours" : c.whose}: ${c.what} at ${c.where}`);
+  return `The schematic's round badges are the companies in sight, the icon in each telling what it is. Paint each as a small group of figures of what it is, in the dress and arms of this age, where its badge is: ${shown.join("; ")}${inSight.length > shown.length ? `; and ${inSight.length - shown.length} more where the badges show` : ""}. No other soldiers, ships, machines or aircraft anywhere on the map, and no badges or dots.`;
+}
 
 /**
  *  The civ's known world as a mapmaker of its age would have made it. The image model paints the whole thing - land,
@@ -148,9 +155,10 @@ const cartography = (era: string) =>
  */
 export async function paintedMap(civ: string): Promise<Buffer> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
+  const inSight = await host.age(civ, Number(briefing.turn ?? 0)).then((age) => age.inSight).catch(() => undefined);
   const prompt = `The attached map.png is an accurate schematic of the world as the ${civ} know it in ${briefing.year ?? "this age"}. Make it into ${cartography(String(briefing.era ?? ""))} - something a ruler would hang in the throne room.
-Keep the geography faithful: the same landmasses, coasts, rivers, mountains and forests in the same places, and every city where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner). Show each realm's territory with a soft tinted border in its colour, and the little shields and discs as tiny armies and travellers. ${UNKNOWN_COUNTRY(civ)}
-Title it "The Known World of ${civ}, ${briefing.year ?? ""}". Leave out the schematic's footnote about shields and discs.
+Keep the geography faithful: the same landmasses, coasts, rivers, mountains and forests in the same places, and every city where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner). Show each realm's territory with a soft tinted border in its colour. ${companies(civ, inSight)} ${UNKNOWN_COUNTRY(civ)}
+Title it "The Known World of ${civ}, ${briefing.year ?? ""}".
 The schematic is built from six-sided cells; the finished map must show no trace of them. Redraw every coastline as a natural, irregular shore with bays and headlands, and every border as a soft flowing line that follows rivers and ridges - nothing angular, zigzag or honeycomb-shaped anywhere. Natural painted terrain, not game tiles.`;
   return (await generateImage(prompt, [{ name: "map.png", png: atlas }])) ?? atlas;
 }
@@ -176,7 +184,7 @@ Paint exactly the ${campaigns.length} arrow${campaigns.length === 1 ? "" : "s"} 
     : "marches.png has no arrows: no force went anywhere worth an arrow in these years. Draw none.";
   const prompt = `Two attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${age.toYear}; marches.png is the same map with the campaigns of these years drawn on it.
 Paint the world first as ${cartography(String(briefing.era ?? ""))} - something a ruler would hang in the throne room: the same landmasses, coasts, rivers, mountains and forests in the same places; every city where the schematic has it, drawn as a small illustrated town in the manner of the age's map-makers (${late ? "streets and blocks, chimneys, towers or a station, a harbour with quays" : "walls, roofs, a spire or a keep"}; the capital larger), with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner); each realm's territory with a soft tinted border in its colour. Then, over it, the campaigns of the age.
-The schematic's shields and discs are armies and travellers: draw them as small illustrated companies in the arms of the age - ${late ? "a squad of riflemen or a tank, a field gun and its crew, a steamship or a grey warship, an aircraft where the age has them" : "a few soldiers with a banner, a cannon and its crew, a ship under sail"} - where the schematic has them, never as dots or shields.
+${companies(civ, age.inSight)}
 ${UNKNOWN_COUNTRY(civ)} Do not name seas or oceans, draw no scale bar, and use no real-world coat of arms or flag.
 ${arrows}
 Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age, keeping to what the chancery's words say - no figures, no "tiles", no names in brackets: "A company of pikemen wandered from the Russian marches to the walls of Genoa; ships found new waters to the south-east." A quiet age says so in one line. What happened in these years, in the chancery's words: ${age.lines.join(" ")}

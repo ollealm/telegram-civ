@@ -57,6 +57,8 @@ export type AgeSummary = {
   exploration: { tilesSeen: number; mostly: string; direction?: string; farthest?: number; naturalWonders: string[]; citiesFound: string[] } | null;
   explorers: { what: string; reached: string }[];
   met: string[];
+  /** The companies in sight now, as the map's badges show them (none inside a city, no aircraft) */
+  inSight: { whose: string; what: string; where: string; sea: boolean }[];
   /** The same, told in sentences */
   lines: string[];
   /** Candidates for the Chronicler's oddity of the age: the world's own lines, and ours (they begin "Our"); empty most ages */
