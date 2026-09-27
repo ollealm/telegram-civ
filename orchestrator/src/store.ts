@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 
 const FILE = resolve(process.env.RULER_STATE_FILE ?? "../data/game/orchestrator.json");
 
-export type ChatMessage = { from: "ruler" | "advisor"; text: string };
+export type ChatMessage = { from: "ruler" | "advisor"; text: string; /** an advisor's closing: its question marks are the matters' invitations, not a question left open */ closing?: boolean };
 
 /** Who the advisor is this game - made from the ruler's answers in the setup round, stable until /newgame */
 export type Character = {
@@ -33,8 +33,8 @@ export type Seat = {
   clerk?: { name: string; title: string; sheet: string; pronouns?: string };
   /** The smaller matters the advisor would settle alone once the court rises, offered at the closing for the ruler to take up or leave */
   matters?: { matter: string; lean: string; opening?: string }[];
-  /** Index in chat of the advisor's last closing (the message that listed the smaller matters): a closing's question marks are invitations, not questions left open */
-  closedAt?: number;
+  /** Set by the smaller_matters tool while the reply is being written; remember() turns it into closedAt once that reply is stored */
+  closing?: boolean;
   /** Who has the floor in the audience: the clerk, once called with /clerk or by name, until the advisor is called back with /advisor or by name; unset = the advisor */
   floor?: "clerk";
   /** The last few exchanges with the clerk */
@@ -174,6 +174,7 @@ export function addUsage(role: string, usage: Omit<Usage, "calls">) {
 const CHAT_MEMORY = 16;
 
 export function remember(seat: Seat, message: ChatMessage) {
+  if (message.from === "advisor" && seat.closing) { message.closing = true; seat.closing = undefined; } // the reply that listed the smaller matters
   seat.chat.push(message);
   if (seat.chat.length > CHAT_MEMORY) seat.chat.splice(0, seat.chat.length - CHAT_MEMORY);
   persist();

@@ -213,7 +213,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
       { matters: z.array(z.object({ matter: z.string().describe("The matter in one short line, e.g. 'The salt pact with Moscow lapses this year'"), lean: z.string().describe("What you would do, in a few words, e.g. 'renew on the old terms'"), opening: z.string().optional().describe("Only where there is one: the larger subject behind it, e.g. 'our trade with Moscow as a whole'") })).max(8) },
       async ({ matters }) => {
         seat.matters = matters; // an empty list means "considered, none" - the closing is then not asked again
-        seat.closedAt = seat.chat.length; // the reply being written is the closing
+        seat.closing = true; // the reply being written is the closing; remember() marks it once stored (the ruler's own message is stored first)
         persist();
         return text(matters.length ? "Listed; the ruler may name one to take up, or leave them all to you with /onward." : "No smaller matters listed.");
       },
