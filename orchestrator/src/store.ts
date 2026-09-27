@@ -32,7 +32,9 @@ export type Seat = {
   /** The keeper of the rolls: answers questions of fact while time passes (and on /clerk). One per realm per game. */
   clerk?: { name: string; title: string; sheet: string; pronouns?: string };
   /** The smaller matters the advisor would settle alone once the court rises, offered at the closing for the ruler to take up or leave */
-  matters?: { matter: string; lean: string }[];
+  matters?: { matter: string; lean: string; opening?: string }[];
+  /** Index in chat of the advisor's last closing (the message that listed the smaller matters): a closing's question marks are invitations, not questions left open */
+  closedAt?: number;
   /** Who has the floor in the audience: the clerk, once called with /clerk or by name, until the advisor is called back with /advisor or by name; unset = the advisor */
   floor?: "clerk";
   /** The last few exchanges with the clerk */
