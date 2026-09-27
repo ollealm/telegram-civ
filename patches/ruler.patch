@@ -2159,10 +2159,10 @@ index 0000000..40650e4
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..1cb36c4
+index 0000000..6bef182
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1296 @@
+@@ -0,0 +1,1298 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -2954,7 +2954,9 @@ index 0000000..1cb36c4
 +        for ((what, items) in paid.groupBy { it.second }) log(civ, "The officials spent ${items.sumOf { it.first }} gold on ${what}.")
 +        if (paid.isNotEmpty()) log(civ, "The treasury now holds ${civ.gold} gold.")
 +        val unexplained = before.gold - civ.gold - paid.sumOf { it.first }
-+        if (unexplained > 40) log(civ, "A further $unexplained gold left the treasury this turn without the officials' hand in it (upkeep, payments under our deals, or a deal struck).")
++        // Worth a line when it is more than a turn's income (never for trifles under 10): forty gold is a fortune in one age and small change in another
++        val income = civ.stats.statsForNextTurn.gold.toInt()
++        if (unexplained > maxOf(10, income)) log(civ, "A further $unexplained gold left the treasury this turn without the officials' hand in it (upkeep, payments under our deals, or a deal struck).")
 +        if (before.happiness >= 0 && civ.getHappiness() < 0) log(civ, "The people have become unhappy (${civ.getHappiness()}).")
 +    }
 +
