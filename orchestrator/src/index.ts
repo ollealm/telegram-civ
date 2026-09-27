@@ -145,15 +145,17 @@ const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
   });
   if (!entries.length) return [];
   const all = await host.events().catch(() => [] as PublicEvent[]);
-  return Promise.all(entries.map(async ({ event, civ, era }) => {
+  // One people at a time: two peoples entering the same age in the same round would otherwise be painted with the same face, neither picture yet known to the other
+  const pictures: Picture[] = [];
+  for (const { event, civ, era } of entries) {
     const tag = `${civ} enter the ${era}`;
-    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(tag))) return [];
+    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(tag))) continue;
     const recent = all.filter((entry) => entry.turn <= event.turn && entry.text.startsWith(civ)).slice(-12);
     const cities = await host.cities(civ).catch(() => []);
-    const scene = await eraScene(civ, era, event.year, recent, cities).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
-    if (!scene) return [];
-    return [{ turn: event.turn, year: event.year, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description }];
-  })).then((pictures) => pictures.flat());
+    const scene = await eraScene(civ, era, event.year, recent, cities, pictures.map((picture) => `${picture.caption} - ${picture.description.slice(0, 200)}`)).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
+    if (scene) pictures.push({ turn: event.turn, year: event.year, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description });
+  }
+  return pictures;
 };
 
 /** The world is won: the Chronicler paints the moment - once - and it leads the last age's pictures */

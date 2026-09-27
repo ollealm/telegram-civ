@@ -625,14 +625,14 @@ const ERA_FACES: Record<string, string> = {
 };
 
 /** A people's entry into a new age: the Chronicler paints the people in the age, in a place of theirs, choosing a face of the age no other people has had */
-export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[], cities: { name: string; capital: boolean; size: number; land: string }[] = []) =>
+export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[], cities: { name: string; capital: boolean; size: number; land: string }[] = [], paintedThisSeason: string[] = []) =>
   runStructured(
     "herald",
     HERALD_MODEL,
     `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory, and not the technology that opened the age: paint the people in the age - one instant of ordinary life in which the new age shows in the everyday, the dress, the tools, the buildings, the pace of the day.
 Set it in one of their cities, named below with the lie of its land, and let the land show: a river town under mountains and a coastal town among forests are different pictures before anything else differs.
-Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below) is taken - choose another. If what this people has lately done (below) suggests the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year; the year of ${year} may colour only the manner of the painting and the dress. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
-    `${civ} entered the ${era} in ${year}.\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${alreadyPainted(["chronicle"])}`,
+Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year; the year of ${year} may colour only the manner of the painting and the dress. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
+    `${civ} entered the ${era} in ${year}.\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
     Picture,
   );
 
