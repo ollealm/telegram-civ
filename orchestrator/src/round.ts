@@ -69,6 +69,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     const proclaimed = [...(pending?.proclaimed ?? []), ...spoken];
     const notes = new Map(seats.map((seat) => [seat.civ, [...(pending?.notes?.[seat.civ] ?? [])]]));
     // The age in progress is on disk from here until its letters are written: whatever stops it - urgent news, a failure, a restart - the rest is played on later
+    if (state.ageStarts?.at(-1) !== fromTurn) (state.ageStarts ??= []).push(fromTurn); // an age resumed after a stop is the same age
     const progress: NonNullable<typeof state.pendingRound> = (state.pendingRound = { fromTurn, fromYear: pending?.fromYear ?? opening.year, untilTurn, publicEvents: pending?.publicEvents ?? [], notes: Object.fromEntries(notes), proclaimed });
     persist();
     io.log(pending ? `Round resuming at turn ${opening.turn}, ${untilTurn - opening.turn} turns left` : `Round starting at turn ${fromTurn}, ${length} turns`);
@@ -144,7 +145,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
           dispatch.question = [dispatch.question, "/onward"].filter(Boolean).join("\n\n");
           notes.get(seat.civ)!.push(dispatch.journal);
           (seat.annals ??= []).push({ years: finished.year, heading: dispatch.heading, story: dispatch.text, question: dispatch.question, urgent: true, undelivered: true });
-          remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n") });
+          remember(seat, { from: "advisor", text: [dispatch.text, dispatch.question].filter(Boolean).join("\n\n"), letter: true });
           await io.dispatch(seat, dispatch, finished);
         }),
       );
@@ -200,7 +201,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
         (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, heading: dispatch.heading, story: dispatch.text, course: dispatch.strategy || undefined, question: dispatch.question, undelivered: true });
         seat.forCouncil = undefined; // what was left with the clerk has now been answered
-        remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n") });
+        remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n"), letter: true });
         await io.dispatch(seat, dispatch, finished);
       }),
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget

@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 
 const FILE = resolve(process.env.RULER_STATE_FILE ?? "../data/game/orchestrator.json");
 
-export type ChatMessage = { from: "ruler" | "advisor"; text: string; /** an advisor's closing: its question marks are the matters' invitations, not a question left open */ closing?: boolean };
+export type ChatMessage = { from: "ruler" | "advisor"; text: string; /** an advisor's closing: its question marks are the matters' invitations, not a question left open */ closing?: boolean; /** the dispatch that opens an audience */ letter?: boolean };
 
 /** Who the advisor is this game - made from the ruler's answers in the setup round, stable until /newgame */
 export type Character = {
@@ -126,6 +126,8 @@ export type State = {
   lateGame?: boolean;
   /** The turns an age has now, once a late-game age has been reached (LATE_AGES); only ever shortens */
   lateRound?: number;
+  /** The turn each age began at, in order: what "this age and the one before" means for memories kept by age */
+  ageStarts?: number[];
   aiCivs?: number;
   difficulty?: string;
   /** Who may raise world wonders: everyone, only the rulers' realms, or every realm with an advisor (rulers' and agents') */
@@ -171,12 +173,22 @@ export function addUsage(role: string, usage: Omit<Usage, "calls">) {
   persist();
 }
 
+/** Until a letter has been stored with its mark, the chat is kept by count as it always was */
 const CHAT_MEMORY = 16;
+/** A runaway audience cannot flood the prompt */
+const CHAT_CEILING = 40;
 
+/** The chat the advisor is shown is the audience in progress - from the letter that opened it - and, before that, only its own last closing:
+ *  what it promised last time. Older talk lives on in the will record, the plan, the journal and the letters, each with its own rule */
 export function remember(seat: Seat, message: ChatMessage) {
   if (message.from === "advisor" && seat.closing) { message.closing = true; seat.closing = undefined; } // the reply that listed the smaller matters
   seat.chat.push(message);
-  if (seat.chat.length > CHAT_MEMORY) seat.chat.splice(0, seat.chat.length - CHAT_MEMORY);
+  const opened = seat.chat.findLastIndex((entry) => entry.letter);
+  if (opened >= 0) {
+    const lastClosing = seat.chat.slice(0, opened).findLastIndex((entry) => entry.closing);
+    seat.chat = [...(lastClosing >= 0 ? [seat.chat[lastClosing]] : []), ...seat.chat.slice(opened)];
+  } else if (seat.chat.length > CHAT_MEMORY) seat.chat.splice(0, seat.chat.length - CHAT_MEMORY);
+  if (seat.chat.length > CHAT_CEILING) seat.chat.splice(0, seat.chat.length - CHAT_CEILING);
   persist();
 }
 
@@ -194,7 +206,10 @@ export function forgetPicture(picture: Picture) {
   persist();
 }
 
-/** What these viewers have been shown lately, for whoever describes the next picture */
-export const recentPictures = (viewers: string[], count = 8) =>
-  (state.pictures ?? []).filter((picture) => viewers.includes(picture.for)).slice(-count)
+/** What these viewers have been shown in this age and the one before, for whoever describes the next picture (the last eight until two ages are on record) */
+export const recentPictures = (viewers: string[]) => {
+  const since = state.ageStarts?.at(-2);
+  const shown = (state.pictures ?? []).filter((picture) => viewers.includes(picture.for));
+  return (since === undefined ? shown.slice(-8) : shown.filter((picture) => picture.turn >= since))
     .map((picture) => `${picture.year}: ${picture.caption} - ${picture.description.slice(0, 180)}`).join("\n") || "(none yet)";
+};
