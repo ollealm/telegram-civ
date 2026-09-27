@@ -59,6 +59,8 @@ export type AgeSummary = {
   met: string[];
   /** The companies in sight now, as the map's badges show them (none inside a city, no aircraft) */
   inSight: { whose: string; what: string; where: string; at: string; sea: boolean }[];
+  /** Cities that stand in a patch of known country apart from the rest of the known world */
+  glimpses?: string[];
   /** The same, told in sentences */
   lines: string[];
   /** Candidates for the Chronicler's oddity of the age: the world's own lines, and ours (they begin "Our"); empty most ages */
