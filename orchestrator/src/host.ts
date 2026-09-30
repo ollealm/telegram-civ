@@ -96,6 +96,10 @@ export type Orders = {
   neverBuild?: string[];
   neverPropose?: string[];
   goldReserve?: number | null;
+  /** Standing: when the officials re-arm units with gold on their own */
+  officialsRearm?: "always" | "war" | "never";
+  /** Immediate: re-arm these units now (unit numbers), or "all" */
+  rearm?: (number | "all")[];
   queue?: { city: string; items: string[] }[];
   build?: { city: string; item: string }[];
   purchase?: { city: string; item: string }[];

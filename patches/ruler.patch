@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..e9a8b9b
+index 0000000..db8924c
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,93 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.battle.ICombatant
@@ -37,6 +37,18 @@ index 0000000..e9a8b9b
 +    /** A ruled civ's posture of arms: the city its army is to take (warAim), how it fights (attack | defend | raid), and how many soldiers stay home */
 +    class Posture(val warAim: String? = null, val stance: String = "attack", val reserve: Int = 0)
 +    val postures = ConcurrentHashMap<String, Posture>()
++
++    /** civID -> when a ruled civ's officials may re-arm units with gold on their own (a standing order of the ruler): "always", "war" (the default), "never" */
++    val rearming = ConcurrentHashMap<String, String>()
++    /** May the officials re-arm this civ's units now? Under "war", only while at war with a major power - city-states and barbarians do not count. Unruled civs always may */
++    fun mayRearm(civ: Civilization): Boolean = when (rearming[civ.civID] ?: if (civ.civID in ruledCivs) "war" else "always") {
++        "always" -> true
++        "never" -> false
++        else -> civ.getKnownCivs().any { it.isMajorCiv() && civ.isAtWarWith(it) }
++    }
++
++    /** Called for a ruled civ before its officials spend any gold: the ruler's own purchases due this turn come first */
++    @Volatile var rulersFirst: ((Civilization) -> Unit)? = null
 +
 +    /** civIDs whose officials may not give gold to city-states on their own (a standing order of the ruler) */
 +    val noGifts: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -277,15 +289,16 @@ index 9eea632..c53d66e 100644
  
          // Player trades are... more complicated.
 diff --git a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
-index f180f26..c3cb2f2 100644
+index f180f26..7004162 100644
 --- a/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/UseGoldAutomation.kt
-@@ -18,11 +18,34 @@ object UseGoldAutomation {
+@@ -18,11 +18,36 @@ object UseGoldAutomation {
  
      /** allow AI to spend money to purchase city-state friendship, buildings & unit */
      fun useGold(civ: Civilization) {
 -        for (unit in civ.units.getCivUnits())
 -            UnitAutomation.tryUpgradeUnit(unit)
++        if (civ.civID in com.unciv.logic.automation.RulerOverrides.ruledCivs) com.unciv.logic.automation.RulerOverrides.rulersFirst?.invoke(civ)
 +        // A ruler's treasury reserve is a floor, not a gate: the officials only ever see what lies above it
 +        val reserve = com.unciv.logic.automation.RulerOverrides.goldReserve[civ.civID] ?: 0
 +        if (reserve > 0 && civ.gold <= reserve) return
@@ -303,7 +316,8 @@ index f180f26..c3cb2f2 100644
 -        if (civ.isMajorCiv())
 -            useGoldForCityStates(civ)
 +    private fun spendGold(civ: Civilization) {
-+        for (unit in civ.units.getCivUnits().toList()) {
++        // A ruler's standing order says when the officials re-arm on their own (by default only in war)
++        if (com.unciv.logic.automation.RulerOverrides.mayRearm(civ)) for (unit in civ.units.getCivUnits().toList()) {
 +            val name = unit.name
 +            val tile = unit.getTile()
 +            itemised(civ, { "re-arming a $name as ${(if (unit.isCivilian()) tile.civilianUnit else tile.militaryUnit)?.name ?: "something newer"}" }) { UnitAutomation.tryUpgradeUnit(unit) }
@@ -319,7 +333,7 @@ index f180f26..c3cb2f2 100644
  
          val acceptableHurryCostModifier = civ.gold.coerceAtLeast(0)/100
          // Ideally we buy things with good gold:production conversion from purchasing and hard-build the rest, but some mods have high hurryCostModifier on everything leading to too much gold being saved. 
-@@ -36,10 +59,11 @@ object UseGoldAutomation {
+@@ -36,10 +61,11 @@ object UseGoldAutomation {
              if (!city.cityConstructions.isConstructionPurchaseAllowed(construction, Stat.Gold, statBuyCost)) continue
              if (civ.gold < statBuyCost || construction.hurryCostModifier > acceptableHurryCostModifier) continue
              if (city.cityConstructions.getWorkDone(construction.name) > 0) continue // Don't buy things we already invested production into (may waste the invested production)
@@ -2292,10 +2306,10 @@ index 0000000..dbb8d57
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..16b3694
+index 0000000..8171c7f
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1342 @@
+@@ -0,0 +1,1368 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -2365,6 +2379,8 @@ index 0000000..16b3694
 +        var goldReserve: Int? = null
 +        /** The officials may not give gold to city-states on their own */
 +        var noGifts = false
++        /** When the officials re-arm units with gold on their own: always, war (only while at war with a major power), never */
++        var officialsRearm = "war"
 +        /** Keep a soldier inside every city: when one stands empty, the nearest free soldier is sent in under a garrison order */
 +        var garrisonEveryCity = false
 +        /** The posture of arms: warAim (an enemy city the host converges on), stance attack|defend|raid, reserve (soldiers kept home) */
@@ -2374,6 +2390,7 @@ index 0000000..16b3694
 +        fun toMap(civ: Civilization? = null) = mapOf(
 +            "goldReserve" to goldReserve,
 +            "noGifts" to noGifts,
++            "officialsRearm" to officialsRearm,
 +            "garrisonEveryCity" to garrisonEveryCity,
 +            "posture" to mapOf("warAim" to warAim, "stance" to stance, "reserve" to reserve),
 +            "personality" to personality,
@@ -2404,6 +2421,7 @@ index 0000000..16b3694
 +        RulerOverrides.forbidden = { civ, construction -> civ.civID in RulerOverrides.ruledCivs && isForbidden(civ, construction) }
 +        RulerOverrides.spendingNoted = { civ, gold, what -> if (civ.civID in RulerOverrides.ruledCivs) spending.getOrPut(civ.civName) { ArrayList() } += Pair(gold, what) }
 +        RulerOverrides.unitHandler = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && units.handle(unit) }
++        RulerOverrides.rulersFirst = { civ -> units.rearmDue(civ) }
 +        RulerOverrides.underOrders = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && units.underOrders(unit) }
 +        RulerOverrides.tradeAnswered = { request, receiver, outcome -> diplomacy.settle(request, receiver, outcome) }
 +        RulerOverrides.unitDisbanded = { civ, unit, why -> if (civ.civID in RulerOverrides.ruledCivs) disbandedFor.getOrPut(civ.civName) { HashMap() }[unit.id] = why }
@@ -2595,7 +2613,7 @@ index 0000000..16b3694
 +        orders.clear(); publicEvents.clear(); chancery.clear(); spending.clear(); warningsWoken.clear(); losses.clear(); ownWars.clear(); notificationsSeen.clear()
 +        units.reset(); diplomacy.reset(); trail.clear(); ages.clear()
 +        worldAtLastAdvance = null
-+        RulerOverrides.lockedCities.clear(); RulerOverrides.focusedCities.clear(); RulerOverrides.postures.clear(); RulerOverrides.goldReserve.clear(); RulerOverrides.noProposals.clear(); RulerOverrides.noGifts.clear(); RulerOverrides.noWonders.clear()
++        RulerOverrides.lockedCities.clear(); RulerOverrides.focusedCities.clear(); RulerOverrides.postures.clear(); RulerOverrides.goldReserve.clear(); RulerOverrides.noProposals.clear(); RulerOverrides.noGifts.clear(); RulerOverrides.rearming.clear(); RulerOverrides.noWonders.clear()
 +    }
 +
 +    /** Written to a sibling file and moved into place, so a crash mid-write never leaves a half file behind */
@@ -2675,6 +2693,10 @@ index 0000000..16b3694
 +        }
 +        json.get("goldReserve")?.let { goldReserve = if (it.isNull) null else it.asInt().coerceAtLeast(0) }
 +        json.get("noGifts")?.let { noGifts = it.asBoolean() }
++        json.get("officialsRearm")?.takeUnless { it.isNull }?.asString()?.trim()?.lowercase()?.let { mode ->
++            if (mode !in listOf("always", "war", "never")) throw ApiError(400, "officialsRearm takes always, war or never; not '$mode'")
++            officialsRearm = mode
++        }
 +        json.get("garrisonEveryCity")?.takeUnless { it.isNull }?.let { garrisonEveryCity = it.asBoolean() }
 +        json.get("posture")?.takeUnless { it.isNull }?.let { posture ->
 +            if (posture.has("warAim")) warAim = posture.get("warAim").takeUnless { it.isNull }?.asString()
@@ -2690,6 +2712,7 @@ index 0000000..16b3694
 +        RulerOverrides.personalities[civ.civID] = personality
 +        standing.goldReserve?.let { RulerOverrides.goldReserve[civ.civID] = it } ?: RulerOverrides.goldReserve.remove(civ.civID)
 +        if (standing.noGifts) RulerOverrides.noGifts += civ.civID else RulerOverrides.noGifts -= civ.civID
++        RulerOverrides.rearming[civ.civID] = standing.officialsRearm
 +        if (standing.neverPropose.isNotEmpty()) RulerOverrides.noProposals[civ.civID] = standing.neverPropose.toSet() else RulerOverrides.noProposals.remove(civ.civID)
 +    }
 +
@@ -2880,6 +2903,17 @@ index 0000000..16b3694
 +            val note = if (holder != null && bought != null) " ${item} #${bought.id} stands beside ${city.name}, which our ${holder.name} #${holder.id} still holds: order it to garrison ${city.name} to swap them, or the officials use it as they see fit." else ""
 +            log(civ, "By your order: bought $item in ${city.name} for $cost gold.$note")
 +            "Bought $item in ${city.name} for $cost gold (${civ.gold} left).$note"
++        }
++        // Re-arming by hand: named units, or "all" - each told apart, done or not and why
++        json.get("rearm")?.let { list ->
++            val entries = list.asStringArray().map { it.trim() }
++            entries.filter { !it.equals("all", ignoreCase = true) && it.removePrefix("#").toIntOrNull() == null }.forEach { failed += "rearm takes unit numbers or \"all\"; not '$it'" }
++            val wanted = entries.flatMap { entry -> if (entry.equals("all", ignoreCase = true)) units.rearmable(civ).map { it.id } else listOfNotNull(entry.removePrefix("#").toIntOrNull()) }.distinct()
++            for (id in wanted) {
++                val result = units.rearm(civ, id, standing.goldReserve ?: 0)
++                if (result.first) done += result.second else failed += result.second
++            }
++            if (wanted.isEmpty() && entries.any { it.equals("all", ignoreCase = true) }) done += "No soldier of ours can be re-armed with newer arms we know."
 +        }
 +        // Unit orders, diplomacy
 +        tryEach(json.get("units")) { units.give(civ, it) }
@@ -3497,7 +3531,13 @@ index 0000000..16b3694
 +        fun upgradable(unit: com.unciv.logic.map.mapunit.MapUnit, ignoreResources: Boolean) = unit.baseUnit.getUpgradeUnits(unit.cache.state).any { name -> civ.gameInfo.ruleset.units[name]?.let { to -> unit.upgrade.canUpgrade(to, ignoreRequirements = false, ignoreResources = ignoreResources) } == true }
 +        val oldArms = civ.units.getCivUnits().filter { it.isMilitary() && it.baseUnit.isLandUnit && upgradable(it, true) }.toList()
 +        val (outdated, waiting) = oldArms.partition { upgradable(it, false) }
-+        if (outdated.size >= 3) warnings += "${outdated.size} soldiers carry arms of an earlier age (${outdated.groupingBy { it.name }.eachCount().entries.joinToString { "${it.value} ${it.key}" }}): they cost upkeep and would not hold a wall. Gold above your reserve lets the officials re-arm them; or disband the worst."
++        val rearmMode = orders[civ.civName]?.officialsRearm ?: "war"
++        if (outdated.size >= 3) warnings += "${outdated.size} soldiers carry arms of an earlier age (${outdated.groupingBy { it.name }.eachCount().entries.joinToString { "${it.value} ${it.key}" }}): they cost upkeep and would not hold a wall. " + when (rearmMode) {
++            "always" -> "Gold above your reserve lets the officials re-arm them; or disband the worst."
++            "never" -> "The officials re-arm nothing on their own: order rearm to do it, or disband the worst."
++            else -> if (civ.getKnownCivs().any { it.isMajorCiv() && civ.isAtWarWith(it) }) "We are at war, so gold above your reserve lets the officials re-arm them; or disband the worst."
++                else "The officials re-arm only in war: order rearm to do it now, or disband the worst."
++        }
 +        if (waiting.size >= 3) warnings += "${waiting.size} soldiers (${waiting.groupingBy { it.name }.eachCount().entries.joinToString { "${it.value} ${it.key}" }}) carry old arms that gold alone cannot replace: the newer arms need ${waiting.flatMap { it.baseUnit.getUpgradeUnits(it.cache.state).mapNotNull { name -> civ.gameInfo.ruleset.units[name]?.requiredResource } }.distinct().joinToString(" or ")}, which we lack."
 +        if (!units.hasLandForACity(civ)) for (unit in civ.units.getCivUnits()) if (unit.hasUnique(com.unciv.models.ruleset.unique.UniqueType.FoundCity))
 +            warnings += "${unit.name} #${unit.id} has nowhere to go: no land is left for a new city on our shores. It costs upkeep - disband it, or keep it only if you mean to take it overseas."
@@ -3756,10 +3796,10 @@ index 0000000..f4d43bf
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..3c0076b
+index 0000000..bc7c912
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,511 @@
+@@ -0,0 +1,571 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -3769,8 +3809,10 @@ index 0000000..3c0076b
 +import com.unciv.logic.map.mapunit.MapUnit
 +import com.unciv.logic.map.tile.Tile
 +import com.unciv.models.UnitActionType
++import com.unciv.models.UpgradeUnitAction
 +import com.unciv.models.ruleset.unique.UniqueType
 +import com.unciv.ui.screens.worldscreen.unit.actions.UnitActions
++import com.unciv.ui.screens.worldscreen.unit.actions.UnitActionsUpgrade
 +import kotlin.math.atan2
 +import kotlin.math.roundToInt
 +
@@ -3794,13 +3836,16 @@ index 0000000..3c0076b
 +    /** Units given away by order since the host last reckoned its losses: gone from our rolls, but neither lost nor disbanded */
 +    val given = HashSet<Int>()
 +
++    /** Units ordered re-armed that had spent their movement: re-armed at the start of our next turn, when they have it again (unit id -> the reserve then in force) */
++    private val rearmNext = HashMap<Int, Int>()
++
 +    /** Forget everything of one game */
-+    fun reset() { orders.clear(); released.clear(); given.clear(); landLeft.clear(); stillSince.clear() }
++    fun reset() { orders.clear(); released.clear(); given.clear(); rearmNext.clear(); landLeft.clear(); stillSince.clear() }
 +
 +    /** Orders for units that no longer exist (a soldier killed on the march; re-arming keeps a unit's number, so its order stays): forgotten, so a dead man never counts as "on the way" */
 +    fun forgetTheDead(game: com.unciv.logic.GameInfo) {
 +        val alive = game.civilizations.asSequence().flatMap { it.units.getCivUnits() }.map { it.id }.toHashSet()
-+        orders.keys.retainAll(alive); released.retainAll(alive)
++        orders.keys.retainAll(alive); released.retainAll(alive); rearmNext.keys.retainAll(alive)
 +    }
 +
 +    /** A hold that only ever meant "a Great Person awaits orders" must not bind a soldier: the old name check froze Great War Infantry and Bombers,
@@ -3824,11 +3869,13 @@ index 0000000..3c0076b
 +    /** The rest of what a restart would lose: which Great People were handed to the officials, and how long each unit has stood where it stands */
 +    fun stateToMap() = mapOf(
 +        "released" to released.toList(),
++        "rearmNext" to rearmNext.mapKeys { it.key.toString() },
 +        "stillSince" to stillSince.mapKeys { it.key.toString() }.mapValues { mapOf("spot" to it.value.first, "turn" to it.value.second) })
 +
 +    fun loadState(json: JsonValue?) {
-+        released.clear(); stillSince.clear()
++        released.clear(); stillSince.clear(); rearmNext.clear()
 +        json?.get("released")?.forEach { released += it.asInt() }
++        json?.get("rearmNext")?.forEach { rearmNext[it.name.toInt()] = it.asInt() }
 +        json?.get("stillSince")?.forEach { stillSince[it.name.toInt()] = Pair(it.getString("spot"), it.getInt("turn")) }
 +    }
 +
@@ -4063,6 +4110,59 @@ index 0000000..3c0076b
 +    private fun drop(unit: MapUnit) {
 +        orders.remove(unit.id)
 +        if (unit.isGreatPerson()) released += unit.id
++    }
++
++    /** At the start of our turn, before the officials spend a coin: the re-armings ordered for units that had marched. Re-arming keeps a unit's number */
++    fun rearmDue(civ: Civilization) {
++        for ((id, reserve) in rearmNext.filterKeys { civ.units.getUnitById(it) != null }) {
++            rearmNext.remove(id)
++            val (ok, told) = rearm(civ, id, reserve, deferIfSpent = false)
++            if (!ok) log(civ, "The re-arming you ordered could not be done: $told.")
++        }
++    }
++
++    /** Our soldiers that newer arms we know could replace (whether or not we can pay or have the resources now) */
++    fun rearmable(civ: Civilization) = civ.units.getCivUnits().filter { unit -> unit.isMilitary() && UnitActionsUpgrade.getUpgradeActions(unit).any() }.toList()
++
++    /** Re-arm one of our units by the ruler's hand, paid from the treasury above [reserve]: (done, what to tell). A unit that has spent its movement
++     *  is re-armed at the start of our next turn instead, as a player's would be */
++    fun rearm(civ: Civilization, id: Int, reserve: Int, deferIfSpent: Boolean = true): Pair<Boolean, String> {
++        fun a(name: String) = (if (name.first().lowercaseChar() in "aeiou") "an " else "a ") + name
++        val unit = civ.units.getUnitById(id) ?: return Pair(false, "No unit of ours is #$id - see the briefing's unit list")
++        val label = "${unit.name} #$id"
++        val ruleset = civ.gameInfo.ruleset
++        val options = UnitActionsUpgrade.getUpgradeActions(unit).filterIsInstance<UpgradeUnitAction>().toList()
++        if (options.isEmpty()) {
++            val next = unit.baseUnit.getUpgradeUnits(unit.cache.state).mapNotNull { ruleset.units[it] }.map { civ.getEquivalentUnit(it) }.toList()
++            return Pair(false, "$label cannot be re-armed: " + when {
++                next.isEmpty() -> "there are no newer arms for ${a(unit.name)}"
++                unit.getTile().getOwner() != civ -> "it stands outside our borders, and can be re-armed only on our own land"
++                else -> next.first().let { to -> "we do not yet know how to make ${a(to.name)}" + (to.requiredTech?.let { " (it needs $it)" } ?: "") }
++            })
++        }
++        // As the officials choose: the cheapest of the newer arms that can be had
++        val usable = options.filter { unit.upgrade.canUpgrade(it.unitToUpgradeTo) }
++        if (usable.isEmpty()) {
++            val to = options.first().unitToUpgradeTo
++            val lacking = to.getResourceRequirementsPerTurn(unit.cache.state).keys.filter { civ.getResourceAmount(it) < 1 }
++            return Pair(false, "$label cannot be re-armed as ${a(to.name)}: it needs ${lacking.ifEmpty { to.getResourceRequirementsPerTurn(unit.cache.state).keys.toList() }.joinToString(" and ")}, which we lack")
++        }
++        val choice = usable.minBy { it.goldCostOfUpgrade }
++        val to = choice.unitToUpgradeTo.name
++        val cost = choice.goldCostOfUpgrade
++        if (civ.gold - reserve < cost) return Pair(false, "$label cannot be re-armed as ${a(to)}: it costs $cost gold, and only ${(civ.gold - reserve).coerceAtLeast(0)} lies above the reserve")
++        if (unit.isEmbarked()) return Pair(false, "$label is at sea, embarked; it can be re-armed once ashore on our land")
++        if (!unit.hasMovement()) {
++            if (!deferIfSpent) return Pair(false, "$label has no movement left to be re-armed")
++            rearmNext[id] = reserve
++            return Pair(true, "$label has marched this turn: it is re-armed as ${a(to)} at the start of our next turn, for about $cost gold if the treasury still allows")
++        }
++        val action = choice.action ?: return Pair(false, "$label cannot be re-armed as ${a(to)} here and now")
++        action.invoke()
++        val now = civ.units.getUnitById(id)
++        if (now == null || now.name == unit.name) return Pair(false, "$label could not be re-armed as ${a(to)}: the new arms found no room to stand")
++        log(civ, "By your order: re-armed our ${unit.name} #$id as $to for $cost gold.")
++        return Pair(true, "$label re-armed as $to for $cost gold")
 +    }
 +
 +    /** Give an order from the API: {unit: id, action, x?, y?, city?} */
