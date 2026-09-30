@@ -373,7 +373,7 @@ const TELEGRAM_STYLE =
 const WHILE_AWAY = "While the ruler is away you use your judgement within their wishes: you spend, build and negotiate towards them, settle the small and the plainly right on your own, and bring the real forks in the road - the risky, the costly to undo, anything that touches war or a sworn word - to the next audience. If the ruler has told you to ask first about something, or given you leave to do more on your own, it stands in your record of their wishes and it governs.";
 
 /** How the host answers to orders, for advisors and sovereigns alike */
-const HOST_FACTS = "A soldier under your own order (move, garrison, fortify, hold) is out of the officials' hands: it stands where you put it and never attacks until you release it. The briefing's warEstimate is the chancery's reckoning of every enemy city we have seen against our engines, and citiesNeverSeen what we have not seen - read it before you weigh the odds of a war or choose its aim.";
+const HOST_FACTS = "A soldier under your own order (move, garrison, fortify, hold) is out of the officials' hands: it stands where you put it and never attacks until you release it. The briefing's warEstimate is the chancery's reckoning of every enemy city we have seen against our engines, and citiesNeverSeen what we have not seen - read it before you weigh the odds of a war or choose its aim. The court's tools reach you under the prefix mcp__realm__ (set_orders is mcp__realm__set_orders, and so for each); the names here leave the prefix off.";
 
 /** War is off by default; the ruler grants it by saying so */
 const warRule = (seat: Seat) =>
