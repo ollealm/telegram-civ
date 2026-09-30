@@ -94,6 +94,7 @@ export type Orders = {
   research?: string[];
   policyBranches?: string[];
   neverBuild?: string[];
+  neverPropose?: string[];
   goldReserve?: number | null;
   queue?: { city: string; items: string[] }[];
   build?: { city: string; item: string }[];
