@@ -42,6 +42,9 @@ const earlier = resuming ? readdirSync("../data/harness").filter((name) => name.
 if (resuming && !earlier) throw new Error(`LEAGUE_RESUME: no earlier results for league${tag}`);
 const stamp = earlier ? earlier.slice("league-".length, -".csv".length) : new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-") + tag;
 const problems = `../data/harness/league-${stamp}-problems.jsonl`;
+/** Every look-in whole - the prompts as sent (briefing and all), the tool calls with their results, the reply - one JSON line each,
+ *  so a run can be searched for which parts of the briefing the sovereigns ever act on */
+const lookIns = `../data/harness/league-${stamp}-lookins.jsonl`;
 // A seat as the results name it: model, and effort when one is set
 const labelOf = (civ?: string) => {
   const seat = state.seats.find((candidate) => candidate.civ === civ);
@@ -85,6 +88,8 @@ onTrace((trace) => {
     const unreached = trace.costUsd === 0 || trace.reply.startsWith("(failed") || /session limit|could not be reached/i.test(trace.reply);
     if (unreached) pauseIfLimited(trace.civ, trace.reply);
     lookIn(trace.civ, !unreached, trace.reply);
+    appendFileSync(lookIns, JSON.stringify({ turn: gameTurn, civ: trace.civ, model: labelOf(trace.civ), trigger: /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled",
+      systemPrompt: trace.systemPrompt, prompt: trace.prompt, toolCalls: trace.toolCalls, reply: trace.reply, costUsd: trace.costUsd, ms: trace.ms }) + "\n");
   }
   for (const call of trace.toolCalls) {
     const result = call.result ?? "";
