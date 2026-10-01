@@ -67,6 +67,8 @@ export type Seat = {
   rerolled?: boolean;
   /** War is the ruler's alone unless they have said, in plain words, that the advisor may declare it */
   mayDeclareWar?: boolean;
+  /** A ruler's court starts with the officials barred from proposing Defensive Pacts (a pact can drag the realm into a war): set once, then the advisor's to change */
+  pactsBarredOnce?: boolean;
   /** Setup round in progress: the answers given so far */
   setup?: string[];
   /** The realm has been destroyed; its ruler has been told */

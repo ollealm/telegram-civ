@@ -188,7 +188,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         if (seat.kind === "agent") {
           // An agent realm holds no council with itself: its journal is its own look-in notes, and it weighs the longer game at the first look-in of the next age
           const entry = governLogs.map((note) => note.replace(/^T\d+: /, "")).filter((note) => !/^nothing to change/i.test(note)).join(" ");
-          seat.journal.push(`${finished.fromYear} to ${finished.year}: ${entry.length > 700 ? `${entry.slice(0, 700)}...` : entry || "A quiet age; nothing changed."}`);
+          seat.journal.push(`${finished.fromYear} to ${finished.year}: ${entry.length > 1200 ? `...${entry.slice(-1200)}` : entry || "A quiet age; nothing changed."}`);
           return;
         }
         const ending = finished.stoppedEarly && /has won/.test(finished.stoppedEarly) ? finished.stoppedEarly.replace(/[.!]+$/, "") : undefined;

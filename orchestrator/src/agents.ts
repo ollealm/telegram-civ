@@ -57,6 +57,10 @@ const PERSONALITY_HELP =
   "Military = army size, Aggressive = attack vs defend, Expansion = eagerness to found cities, Diplomacy = courting city-states and friendships. " +
   "They are a bias, not a command: use queue/build/purchase for anything specific. DeclareWar lets the generals start wars on their own: it stays 0 unless war is yours to declare (a sovereign, or an advisor with the ruler's recorded leave).";
 
+/** A tool's fields, with any other key refused by name: a model that wraps its fields ({"arguments": "..."}) or misspells one is told so,
+ *  instead of the call running as if it had said nothing */
+const strict = <S extends z.ZodRawShape>(shape: S): S => z.object(shape).strict() as unknown as S;
+
 /** Where the look-ins' unasked questions are kept, beside the orchestrator's state */
 const WISHES = join(process.env.RULER_STATE_FILE ? join(process.env.RULER_STATE_FILE, "..") : "../data/game", "wished-to-ask.md");
 
@@ -95,13 +99,13 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "get_log",
       "The chancery log: everything that happened to our realm turn by turn - what was built, lost, researched, what the officials changed on their own.",
-      { sinceTurn: z.number().optional().describe("Return entries after this turn"), sinceYear: z.number().optional().describe("Or: entries from this year on (negative for BC, e.g. -600). At most the last 150 lines come back; ask from a later point for the rest.") },
-      ({ sinceTurn, sinceYear }) => attempt(() => host.log(seat.civ, sinceTurn ?? 0, sinceYear)),
+      { sinceTurn: z.number().optional().describe("Return entries after this turn"), sinceYear: z.number().optional().describe("Or: entries from this year on (negative for BC, e.g. -600)"), untilTurn: z.number().optional().describe("Return entries up to this turn only. At most 150 lines come back, the latest; the note at the top says which untilTurn reads the page before") },
+      ({ sinceTurn, sinceYear, untilTurn }) => attempt(() => host.log(seat.civ, sinceTurn ?? 0, sinceYear, untilTurn)),
     ),
     tool(
       "set_orders",
       "Change the realm's orders; include only what should change. Standing orders (kept until changed): personality, research, policyBranches, neverBuild, neverPropose, goldReserve, noGifts, officialsRearm, garrisonEveryCity. Immediate: queue, build, purchase, rearm, trade, answerOffers, peace, declareWar. The reply confirms the resulting queues, research and gold.",
-      {
+      strict({
         personality: z.object(Object.fromEntries(PERSONALITY_VALUES.map((name) => [name, weight]))).partial().optional().describe(PERSONALITY_HELP),
         research: z.array(z.string()).optional().describe("Technology goals in priority order; the path to each is researched automatically and the officials never deviate while a goal remains."),
         policyBranches: z.array(z.string()).optional().describe("Policy branches in the order to adopt and complete them. A single policy may be named too (e.g. Monarchy) to take it as soon as it is open, ahead of what follows in the list."),
@@ -110,7 +114,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         officialsRearm: z.enum(["always", "war", "never"]).optional().describe("Standing: when the officials re-arm soldiers with gold on their own - from what lies above the reserve, each time newer arms can be had. war (the default): only while we are at war with a great power; always: whenever the gold is there; never: only when you order rearm."),
         rearm: z.array(z.union([z.number(), z.literal("all")])).optional().describe("Immediate: re-arm these units now with newer arms, by unit number (#id), or [\"all\"] for every soldier that newer arms we know could replace - paid from the treasury above the reserve. The reply says what each became and for how much, or why it could not be done (no newer arms, a resource we lack, too little gold above the reserve, outside our borders); a unit that has marched this turn is re-armed at the start of the next."),
         neverBuild: z.array(z.string()).optional().describe("Standing: buildings and units the officials may never queue on their own (e.g. Barracks, Knight; 'all wonders' and 'all military units' work as whole categories). Replaces the previous list. You can still order them yourself."),
-        neverPropose: z.array(z.string()).optional().describe("Standing: kinds of deal the officials may never propose to other powers on their own: 'Open Borders', 'Research Agreement', 'Defensive Pact', 'Declaration of Friendship', 'luxuries' (their luxury swaps), or 'all'. Replaces the previous list; empty lets them propose freely again. Offers made TO us are always held for you regardless. You can still propose any of these yourself."),
+        neverPropose: z.array(z.string()).optional().describe("Standing: kinds of deal the officials may never propose to other powers on their own: 'Open Borders', 'Research Agreement', 'Defensive Pact', 'Declaration of Friendship', 'luxuries' (their luxury swaps), or 'all'. Replaces the previous list; empty lets them propose freely again. At a ruler's court the list starts as ['Defensive Pact']. Offers made TO us are always held for you regardless. You can still propose any of these yourself."),
         posture: z.object({
           warAim: z.string().nullable().optional().describe("The enemy city the whole host converges on and besieges, by name (must belong to a power we are at war with). null clears it. Engines bombard it, foot soldiers storm it when it is battered - the generals run the siege with the same craft the rival powers use. It clears itself when the city is taken."),
           stance: z.enum(["attack", "defend", "raid"]).optional().describe("attack: the host marches on the warAim (or the nearest enemy city). defend: no soldier leaves our borders - they garrison, fortify and heal, and fight only what comes within reach. raid: pillage the enemy's fields and mines and pull back, never assault a city."),
@@ -121,7 +125,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         build: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Put one item at the front of a city's queue, keeping the rest."),
         cities: z.array(z.object({ city: z.string(), action: z.enum(["annex", "raze", "spare"]) })).optional().describe("What becomes of a city of ours: annex a puppet (a conquered city is held as a puppet until you do - it runs itself and takes no orders), raze it (it shrinks each turn until it is gone; never a capital), or spare one being razed. A conquest is never razed unless you order it."),
         purchase: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Buy a unit or building outright with gold, delivered at once. See get_options for prices."),
-        declareWar: z.array(z.string()).optional().describe(seat.kind === "agent" ? "Civs to declare war on, immediately. Yours to decide, as sovereign." : "Civs to declare war on, immediately. Only on the ruler's explicit command (or their recorded leave)."),
+        declareWar: z.array(z.string()).optional().describe(seat.kind === "agent" ? "Civs to declare war on, immediately. Yours to decide, as sovereign. Once declared, no peace can be made for 10 turns, by either side." : "Civs to declare war on, immediately. Once declared, no peace can be made for 10 turns, by either side. Only on the ruler's explicit command (or their recorded leave)."),
         units: z.array(z.object({
           unit: z.number().describe("Unit id from the briefing (#id)"),
           action: z.enum(["move", "settle", "garrison", "fortify", "hold", "explore", "use", "gift", "disband", "release"]).describe("move: go there then back to the officials; settle: go there and found a city (checked now - invalid sites are refused with a reason); garrison: go to a city and stay as its defender; fortify/hold: keep the spot; explore: hand a military unit to exploration; use: go there and use a great person's ability (trade mission at a city-state's city, academy/manufactory on our tile, hurry research/wonder/policy in a city); gift: march onto their land and give the soldier to a city-state (influence) or a friendly realm - needs `to`; disband: dismiss the unit for good (saves upkeep); release: back to the officials. A newborn Great Person holds until you order it"),
@@ -135,13 +139,21 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
           give: z.array(z.object({ item: z.string(), amount: z.number().optional() })).optional(),
           want: z.array(z.object({ item: z.string(), amount: z.number().optional() })).optional(),
         })).optional().describe("Propose a trade to a major civ; see get_options.diplomacy for tradeable items. The game's own peoples answer on their turn, an advised court at its advisor's next look-in; the log says how, but an answer does not send for you - you read it at your next look-in."),
-        peace: z.array(z.string()).optional().describe("Peace with civs we are at war with. If their offer is waiting (briefing.peaceOffers) this ACCEPTS it on the terms shown; otherwise it proposes a plain peace. War and peace are never decided by the officials: an offer of peace waits some turns for your answer, and lapses if you give none - which is how you refuse."),
+        peace: z.array(z.string()).optional().describe("Peace with civs we are at war with - never before 10 turns of the war have passed, whoever declared it. If their offer is waiting (briefing.peaceOffers) this ACCEPTS it on the terms shown; otherwise it proposes a plain peace. War and peace are never decided by the officials: an offer of peace waits some turns for your answer, and lapses if you give none - which is how you refuse."),
         answerOffers: z.array(z.object({ power: z.string(), answer: z.enum(["accept", "refuse"]), terms: z.string().optional().describe("Which of their offers, as briefing.tradeOffers words it - needed only when that power has more than one waiting") })).optional().describe("Your answer to a deal another power has laid before this court (briefing.tradeOffers): every offer made to us waits for you, the officials take none. accept binds it as offered; refuse sends it back; to counter, refuse and propose your own with trade. A call to join their war cannot be accepted here - that is a declaration of war (declareWar). Unanswered, an offer lapses as refused after some turns."),
         friendship: z.array(z.string()).optional().describe("Propose a declaration of friendship."),
         gift: z.array(z.object({ cityState: z.string(), gold: z.number() })).optional().describe("Give gold to a city-state for influence."),
         cityFocus: z.array(z.object({ city: z.string(), focus: z.enum(["NoFocus", "Food", "Production", "Gold", "Science", "Culture", "Happiness", "Faith", "GoldGrowth", "ProductionGrowth"]) })).optional().describe("What a city's citizens work its tiles for. NoFocus lets the officials balance."),
-      },
-      async (orders) => {
+      }),
+      async (given) => {
+        let orders = given;
+        // A ruler's court starts with the officials' Defensive Pacts off, unless the advisor has already set the list: a pact can drag the realm into a war
+        if (seat.kind !== "agent" && !seat.pactsBarredOnce) {
+          seat.pactsBarredOnce = true;
+          persist();
+          if (orders.neverPropose === undefined && !(await host.standing(seat.civ).catch(() => ({ neverPropose: ["?"] }))).neverPropose?.length)
+            orders = { ...orders, neverPropose: ["Defensive Pact"] };
+        }
         // War is off by default: outside an audience an advisor can only declare it once the ruler has said, in plain words, that they may
         if (orders.declareWar?.length && seat.kind !== "agent" && !canRecordWill && !seat.mayDeclareWar)
           return { ...text("Refused: war is the ruler's alone to declare, and they have not given you leave to declare it on your own. Nothing in this order was carried out - send the rest again without declareWar, and bring the case for war to the ruler."), isError: true };
@@ -156,7 +168,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "update_plan",
       "Replace your own operating plan: what you intend to do over the coming years and why, open threads to follow up (proposals sent, units on the march, things to buy when affordable). Keep it under 150 words and rewrite it whole each time - strike what is done or overtaken, never let it become a diary (it is read at every look-in, so a bloated plan costs the realm at every one). Yours to keep current while governing; the ruler's will is not yours to change here.",
-      { plan: z.string() },
+      strict({ plan: z.string() }),
       async ({ plan }) => {
         seat.plan = plan;
         persist();
@@ -178,7 +190,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "record_rulers_will",
       seat.kind === "agent" ? "Replace your own standing intent - the course you govern by between look-ins: goals, priorities, stance towards each neighbour, red lines. A few lines, no history, no numbers that go stale." : "Replace your record of the ruler's standing wishes - the text you govern by while the ruler is away. It is YOUR record, and the ruler can read it. One line per wish, each beginning with the year and whose it is: [AD 1540, their words] for something the ruler plainly said should stand, quoting or staying close to their phrasing; [AD 1540, my reading] for what you inferred. Only standing intent: goals, priorities, red lines, stance towards each neighbour, what to do if attacked. An answer to a question of yours settles that question, not the reign - it goes here only if the ruler said it should stand. The record also holds what kind of ruler this is, in a line or two under the heading 'The ruler': what they say of themselves goes in at once as their words ([their words] \"I always play it bold\"); what you notice goes in as your reading, and only once you have seen it several times, never from a single answer ([my reading] takes the chance when a call is close; twice it cost us). Such a line is a disposition, not an order: it tells you how to settle small close calls alone and how to put a big one to them - it never replaces asking. Revise it when they start choosing otherwise. A decision the ruler keeps for themselves is recorded with the answer they gave when you asked what to do if it comes due while they are away ([AD 1540, their words] peace with Japan is theirs to make; if Japan offers while they are away, take it), or, if they would not settle it when you asked, that it waits for them. Drop lines that events have overtaken. No history, no log, no numbers that go stale.",
-      { will: z.string(), mayDeclareWar: z.boolean().optional().describe("Leave out unless it changes. true ONLY when the ruler has said in plain words that you may declare war on your own while they are away (record their words in the will too); false when they take that leave back.") },
+      strict({ will: z.string(), mayDeclareWar: z.boolean().optional().describe("Leave out unless it changes. true ONLY when the ruler has said in plain words that you may declare war on your own while they are away (record their words in the will too); false when they take that leave back.") }),
       async ({ will, mayDeclareWar }) => {
         // Lines that vanish from the record are the erosion nobody notices otherwise: they go to the dev feed
         const gone = (seat.will ?? "").split("\n").map((line) => line.trim()).filter((line) => line && !will.includes(line));
@@ -192,7 +204,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "paint_decision",
       `Give the court painter the one picture the ruler carries off from this audience, with every closing: what this audience decided (a war or a peace, a founding, a great work begun, an envoy sent off), or, when nothing new was decided, the realm's next step under the standing plan - the settlers on the road, the smiths at the new forge, the warrior on the ridge watching the neighbours. Show the consequence where it lands, never the council table: when the decision reaches another people - gold to a city-state, an envoy to a rival's court, a gift of soldiers, a march on a foreign wall, ships on a far coast - paint it there, in that place's own dress and architecture, with ours as the visitors; our own realm, in the dress and architecture of ${seat.civ} in this year, when it lands at home. When either place would do, prefer the one the pictures already painted (listed in your prompt) have shown less lately. Never a subject or composition already among them. ${PICTURE_CRAFT} Realistic oil painting, no text. ${DECISION_CAPTION} It is painted once the court is dismissed; a later call replaces an earlier one.`,
-      Picture.shape,
+      strict(Picture.shape),
       async ({ caption, description }) => {
         const game = await host.state();
         seat.decisionPicture = { turn: game.turn, year: game.year, caption, description };
@@ -203,7 +215,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "proclaim",
       "Let something the ruler said this audience leak to the heralds, for the world's chronicle: a remark, a mood, a turn of phrase with their character in it - the small detail a court gossips about, never a plan, the treasury, research or a weakness. Once an audience at most, when they said anything with their own voice in it; nothing if they did not.",
-      { words: z.string().describe(`What was heard, kept close to the ruler's own phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}, on the Russian offer: a pact is a pact, and Moscow will learn what that costs."`) },
+      strict({ words: z.string().describe(`What was heard, kept close to the ruler's own phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}, on the Russian offer: a pact is a pact, and Moscow will learn what that costs."`) }),
       async ({ words }) => {
         (seat.proclamations ??= []).push(words);
         persist();
@@ -213,7 +225,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "smaller_matters",
       "With a closing: the smaller matters you would otherwise settle alone once the court rises - up to eight, each with your lean and, where there is one, the larger subject behind it, numbered as in your message - so the ruler can name one to open or leave them all to you. Only calls you are about to make; never the age's big question, never a routine renewal. A later call replaces the list; call it with what is left once some are settled.",
-      { matters: z.array(z.object({ matter: z.string().describe("The matter in one short line, e.g. 'The salt pact with Moscow lapses this year'"), lean: z.string().describe("What you would do, in a few words, e.g. 'renew on the old terms'"), opening: z.string().optional().describe("Only where there is one: the larger subject behind it, e.g. 'our trade with Moscow as a whole'") })).max(8) },
+      strict({ matters: z.array(z.object({ matter: z.string().describe("The matter in one short line, e.g. 'The salt pact with Moscow lapses this year'"), lean: z.string().describe("What you would do, in a few words, e.g. 'renew on the old terms'"), opening: z.string().optional().describe("Only where there is one: the larger subject behind it, e.g. 'our trade with Moscow as a whole'") })).max(8) }),
       async ({ matters }) => {
         seat.matters = matters; // an empty list means "considered, none" - the closing is then not asked again
         seat.closing = true; // the reply being written is the closing; remember() marks it once stored (the ruler's own message is stored first)
@@ -224,7 +236,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "note_for_council",
       "Pass an order or a wish for the realm that the ruler gave you on to the advisor, who has it with their next dispatch. Never for a question.",
-      { wish: z.string().describe("The order or wish, restated in the ruler's words") },
+      strict({ wish: z.string().describe("The order or wish, restated in the ruler's words") }),
       async ({ wish }) => {
         // The clerk has been known to pass on a question, or a note that nothing was ordered
         if (/^(the ruler )?asked|no order|nothing (was )?(ordered|asked)|^none\b/i.test(wish.trim())) return text("Nothing to pass on: that was not an order.");
@@ -236,7 +248,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     tool(
       "wish_i_could_ask",
       "Set down a decision you met in this look-in that you truly wished you could have put to the ruler before acting. Kept to learn whether advisors should ever be able to send for the ruler; it reaches no one now.",
-      { question: z.string().describe("What you would have asked"), instead: z.string().describe("What you did instead") },
+      strict({ question: z.string().describe("What you would have asked"), instead: z.string().describe("What you did instead") }),
       async ({ question, instead }) => {
         const game = await host.state();
         appendFileSync(WISHES, `- ${seat.civ}, turn ${game.turn}: ${question} Instead: ${instead}\n`);
@@ -339,7 +351,7 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
     addUsage(role, spent);
     const data = message.subtype === "success" ? message.structured_output : undefined;
     // The whole reply as written, not only the tail after the last tool call; the result is used when nothing was collected (a structured answer, or an SDK that did not stream the blocks)
-    const whole = spoken.join("\n\n").trim() || (message.subtype === "success" ? message.result.trim() : "");
+    const whole = (role === "govern" ? spoken.at(-1) ?? "" : spoken.join("\n\n")).trim() || (message.subtype === "success" ? message.result.trim() : "");
     const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : whole;
     traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
     if (message.subtype !== "success") throw new Error(`${role} agent failed: ${message.subtype}`);
@@ -540,7 +552,8 @@ export const HOUSE_RULES = `HOW THIS COURT WORKS
 - War: the ruler alone may declare it unless they have given the advisor leave in plain words. Peace offers wait some turns for the advisor's answer and lapse if none is given. The host is commanded by posture - an aim (a city to take), a stance (attack, defend, raid) and a home reserve - and the generals fight the battles; single soldiers get orders only for special errands.
 - The officials: they fill an empty build queue, work the land, re-arm garrisons from whatever gold lies above the ruler's reserve - in war, unless told otherwise - propose deals of their own to other powers (open borders, pacts, luxury swaps - unless the advisor's standing order forbids a kind), and sometimes do things nobody ordered. The advisor complains of it in the dispatch and puts it right; that friction is part of the game.
 - The Chronicler: a separate bot writing the one history all rulers read - a chapter each age (an age broken by an emergency council gets its chapter once it is whole), a saga for each realm when it falls or the game ends, and the epic of the world at the very end. It sees only what the world could witness. /epic in its chat writes the epic so far.
-- Difficulty and victories: the game's own peoples play on level terms unless set otherwise at /newgame; scientific, cultural, domination and diplomatic victories are on.`;
+- Treaties: a Declaration of Friendship is a public friendship, and the door to the two below. A Defensive Pact pulls each side into any war a third power declares on the other - but declaring war yourself cancels your own pacts. A Research Agreement costs gold on both sides and pays out research when it ends; it needs friendship and gold on both sides, and a war between the two cancels it. Open Borders lets each side's units cross the other's lands.
+- Difficulty and victories: the game's own peoples play on level terms unless set otherwise at /newgame; which victories are in play is the briefing's victory note - a game may be set to fewer than all four.`;
 
 /** The keeper of the rolls: a second person at court who answers questions of fact while the advisor governs and the clocks run */
 /** away: why the advisor is not answering - the clocks are running, or this ruler has dismissed their court and waits for the others */

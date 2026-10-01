@@ -113,6 +113,33 @@ export type Orders = {
   cityFocus?: { city: string; focus: string }[];
 };
 
+/** BRIEFING_OMIT: briefing fields left out, for the leagues' removal tests - comma-separated top-level names ("techsKnown", "militaryNote")
+ *  and dotted paths into objects or lists of objects ("cities.buildings", "knownCivs.score", "victory.note"). Two names thin the unit list
+ *  instead: "units.automatedWorkers" and "units.automatedSoldiers" keep a count of those lines in place of the lines. Empty: the briefing whole */
+const OMIT = (process.env.BRIEFING_OMIT ?? "").split(",").map((path) => path.trim()).filter(Boolean);
+function omitFromBriefing(briefing: Record<string, unknown>): Record<string, unknown> {
+  if (!OMIT.length || typeof briefing !== "object" || briefing === null) return briefing;
+  const drop = (node: unknown, path: string[]): void => {
+    if (Array.isArray(node)) { for (const item of node) drop(item, path); return; }
+    if (typeof node !== "object" || node === null) return;
+    const [head, ...rest] = path;
+    if (!rest.length) delete (node as Record<string, unknown>)[head];
+    else drop((node as Record<string, unknown>)[head], rest);
+  };
+  for (const path of OMIT) {
+    const thin = /^units\.automated(Workers|Soldiers)$/.exec(path);
+    if (thin && Array.isArray(briefing.units)) {
+      const civilian = (line: string) => /^(Worker|Work Boats|Great |Settler|Missionary|Inquisitor|Prophet)/.test(line);
+      const pick = (line: unknown) => typeof line === "string" && line.endsWith("automated") && (thin[1] === "Workers" ? /^Worker /.test(line) : !civilian(line));
+      const dropped = (briefing.units as unknown[]).filter(pick).length;
+      briefing.units = [...(briefing.units as unknown[]).filter((line) => !pick(line)), ...(dropped ? [`(${dropped} automated ${thin[1].toLowerCase()} not listed)`] : [])];
+      continue;
+    }
+    drop(briefing, path.split("."));
+  }
+  return briefing;
+}
+
 export const host = {
   state: () => call<GameState>("GET", "/state"),
   newGame: (setup: { ruled: string[]; others: string[]; noWonders?: string[]; mapSize?: string; cityStates?: number; difficulty?: string }) =>
@@ -120,8 +147,10 @@ export const host = {
   advance: (turns: number, wake = false) => call<RoundResult>("POST", "/advance", { turns, wake }),
   lookup: (civ: string, name: string) => call<Record<string, unknown>>("GET", `/lookup${civQuery(civ)}&name=${encodeURIComponent(name)}`),
   briefing: (civ: string, logSince?: number) =>
-    call<Record<string, unknown>>("GET", "/briefing" + civQuery(civ) + (logSince === undefined ? "" : `&since=${logSince}`)),
+    call<Record<string, unknown>>("GET", "/briefing" + civQuery(civ) + (logSince === undefined ? "" : `&since=${logSince}`)).then(omitFromBriefing),
   options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
+  /** The standing orders as the host holds them */
+  standing: (civ: string) => call<{ neverPropose?: string[] } & Record<string, unknown>>("GET", "/orders" + civQuery(civ)),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
   /** Any people's cities with their lie of the land, largest first - a painter's anchor */
@@ -140,7 +169,7 @@ export const host = {
     if (!response.ok) throw new HostError(`overlay ${response.status}`);
     return Buffer.from(await response.arrayBuffer());
   },
-  log: (civ: string, since: number, sinceYear?: number) => call<{ turn: number; text: string }[]>("GET", `/log${civQuery(civ)}&since=${since}${sinceYear === undefined ? "" : `&sinceYear=${sinceYear}`}`),
+  log: (civ: string, since: number, sinceYear?: number, until?: number) => call<{ turn: number; text: string }[]>("GET", `/log${civQuery(civ)}&since=${since}${sinceYear === undefined ? "" : `&sinceYear=${sinceYear}`}${until === undefined ? "" : `&until=${until}`}`),
   setOrders: (civ: string, orders: Orders) =>
     call<{ orders: Orders; done: string[]; failed: string[]; researchQueue: string[]; gold: number }>("POST", "/orders" + civQuery(civ), orders),
 };
