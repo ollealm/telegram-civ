@@ -8,6 +8,11 @@
 //   freshly drafted one, handed out in turn within each model:effort, so each condition plays the same characters.
 // LEAGUE_REFLECT_EFFORT: the effort of the closing reviews and interviews - a level (default high, so answers compare across seats)
 //   or "own" to hear each seat at the effort it played at.
+// LEAGUE_MAP_TYPE="Two Continents": the shape of the world (the engine's map types - Pangaea, Small Continents, Continent and Islands, Two Continents,
+//   Three Continents, Archipelago, Fractal, Perlin, and the rest the engine knows); Pangaea when unset.
+// LEAGUE_AIMS="Persia:diplomatic,2:cultural": a push, not a rule - the named seats start with that aim as the first line of their own standing intent
+//   (diplomatic | cultural | scientific | domination), which they may rewrite later like any other line. A seat is named by the people it was dealt
+//   or by its number in the seats argument (1 = the first); an entry that names neither is reported and ignored.
 // LEAGUE_RESUME=1 (with the same LEAGUE_TAG, host and state file) carries on a league that paused or stopped, into the same result files.
 //   A spent token limit pauses a league at once (exit 4) before the game moves on; harness/league-loop.sh resumes it by itself.
 // LEAGUE_TAG=run1 keeps the result files of leagues started in the same minute apart (harness/league-batch.sh sets it).
@@ -134,7 +139,22 @@ if (resuming) {
     say(`${seat.civ}: ${name} on ${labelOf(seat.civ)}`);
   }
   const others = nations.slice(seatSpecs.length, seatSpecs.length + gameAi);
-  await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, cityStates: 4 });
+  await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, mapType: process.env.LEAGUE_MAP_TYPE || undefined, cityStates: 4 });
+  // Seeded aims: the first line of a seat's own standing intent, written as its own - it may rewrite it at any new age, as the prompt allows
+  const AIMS: Record<string, string> = {
+    diplomatic: "a diplomatic victory, won through the city-states' votes",
+    cultural: "a cultural victory",
+    scientific: "a scientific victory",
+    domination: "domination",
+  };
+  for (const entry of (process.env.LEAGUE_AIMS ?? "").split(",").map((part) => part.trim()).filter(Boolean)) {
+    const [who, aim] = entry.split(":").map((part) => part.trim());
+    const seat = /^\d+$/.test(who) ? state.seats[Number(who) - 1] : state.seats.find((other) => other.civ.toLowerCase() === who.toLowerCase());
+    const words = AIMS[(aim ?? "").toLowerCase()];
+    if (!seat || !words) { say(`LEAGUE_AIMS: '${entry}' names no seat of this league (a people dealt, or a seat number) or no aim (${Object.keys(AIMS).join(", ")}) - ignored`); continue; }
+    seat.will = [`Our aim is ${words}.`, seat.will].filter(Boolean).join("\n");
+    say(`${seat.civ} (${labelOf(seat.civ)}) starts with the aim: ${words}`);
+  }
   persist();
 }
 

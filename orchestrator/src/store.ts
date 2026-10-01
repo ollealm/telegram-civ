@@ -124,6 +124,8 @@ export type State = {
   phase: "setup" | "audience" | "passing";
   /** Chosen with /newgame; the world is made once every ruler has picked a people */
   mapSize?: string;
+  /** The shape of the world (the engine's map type); Pangaea when unset */
+  mapType?: string;
   /** Set once the first realm reaches the late-game age: ages are shorter from then on, for the rest of the game */
   lateGame?: boolean;
   /** The turns an age has now, once a late-game age has been reached (LATE_AGES); only ever shortens */

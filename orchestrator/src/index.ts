@@ -14,6 +14,17 @@ import { diedPassing, forgetPicture, persist, recordPicture, remember, state, ty
 /** Rival realms played by the game itself, chosen at random; 0 for an all-human world */
 const AI_CIVS = Number(process.env.AI_CIVS ?? 2);
 const MAP_SIZES = ["Tiny", "Small", "Medium", "Large", "Huge"];
+/** The shapes of world the /newgame wizard offers (the engine's map types), each as the world's own words would put it */
+const MAP_TYPES: Record<string, string> = {
+  "Pangaea": "one great landmass",
+  "Continent and Islands": "one great continent and its islands",
+  "Two Continents": "two continents divided by the sea",
+  "Three Continents": "three continents divided by the sea",
+  "Small Continents": "scattered small continents",
+  "Archipelago": "a sea of islands",
+  "Fractal": "lands of every shape, torn by inlets",
+  "Perlin": "rolling lands and inland seas",
+};
 const DEFAULT_MAP_SIZE = process.env.MAP_SIZE ?? "Medium";
 /** Models for agent-ruled realms, dealt in turn */
 const AGENT_MODELS = (process.env.AGENT_MODELS ?? "claude-sonnet-5").split(",").map((model) => model.trim());
@@ -97,7 +108,8 @@ async function createWorld() {
   const mapSize = state.mapSize ?? DEFAULT_MAP_SIZE;
   const noWonders = state.wonders === "rulers" ? [...state.seats.filter((seat) => seat.kind === "agent").map((seat) => seat.civ), ...others]
     : state.wonders === "advised" ? others : [];
-  await host.newGame({ ruled, others, noWonders, mapSize, cityStates: CITY_STATES[mapSize] ?? 6, difficulty: state.difficulty ?? "Prince" });
+  const mapType = state.mapType ?? "Pangaea";
+  await host.newGame({ ruled, others, noWonders, mapSize, mapType, cityStates: CITY_STATES[mapSize] ?? 6, difficulty: state.difficulty ?? "Prince" });
   // A ruler's court starts with the officials barred from proposing Defensive Pacts - a pact can drag the realm into a war; the advisor may lift it
   for (const seat of state.seats.filter((other) => other.kind !== "agent")) {
     await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact"] }).catch((error) => log(`barring pacts for ${seat.civ} failed:`, error.message));
@@ -106,7 +118,7 @@ async function createWorld() {
   state.phase = "audience";
   persist();
   log(`New world: ${mapSize}; ruled ${ruled.join(", ")}; AI ${others.join(", ") || "none"}`);
-  const overview = `A new world has been made: a ${mapSize.toLowerCase()} one, home to ${ruled.length + others.length} great peoples and ${CITY_STATES[mapSize] ?? 6} lesser cities. ${state.seats.filter((seat) => seat.kind !== "agent").map((seat) => seat.civ).join(" and ")} answer to rulers at this table${state.seats.some((seat) => seat.kind === "agent") ? `; ${state.seats.filter((seat) => seat.kind === "agent").map((seat) => `${seat.civ} is ruled by ${seat.character?.name}`).join(", ")}, who answer to no one` : ""}${others.length ? `; ${others.length} more peoples keep their own counsel, somewhere beyond the horizon` : ""}. History begins in 4000 BC.`;
+  const overview = `A new world has been made: a ${mapSize.toLowerCase()} world of ${MAP_TYPES[mapType] ?? mapType}, home to ${ruled.length + others.length} great peoples and ${CITY_STATES[mapSize] ?? 6} lesser cities. ${state.seats.filter((seat) => seat.kind !== "agent").map((seat) => seat.civ).join(" and ")} answer to rulers at this table${state.seats.some((seat) => seat.kind === "agent") ? `; ${state.seats.filter((seat) => seat.kind === "agent").map((seat) => `${seat.civ} is ruled by ${seat.character?.name}`).join(", ")}, who answer to no one` : ""}${others.length ? `; ${others.length} more peoples keep their own counsel, somewhere beyond the horizon` : ""}. History begins in 4000 BC.`;
   await broadcastHerald(overview);
   for (const seat of state.seats)
     await tell(seat, `The world is made, Majesty, and ${seat.civ} stands at its beginning. Tell me what you want this realm to become; we have all the time we need, for no year passes until you give the word.`);
@@ -801,7 +813,7 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   // The first seat's ruler may start over: /newgame asks how many rulers, how many rival peoples, how large a world
   if (index === 0) {
-    const draft: { humans?: number; agents?: number; ai?: number; difficulty?: string; size?: string; wonders?: "all" | "rulers" | "advised" } = {};
+    const draft: { humans?: number; agents?: number; ai?: number; difficulty?: string; size?: string; mapType?: string; wonders?: "all" | "rulers" | "advised" } = {};
     const row = (keyboard: InlineKeyboard, prefix: string, values: (string | number)[]) => values.forEach((value) => keyboard.text(String(value), `ng:${prefix}:${value}`));
 
     // The workshop door: out-of-character talk with the advisor and clerk, for testing. First seat only; announced to every ruler.
@@ -819,7 +831,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       await ctx.reply(`A new world, then. This ends the current game for everyone - nothing changes until you confirm at the end.\n\nHow many rulers will sit at the table? (There are ${advisors.length} advisor bots.)`, { reply_markup: keyboard });
     });
 
-    bot.callbackQuery(/^ng:(humans|agents|ai|difficulty|size|wonders|confirm|cancel):?(.*)$/, async (ctx) => {
+    bot.callbackQuery(/^ng:(humans|agents|ai|difficulty|size|maptype|wonders|confirm|cancel):?(.*)$/, async (ctx) => {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, step, value] = ctx.match;
       if (step === "cancel") return void ctx.editMessageText("The old world carries on.");
@@ -853,13 +865,19 @@ function setUpAdvisor(bot: Bot, index: number) {
       if (step === "size") {
         draft.size = value;
         const keyboard = new InlineKeyboard();
+        Object.keys(MAP_TYPES).forEach((name, index) => { keyboard.text(name, `ng:maptype:${name}`); if (index % 2 === 1) keyboard.row(); });
+        return void ctx.editMessageText("One great landmass, or lands divided by sea? On one landmass every people can walk to every other; where the sea divides them, ships and the coast matter, and a people may grow undisturbed for a long while.", { reply_markup: keyboard });
+      }
+      if (step === "maptype") {
+        draft.mapType = MAP_TYPES[value] ? value : "Pangaea";
+        const keyboard = new InlineKeyboard();
         row(keyboard, "wonders", Object.keys(WONDERS));
         return void ctx.editMessageText("Who may raise the world's wonders? Everyone is the usual game. Rulers only leaves them to the rulers' realms - sovereigns and the game's peoples build none, so every wonder is one of yours. Rulers and sovereigns bars only the game's peoples.", { reply_markup: keyboard });
       }
       if (step === "wonders") {
         draft.wonders = WONDERS[value];
         const keyboard = new InlineKeyboard().text("Make it so", "ng:confirm").text("Keep the old world", "ng:cancel");
-        return void ctx.editMessageText(`A ${draft.size!.toLowerCase()} world with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.agents ?? 0} sovereign${draft.agents === 1 ? "" : "s"}, ${draft.ai} of the game's own people${draft.ai === 1 ? "" : "s"} played by the game and ${CITY_STATES[draft.size!] ?? 6} lesser cities${draft.wonders === "rulers" ? "; wonders are for the rulers' realms alone" : draft.wonders === "advised" ? "; the game's peoples raise no wonders" : ""}. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
+        return void ctx.editMessageText(`A ${draft.size!.toLowerCase()} world of ${MAP_TYPES[draft.mapType ?? "Pangaea"]} with ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${draft.agents ?? 0} sovereign${draft.agents === 1 ? "" : "s"}, ${draft.ai} of the game's own people${draft.ai === 1 ? "" : "s"} played by the game and ${CITY_STATES[draft.size!] ?? 6} lesser cities${draft.wonders === "rulers" ? "; wonders are for the rulers' realms alone" : draft.wonders === "advised" ? "; the game's peoples raise no wonders" : ""}. Each ruler then chooses a people and assembles a court. The current game ends for everyone.`, { reply_markup: keyboard });
       }
       if (state.phase === "passing" || !draft.humans || !draft.size) return void ctx.editMessageText("Send /newgame to begin again.");
       // A reply still being written belongs to the old world: it would land in the new one's seat
@@ -878,10 +896,11 @@ function setUpAdvisor(bot: Bot, index: number) {
       state.pictures = []; // the last world's paintings must not steer this one's
       state.pendingRound = undefined;
       state.mapSize = draft.size;
+      state.mapType = draft.mapType ?? "Pangaea";
       state.aiCivs = draft.ai ?? AI_CIVS;
       state.phase = "setup";
       persist();
-      await ctx.editMessageText(`So be it: a ${draft.size.toLowerCase()} world, ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${state.aiCivs} rival peoples.`);
+      await ctx.editMessageText(`So be it: a ${draft.size.toLowerCase()} world of ${MAP_TYPES[state.mapType ?? "Pangaea"]}, ${draft.humans} ruler${draft.humans === 1 ? "" : "s"}, ${state.aiCivs} rival peoples.`);
       for (const other of state.seats) await tell(other, "A new history is about to begin. Send /start to choose your people and assemble your court.");
       for (const wear of wearNames) void wear?.();
     });
