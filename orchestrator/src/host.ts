@@ -109,6 +109,10 @@ export type Orders = {
   peace?: string[];
   answerOffers?: { power: string; answer: "accept" | "refuse"; terms?: string }[];
   answerDemands?: { power: string; answer: "agree" | "refuse" }[];
+  /** Immediate: a deal in force proposed again, on the same terms, the turn it ends - once */
+  renew?: { power: string; terms?: string }[];
+  /** Standing until each clears: warnings weighed and let stand, folded into warningsAcknowledged */
+  acknowledge?: string[];
   friendship?: string[];
   gift?: { cityState: string; gold: number }[];
   cityFocus?: { city: string; focus: string }[];
@@ -131,7 +135,8 @@ function omitFromBriefing(briefing: Record<string, unknown>): Record<string, unk
     const thin = /^units\.automated(Workers|Soldiers)$/.exec(path);
     if (thin && Array.isArray(briefing.units)) {
       const civilian = (line: string) => /^(Worker|Work Boats|Great |Settler|Missionary|Inquisitor|Prophet)/.test(line);
-      const pick = (line: unknown) => typeof line === "string" && line.endsWith("automated") && (thin[1] === "Workers" ? /^Worker /.test(line) : !civilian(line));
+      // By the state, not the line's end: a wounded unit's line ends in its health (", 12 hp")
+      const pick = (line: unknown) => typeof line === "string" && /, automated(, \d+ hp)?$/.test(line) && (thin[1] === "Workers" ? /^Worker /.test(line) : !civilian(line));
       const dropped = (briefing.units as unknown[]).filter(pick).length;
       briefing.units = [...(briefing.units as unknown[]).filter((line) => !pick(line)), ...(dropped ? [`(${dropped} automated ${thin[1].toLowerCase()} not listed)`] : [])];
       continue;

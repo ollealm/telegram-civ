@@ -110,10 +110,10 @@ async function createWorld() {
     : state.wonders === "advised" ? others : [];
   const mapType = state.mapType ?? "Pangaea";
   await host.newGame({ ruled, others, noWonders, mapSize, mapType, cityStates: CITY_STATES[mapSize] ?? 6, difficulty: state.difficulty ?? "Prince" });
-  // A ruler's court starts with the officials barred from proposing Defensive Pacts - a pact can drag the realm into a war; the advisor may lift it
+  // A ruler's court starts with the officials barred from proposing Defensive Pacts and from calling other powers into our wars - either can drag the realm into a war; the advisor may lift them
   for (const seat of state.seats.filter((other) => other.kind !== "agent")) {
-    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact"] }).catch((error) => log(`barring pacts for ${seat.civ} failed:`, error.message));
-    seat.pactsBarredOnce = true;
+    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact", "calls to war"] }).catch((error) => log(`barring pacts and calls to war for ${seat.civ} failed:`, error.message));
+    seat.pactsBarredOnce = seat.callsToWarBarredOnce = true;
   }
   state.phase = "audience";
   persist();

@@ -9,6 +9,15 @@ const TURNS_PER_ROUND = Number(process.env.TURNS_PER_ROUND ?? 12);
 const EARLY_ROUND_TURNS = Number(process.env.EARLY_ROUND_TURNS ?? 24);
 const EARLY_GAME_UNTIL_TURN = Number(process.env.EARLY_GAME_UNTIL_TURN ?? 24);
 export const GOVERN_EVERY = Number(process.env.GOVERN_EVERY_TURNS ?? 4);
+/** The turns of chancery log a briefing carries when no since is asked (the host's default): what a letter and an audience read */
+const BRIEFING_LOG_TURNS = 12;
+
+/** A ruler's court read the log at the turn its letter was written, and its audience reads the same: the next look-in starts from there - unless
+ *  the last look-in lies further back than that briefing's window, when it starts from the look-in, so nothing between is skipped */
+const audienceRead = (seats: Seat[], turn: number) => {
+  for (const seat of seats.filter((each) => each.kind !== "agent"))
+    if (seat.lookedAt === undefined || seat.lookedAt >= turn - BRIEFING_LOG_TURNS) seat.lookedAt = Math.max(seat.lookedAt ?? turn, turn);
+};
 
 /** Turns in the round that starts at this turn - longer while the early game is slow */
 /** Later in the game an age is shorter: more happens in a turn, and the ruler should be asked more often. LATE_AGES="Industrial:8,Information:4" -
@@ -79,7 +88,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     // Everyone looks in on schedule; in between, an advisor is sent for only when something happened in their realm
     let woken: Record<string, string[]> = {};
     const sentFor = new Set<string>();
-    let lookedAt = new Map(seats.map((seat) => [seat.civ, fromTurn]));
+    // Each seat reads the log on from where it last read it, across rounds: reset to the round's start, the lines between the last look-in of one round
+    // and the start of the next reached no look-in at all (14-16% of the chancery in Runs 15 and 16). A turn past the present is a former game's
+    const lookedAt = new Map(seats.map((seat) => [seat.civ, seat.lookedAt !== undefined && seat.lookedAt <= opening.turn ? seat.lookedAt : fromTurn]));
     const lookInFailures = new Map<string, number>();
     for (let played = opening.turn - fromTurn; played < length; ) {
       const now = fromTurn + played;
@@ -94,6 +105,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
               lookInFailures.set(seat.civ, 0);
               notes.get(seat.civ)!.push(`T${now}: ${entry}`);
               lookedAt.set(seat.civ, now);
+              seat.lookedAt = now; // persisted with the round's progress, after the advance
             })
             // A look-in that never happened must not read as a quiet one: the dispatch is written from these notes, and so is the journal
             .catch((error) => {
@@ -130,6 +142,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     if (news && !/has won/.test(news) && remaining > 0) {
       // Every ruler is called to the emergency council - the one it concerns to answer, the others to see whether they will join in, stand aside or change course
       const rulers = seats.filter((seat) => seat.kind !== "agent");
+      audienceRead(rulers, finished.turn);
       progress.urgent = true;
       persist();
       // No chapter for a broken age: the Chronicler writes when the age is whole, and this news is carried into it
@@ -159,6 +172,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     }
 
     // Every turn of the age is played: from here on a restart finds letters to deliver, not an age to resume
+    audienceRead(seats, finished.turn);
     state.pendingRound = undefined;
     persist();
 
