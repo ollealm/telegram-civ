@@ -1,6 +1,6 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..86f98ab
+index 0000000..2eae609
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 @@ -0,0 +1,96 @@
@@ -57,7 +57,7 @@ index 0000000..86f98ab
 +    val noGifts: MutableSet<String> = ConcurrentHashMap.newKeySet()
 +
 +    /** Kinds of deal a ruled civ's officials may not propose on their own (a standing order of the ruler): "Open Borders", "Research Agreement",
-+     *  "Defensive Pact", "Declaration of Friendship", "luxuries", or "all" */
++     *  "Defensive Pact", "Declaration of Friendship", "luxuries", "calls to war" (asking another power to join a war of ours), or "all" */
 +    val noProposals = ConcurrentHashMap<String, Set<String>>()
 +    fun mayPropose(civ: com.unciv.logic.civilization.Civilization, kind: String) = noProposals[civ.civID]?.let { "all" in it || kind in it } != true
 +
@@ -114,7 +114,7 @@ index 87c9687..f13197d 100644
              cache[it.name]!!
          }
 diff --git a/core/src/com/unciv/logic/automation/civilization/DiplomacyAutomation.kt b/core/src/com/unciv/logic/automation/civilization/DiplomacyAutomation.kt
-index 5474cfd..6af04d4 100644
+index 5474cfd..3682b63 100644
 --- a/core/src/com/unciv/logic/automation/civilization/DiplomacyAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/DiplomacyAutomation.kt
 @@ -31,6 +31,7 @@ import kotlin.random.Random
@@ -149,8 +149,16 @@ index 5474cfd..6af04d4 100644
          if (!civInfo.diplomacyFunctions.canSignDefensivePact()) return // don't waste your time
  
          val civsThatWeCanSignDefensivePactWith = civInfo.getKnownCivs().filter {
+@@ -453,6 +457,7 @@ object DiplomacyAutomation {
+ 
+     internal fun askForHelp(civInfo: Civilization) {
+         if (!civInfo.isAtWar() || civInfo.cities.isEmpty() || civInfo.diplomacy.isEmpty()) return
++        if (!com.unciv.logic.automation.RulerOverrides.mayPropose(civInfo, "calls to war")) return // a ruler's standing order: whom to call into our wars is the ruler's to decide
+ 
+         val enemyCivs = civInfo.getCivsAtWarWith().filter { it.isMajorCiv() }
+             .sortedByDescending { it.getStatForRanking(RankingType.Force) }
 diff --git a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
-index b997da7..aa50b03 100644
+index b997da7..20d8246 100644
 --- a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 @@ -2,6 +2,7 @@ package com.unciv.logic.automation.civilization
@@ -192,12 +200,15 @@ index b997da7..aa50b03 100644
              unitToDisband?.disband()
              sellBuildingForResource(civInfo, resource)
          }
-@@ -402,12 +404,13 @@ object NextTurnAutomation {
+@@ -402,12 +404,15 @@ object NextTurnAutomation {
          val isAtWar = civInfo.isAtWar()
          val sortedUnits = civInfo.units.getCivUnits().sortedBy { unit -> getUnitPriority(unit, isAtWar) }
  
-+        val aim = RulerOverrides.postures[civInfo.civID]?.warAim
-         val citiesRequiringManualPlacement = civInfo.getKnownCivs().filter { it.isAtWarWith(civInfo) }
+-        val citiesRequiringManualPlacement = civInfo.getKnownCivs().filter { it.isAtWarWith(civInfo) }
++        val posture = RulerOverrides.postures[civInfo.civID]
++        val aim = posture?.warAim
++        // A defending host lays no siege: the routine would otherwise gather it around any enemy city with enough of ours near and keep it under the walls' guns, stance or no stance
++        val citiesRequiringManualPlacement = if (posture?.stance == "defend") emptyList() else civInfo.getKnownCivs().filter { it.isAtWarWith(civInfo) }
              .flatMap { it.cities }
              .filter {
                  var count = 0
@@ -207,7 +218,7 @@ index b997da7..aa50b03 100644
              }
              .toList()
  
-@@ -415,7 +418,10 @@ object NextTurnAutomation {
+@@ -415,7 +420,10 @@ object NextTurnAutomation {
          for (unit in sortedUnits) {
              // settlers need to move before automateSettlerEscorting(),
              // move spaceship parts before that to make sure we're not blocking them
@@ -219,7 +230,7 @@ index b997da7..aa50b03 100644
          }
  
          if (civInfo.cities.isNotEmpty()) automateSettlerEscorting(civInfo)
-@@ -424,7 +430,10 @@ object NextTurnAutomation {
+@@ -424,7 +432,10 @@ object NextTurnAutomation {
  
          for (unit in sortedUnits) {
              // spaceship parts and settlers have already moved
@@ -231,7 +242,7 @@ index b997da7..aa50b03 100644
          }
      }
  
-@@ -614,7 +623,7 @@ object NextTurnAutomation {
+@@ -614,7 +625,7 @@ object NextTurnAutomation {
              }
          if (settlersInFlight >= maxSettlersInFlight) return
          val settlerUnits = civInfo.gameInfo.ruleset.units.values
@@ -240,7 +251,7 @@ index b997da7..aa50b03 100644
                      personality.getMatchingUniques(UniqueType.WillNotBuild, civInfo.state)
                          .none { unique -> it.matchesFilter(unique.params[0], civInfo.state) } }
          if (settlerUnits.isEmpty()) return
-@@ -702,8 +711,10 @@ object NextTurnAutomation {
+@@ -702,8 +713,10 @@ object NextTurnAutomation {
              else -> {
                  val threatLevel = Automation.threatAssessment(civInfo, offendingCiv)
                  if (threatLevel < ThreatLevel.High // don't piss them off for no reason please.
@@ -376,6 +387,53 @@ index f180f26..7004162 100644
      }
  
      private fun useGoldForCityStates(civ: Civilization) {
+diff --git a/core/src/com/unciv/logic/automation/unit/AirUnitAutomation.kt b/core/src/com/unciv/logic/automation/unit/AirUnitAutomation.kt
+index 119d476..8a7947e 100644
+--- a/core/src/com/unciv/logic/automation/unit/AirUnitAutomation.kt
++++ b/core/src/com/unciv/logic/automation/unit/AirUnitAutomation.kt
+@@ -84,6 +84,14 @@ object AirUnitAutomation {
+         tryMoveToCitiesToAerialAttackFrom(pathsToCities, unit)
+     }
+ 
++    /** A ruled civ's defend posture grounds the air arm: a plane strikes only an enemy standing on or beside our own land, never a city, and otherwise
++     *  stays on its field, where a fighter that has not moved intercepts whatever comes over our land. No sweep, no sortie against the enemy's cities
++     *  or the SAMs about them - that is what bled the bombers for turns on end before Weldiya */
++    fun automateHomeDefence(unit: MapUnit) {
++        if (unit.health < 75) return // Wait and heal
++        BattleHelper.tryAttackNearbyEnemy(unit, tilesToCheck = UnitAutomation.homeGroundTargets(unit))
++    }
++
+     private fun tryAirSweep(unit: MapUnit, tilesWithEnemyUnitsInRange: List<Tile>): Boolean {
+         val targetTile = tilesWithEnemyUnitsInRange.filter {
+             tile -> tile.getUnits().any { it.civ.isAtWarWith(unit.civ)
+diff --git a/core/src/com/unciv/logic/automation/unit/BattleHelper.kt b/core/src/com/unciv/logic/automation/unit/BattleHelper.kt
+index d214e22..aabc6a4 100644
+--- a/core/src/com/unciv/logic/automation/unit/BattleHelper.kt
++++ b/core/src/com/unciv/logic/automation/unit/BattleHelper.kt
+@@ -8,17 +8,20 @@ import com.unciv.logic.battle.MapUnitCombatant
+ import com.unciv.logic.battle.TargetHelper
+ import com.unciv.logic.city.City
+ import com.unciv.logic.map.mapunit.MapUnit
++import com.unciv.logic.map.tile.Tile
+ import com.unciv.models.ruleset.unique.GameContext
+ import com.unciv.models.ruleset.unique.UniqueType
+ import yairm210.purity.annotations.Readonly
+ 
+ object BattleHelper {
+ 
+-    /** Returns true if the unit cannot further move this turn - NOT if an attack was successful! */
+-    fun tryAttackNearbyEnemy(unit: MapUnit, stayOnTile: Boolean = false): Boolean {
++    /** Returns true if the unit cannot further move this turn - NOT if an attack was successful! A ruler's defend posture passes [tilesToCheck], the targets
++     *  it allows, and [keepOutOfCityGuns], so that no attack is made from a tile an enemy city can bombard */
++    fun tryAttackNearbyEnemy(unit: MapUnit, stayOnTile: Boolean = false, tilesToCheck: List<Tile>? = null, keepOutOfCityGuns: Boolean = false): Boolean {
+         if (unit.hasUnique(UniqueType.CannotAttack)) return false
+         val distanceToTiles = unit.movement.getDistanceToTiles()
+-        val attackableEnemies = TargetHelper.getAttackableEnemies(unit, distanceToTiles, stayOnTile=stayOnTile)
++        val attackableEnemies = TargetHelper.getAttackableEnemies(unit, distanceToTiles, tilesToCheck = tilesToCheck, stayOnTile = stayOnTile)
++            .filter { !keepOutOfCityGuns || !UnitAutomation.underEnemyCityGuns(unit.civ, it.tileToAttackFrom) }
+             // Only take enemies we can fight without dying or are made to die
+             .filter {
+                 val defender = Battle.getMapCombatantOfTile(it.tileToAttack)
 diff --git a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 index 3fc1b5e..d4aac64 100644
 --- a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
@@ -424,10 +482,20 @@ index 3fc1b5e..d4aac64 100644
              .minByOrNull { it.aerialDistance }?.city
              ?: return emptySequence() // no attackable cities found
 diff --git a/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt b/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
-index 9a9354b..219e58c 100644
+index 9a9354b..6bac29b 100644
 --- a/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
-@@ -88,6 +88,31 @@ object UnitAutomation {
+@@ -67,6 +67,9 @@ object UnitAutomation {
+         }
+ 
+         if (unit.baseUnit.isAirUnit()) {
++            // A ruled civ's defend posture grounds the air arm too: it flies only against what stands on or beside our own land
++            if (com.unciv.logic.automation.RulerOverrides.postures[unit.civ.civID]?.stance == "defend" && unit.civ.isAtWar())
++                return AirUnitAutomation.automateHomeDefence(unit)
+             if (unit.canIntercept())
+                 return AirUnitAutomation.automateFighter(unit)
+ 
+@@ -88,6 +91,35 @@ object UnitAutomation {
  
          if (tryHeadTowardsOurSiegedCity(unit)) return
  
@@ -440,10 +508,14 @@ index 9a9354b..219e58c 100644
 +                .sortedBy { soldier -> unit.civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(soldier.getTile()) } ?: 99 }
 +                .take(posture.reserve).any { it.id == unit.id }
 +            if (posture.stance == "defend" || inReserve) {
-+                if (tryAttacking(unit)) return   // an enemy within reach of home is still fought
++                // A defending host holds its own ground: out of any enemy city's guns first, then only an enemy on or beside our land is fought, and a
++                // soldier left abroad walks home. The reserve of an attacking or raiding host keeps the old habit and fights whatever is within reach
++                val holdsGround = posture.stance == "defend"
++                if (holdsGround && tryLeaveEnemyCityRange(unit)) return
++                if (tryAttacking(unit, if (holdsGround) homeGroundTargets(unit) else null)) return
 +                if (tryGarrisoningLandUnit(unit)) return
 +                if (unit.health < 100 && tryHealUnit(unit)) return
-+                if (unit.getTile().getOwner() != unit.civ) { tryRetreat(unit); return }
++                if (unit.getTile().getOwner() != unit.civ) { if (!tryRetreat(unit) && holdsGround) tryHeadHome(unit); return }
 +                tryPrepare(unit); return
 +            }
 +            if (posture.stance == "raid") {
@@ -459,7 +531,7 @@ index 9a9354b..219e58c 100644
          // if a embarked melee unit can land and attack next turn, do not attack from water.
          if (BattleHelper.tryDisembarkUnitToAttackPosition(unit)) return
  
-@@ -117,6 +142,14 @@ object UnitAutomation {
+@@ -117,6 +149,14 @@ object UnitAutomation {
  
          if (tryFogBust(unit)) return
  
@@ -474,7 +546,83 @@ index 9a9354b..219e58c 100644
          // Idle CS units should wander so they don't obstruct players so much
          if (unit.civ.isCityState)
              wander(unit, stayInTerritory = true)
-@@ -338,6 +371,7 @@ object UnitAutomation {
+@@ -276,10 +316,10 @@ object UnitAutomation {
+     }
+ 
+ 
+-    /** @return true only if the unit has 0 movement left */
+-    private fun tryAttacking(unit: MapUnit): Boolean {
++    /** @return true only if the unit has 0 movement left. [targets] limits the attack to those tiles (a defending host's home ground), made from no tile an enemy city can bombard */
++    private fun tryAttacking(unit: MapUnit, targets: List<Tile>? = null): Boolean {
+         repeat(unit.maxAttacksPerTurn() - unit.attacksThisTurn) {
+-            if (BattleHelper.tryAttackNearbyEnemy(unit)) return true
++            if (BattleHelper.tryAttackNearbyEnemy(unit, tilesToCheck = targets, keepOutOfCityGuns = targets != null)) return true
+             // Calvary style tctic, attack and then retreat
+             if (unit.health < 50 && tryRetreat(unit)) return true
+         }
+@@ -301,6 +341,48 @@ object UnitAutomation {
+         return true
+     }
+ 
++    /** The tiles a soldier or plane of a defending host may strike at: in sight, on or beside our own land, and never a city centre - the walls are not
++     *  ours to storm under defend. Reach is the unit's range, plus its movement when it walks to attack */
++    internal fun homeGroundTargets(unit: MapUnit): List<Tile> {
++        val reach = unit.getRange() + if (unit.baseUnit.isAirUnit()) 0 else unit.getMaxMovement()
++        return unit.currentTile.getTilesInDistance(reach)
++            .filter { it in unit.civ.viewableTiles && !it.isCityCenter() && (it.getOwner() == unit.civ || it.neighbors.any { near -> near.getOwner() == unit.civ }) }
++            .toList()
++    }
++
++    /** A ruled civ at war under the defend posture: its soldiers keep out of every enemy city's guns, wherever the automation would otherwise send them */
++    private fun keepsOutOfCityGuns(unit: MapUnit) = com.unciv.logic.automation.RulerOverrides.postures[unit.civ.civID]?.stance == "defend" && unit.civ.isAtWar()
++
++    /** True when an enemy city can bombard this tile (its bombard range, two tiles by the standard rules) */
++    internal fun underEnemyCityGuns(civ: Civilization, tile: Tile) = civ.getKnownCivs().filter { civ.isAtWarWith(it) }.flatMap { it.cities }
++        .any { it.getCenterTile().aerialDistanceTo(tile) <= it.getBombardRange() }
++
++    /** Under defend a soldier standing within an enemy city's guns walks out of them, toward home: the city's volley a turn and its garrison's sallies
++     *  are what killed the host before Weldiya for turns on end. Our own city centres are kept - the walls shelter their garrison */
++    private fun tryLeaveEnemyCityRange(unit: MapUnit): Boolean {
++        if (unit.currentTile.isCityCenter()) return false
++        fun underGuns(tile: Tile) = underEnemyCityGuns(unit.civ, tile)
++        if (!underGuns(unit.currentTile)) return false
++        val home = unit.civ.cities.minByOrNull { it.getCenterTile().aerialDistanceTo(unit.currentTile) }?.getCenterTile()
++        val shelter = unit.movement.getDistanceToTiles().keys
++            .filter { !underGuns(it) && unit.getDamageFromTerrain(it) <= 0 && unit.movement.canMoveTo(it) }
++            .minWithOrNull(compareBy({ it.getOwner() != unit.civ }, { home?.let { h -> it.aerialDistanceTo(h) } ?: 0 }))
++        if (shelter != null) unit.movement.moveToTile(shelter)
++        else if (home != null) unit.movement.headTowards(home) // every tile in reach is under the guns: at least walk the way home
++        return true
++    }
++
++    /** A soldier of a defending host left abroad, with no enemy near enough to retreat from, walks back to the nearest of our cities */
++    private fun tryHeadHome(unit: MapUnit): Boolean {
++        for (city in unit.civ.cities.sortedBy { it.getCenterTile().aerialDistanceTo(unit.currentTile) }.take(2)) {
++            val tile = city.getCenterTile().getTilesInDistance(2).sortedBy { it.aerialDistanceTo(unit.currentTile) }
++                .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it) } ?: continue
++            unit.movement.headTowards(tile)
++            return true
++        }
++        return false
++    }
++
+     private fun tryRetreat(unit: MapUnit): Boolean {
+         // Precondition: This must be a military unit
+         if (unit.isCivilian()) return false
+@@ -324,10 +406,12 @@ object UnitAutomation {
+         }
+ 
+         val ourDistanceToClosestEnemy = unit.civ.threatManager.getDistanceToClosestEnemyUnit(unit.getTile(),4, false)
++        val keepsOut = keepsOutOfCityGuns(unit)
+         // Lets check all tiles and swap with the first one
+         for (retreatTile in sortedTilesToRetreatTo) {
+             val tileDistanceToClosestEnemy = unit.civ.threatManager.getDistanceToClosestEnemyUnit(retreatTile,4,false)
+             if (ourDistanceToClosestEnemy >= tileDistanceToClosestEnemy) continue
++            if (keepsOut && underEnemyCityGuns(unit.civ, retreatTile)) continue // a defending host does not retreat into a city's guns
+ 
+             val otherUnit = retreatTile.militaryUnit
+             if (otherUnit == null) {
+@@ -338,6 +422,7 @@ object UnitAutomation {
              } else if (otherUnit.civ == unit.civ) {
                  // The tile is taken, lets see if we want to swap retreat to it
                  if (otherUnit.health <= 80) continue
@@ -482,6 +630,57 @@ index 9a9354b..219e58c 100644
                  if (otherUnit.baseUnit.isRanged()) {
                      // Don't swap ranged units closer than they have to be
                      val range = otherUnit.baseUnit.range
+@@ -371,7 +456,9 @@ object UnitAutomation {
+         if (unitDistanceToTiles.isEmpty()) return true // can't move, so...
+ 
+         val dangerousTiles = unit.civ.threatManager.getDangerousTiles(unit, 3)
+-        
++        // The threat manager marks a city's guns only when the city stands within three tiles; a defending host must not walk under them from farther off
++        if (keepsOutOfCityGuns(unit)) dangerousTiles += unitDistanceToTiles.keys.filter { underEnemyCityGuns(unit.civ, it) }
++
+         // If the unit can heal on this tile in two turns, just heal here
+         if (unit.currentTile !in dangerousTiles 
+             && canUnitHealInTurnsOnCurrentTile(unit,3)) return true
+@@ -462,9 +549,10 @@ object UnitAutomation {
+     fun tryPillageImprovement(unit: MapUnit, onlyPillageToHeal: Boolean = false): Boolean {
+         if (unit.isCivilian()) return false
+         val unitDistanceToTiles = unit.movement.getDistanceToTiles()
++        val keepsOut = keepsOutOfCityGuns(unit) // a defending host does not walk under a city's guns for the sake of a farm to loot and heal on
+         val tilesThatCanWalkToAndThenPillage = unitDistanceToTiles
+             .filter { it.value.totalMovement < unit.currentMovement }.keys
+-            .filter { unit.movement.canMoveTo(it) && UnitActionsPillage.canPillage(unit, it)
++            .filter { unit.movement.canMoveTo(it) && UnitActionsPillage.canPillage(unit, it) && !(keepsOut && underEnemyCityGuns(unit.civ, it))
+                     && (it.canPillageTileImprovement()
+                     || (!onlyPillageToHeal && it.canPillageRoad() && it.getRoadOwner() != null && unit.civ.isAtWarWith(it.getRoadOwner()!!))) }
+ 
+@@ -532,10 +620,11 @@ object UnitAutomation {
+             .sortedBy { unit.getTile().aerialDistanceTo(it.getCenterTile()) }
+ 
+         // Move to the closest city with a tile we can enter nearby
++        val keepsOut = keepsOutOfCityGuns(unit) // a defending host takes no place by its city that the enemy's city can bombard: it would stand there to be shot, turn upon turn
+         for (city in citiesToDefend) {
+             if (unit.getTile().aerialDistanceTo(city.getCenterTile()) <= 2) return true
+             val tileToMoveTo = city.getCenterTile().getTilesInDistance(2)
+-                .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it) } ?: continue
++                .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it) && !(keepsOut && underEnemyCityGuns(unit.civ, it)) } ?: continue
+             unit.movement.headTowards(tileToMoveTo)
+             return true
+         }
+@@ -567,11 +656,13 @@ object UnitAutomation {
+         if (siegedCities.any { it.getCenterTile().aerialDistanceTo(unit.getTile()) <= 2 })
+             return false
+ 
++        val keepsOut = keepsOutOfCityGuns(unit) // a defending host takes no place in the ring that an enemy city can bombard: it would stand there to be shot, turn upon turn
+         val reachableTileNearSiegedCity = siegedCities
+                 .flatMap { it.getCenterTile().getTilesAtDistance(2) }
+                 .sortedBy { it.aerialDistanceTo(unit.currentTile) }
+                 .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it)
+-                        && unit.getDamageFromTerrain(it) <= 0 } // Avoid ending up on damaging terrain
++                        && unit.getDamageFromTerrain(it) <= 0 // Avoid ending up on damaging terrain
++                        && !(keepsOut && underEnemyCityGuns(unit.civ, it)) }
+ 
+         if (reachableTileNearSiegedCity != null) {
+             unit.movement.headTowards(reachableTileNearSiegedCity)
 diff --git a/core/src/com/unciv/logic/battle/AirInterception.kt b/core/src/com/unciv/logic/battle/AirInterception.kt
 index 0df8cb8..689fe91 100644
 --- a/core/src/com/unciv/logic/battle/AirInterception.kt
@@ -2417,10 +2616,10 @@ index 0000000..de0a784
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..b8c488e
+index 0000000..8c3f071
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1498 @@
+@@ -0,0 +1,1523 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -2484,7 +2683,7 @@ index 0000000..b8c488e
 +        var policyBranches = ArrayList<String>()
 +        /** Buildings and units the officials must never queue on their own */
 +        var neverBuild = ArrayList<String>()
-+        /** Kinds of deal the officials must never propose on their own: Open Borders, Research Agreement, Defensive Pact, Declaration of Friendship, luxuries, all */
++        /** Kinds of deal the officials must never propose on their own: Open Borders, Research Agreement, Defensive Pact, Declaration of Friendship, luxuries, calls to war, all */
 +        var neverPropose = ArrayList<String>()
 +        /** Gold the officials must leave untouched; null = they spend as they see fit */
 +        var goldReserve: Int? = null
@@ -2810,7 +3009,7 @@ index 0000000..b8c488e
 +        json.get("policyBranches")?.let { policyBranches = ArrayList(it.asStringArray().toList()) }
 +        json.get("neverBuild")?.let { neverBuild = ArrayList(it.asStringArray().toList()) }
 +        json.get("neverPropose")?.let { list ->
-+            val kinds = listOf(Constants.openBorders, Constants.researchAgreement, Constants.defensivePact, "Declaration of Friendship", "luxuries", "all")
++            val kinds = listOf(Constants.openBorders, Constants.researchAgreement, Constants.defensivePact, "Declaration of Friendship", "luxuries", "calls to war", "all")
 +            neverPropose = ArrayList(list.asStringArray().map { given -> kinds.firstOrNull { it.equals(given.trim(), ignoreCase = true) || it.equals(given.trim().removeSuffix("s"), ignoreCase = true) }
 +                ?: throw ApiError(400, "neverPropose takes ${kinds.joinToString()}; not '$given'") })
 +        }
@@ -3642,8 +3841,11 @@ index 0000000..b8c488e
 +        val soldiers = civ.units.getCivUnits().filter { it.isMilitary() && it.baseUnit.isLandUnit }.toList()
 +        val siege = soldiers.filter { it.baseUnit.isProbablySiegeUnit() }
 +        val melee = soldiers.filter { it.baseUnit.isMelee() }
++        val aircraft = civ.units.getCivUnits().count { it.isMilitary() && it.baseUnit.isAirUnit() }
 +        val bestEngine = siege.maxByOrNull { it.baseUnit.rangedStrength }
 +        val bestFoot = melee.maxByOrNull { it.baseUnit.strength }
++        // A city heals this much every turn (the engine's CityTurnManager): what breaks it is what all our engines take off in a turn beyond that
++        val healing = 20
 +        // The engine's own combat sum, at full health and even luck: what one volley of our best engine takes off a city, and what the city does to our best foot soldier
 +        fun volley(unit: com.unciv.logic.map.mapunit.MapUnit, city: City) = com.unciv.logic.battle.BattleDamage.calculateDamageToDefender(
 +            com.unciv.logic.battle.MapUnitCombatant(unit), com.unciv.logic.battle.CityCombatant(city), city.getCenterTile(), 0.5f)
@@ -3654,7 +3856,26 @@ index 0000000..b8c488e
 +                val defence = com.unciv.logic.battle.CityCombatant(city).getCityStrength()
 +                val perVolley = bestEngine?.let { volley(it, city) } ?: 0
 +                val volleysToBreak = if (perVolley > 0) (city.health + perVolley - 1) / perVolley else null
++                val perTurn = perVolley * siege.size - healing
++                val turnsToBreak = if (perTurn > 0) (city.health + perTurn - 1) / perTurn else null
 +                val hitOnFoot = bestFoot?.let { cityHits(it, city) }
++                // What stands about the city within three tiles, on the tiles we can see: its soldiers, and whatever shoots at aircraft (a SAM, a fighter on
++                // its field, a building that intercepts). Of the tiles we cannot see we say nothing - the walls alone misled three sieges in Run 11
++                val near = city.getCenterTile().getTilesInDistance(3).filter { it.isVisible(civ) }.toList()
++                val defenders = near.filter { it != city.getCenterTile() }.flatMap { it.getUnits() }.filter { it.civ == city.civ && it.isMilitary() && it.baseUnit.isLandUnit }
++                val defendersStrength = defenders.sumOf { it.baseUnit.strength.coerceAtLeast(it.baseUnit.rangedStrength) }
++                val antiAirUnits = near.flatMap { it.getUnits() }.filter { it.civ == city.civ && it.interceptChance() > 0 }
++                val antiAir = antiAirUnits.size + city.cityConstructions.getBuiltBuildings().count { it.hasUnique(com.unciv.models.ruleset.unique.UniqueType.ChanceInterceptAirAttacks) }
++                fun s(n: Int) = if (n == 1) "" else "s"
++                val beside = when {
++                    near.isEmpty() -> "what stands beside them is beyond our sight"
++                    defenders.isEmpty() && antiAir == 0 -> "we see nothing standing beside them"
++                    else -> listOfNotNull(
++                        defenders.takeIf { it.isNotEmpty() }?.let { "the ${it.size} defender${s(it.size)} beside them (strength $defendersStrength together)" },
++                        antiAir.takeIf { it > 0 }?.let { "$it anti-air (${(antiAirUnits.map { u -> u.name } + if (antiAir > antiAirUnits.size) listOf("the city's own") else emptyList()).distinct().joinToString(", ")})" +
++                            (if (aircraft > 0) " against our $aircraft aircraft" else "") }
++                    ).joinToString(" and ") + (if (defenders.size + antiAir == 1) " is" else " are") + " another matter"
++                }
 +                // The approaches: how many land tiles touch the city, and how many of those an enemy soldier stands on
 +                val approaches = city.getCenterTile().neighbors.filter { it.isLand && !it.isImpassible() }.toList()
 +                val heldApproaches = approaches.count { it.militaryUnit != null && it.militaryUnit!!.civ != civ }
@@ -3666,25 +3887,28 @@ index 0000000..b8c488e
 +                }
 +                val verdict = when {
 +                    bestEngine == null -> "no siege engines - the walls cannot be broken"
-+                    volleysToBreak!! <= siege.size * 2 -> "would fall within a few turns of concerted bombardment"
-+                    volleysToBreak <= siege.size * 5 -> "a siege of some turns, under fire the whole time"
-+                    else -> "beyond what our engines can break before they are shot to pieces"
++                    turnsToBreak == null -> "our ${siege.size} engine${s(siege.size)} together take less off the walls in a turn (${perVolley * siege.size}) than the $healing they heal - what we have cannot break them"
++                    turnsToBreak <= 2 -> "the walls would fall in $volleysToBreak volleys - $turnsToBreak turn${s(turnsToBreak)} of all our engines firing, healing counted; $beside"
++                    turnsToBreak <= 5 -> "a siege of $turnsToBreak turns under fire the whole time ($volleysToBreak volleys, healing counted); $beside"
++                    else -> "beyond what our engines can break before they are shot to pieces ($turnsToBreak turns of bombardment, healing counted); $beside"
 +                }
 +                mapOf("city" to city.name, "of" to city.civ.civName, "defence" to defence, "health" to city.health, "walls" to city.cityConstructions.builtBuildings.any { "Walls" in it || "Castle" in it },
 +                    "garrison" to city.getCenterTile().militaryUnit?.name, "tilesFromOurNearestCity" to civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(city.getCenterTile()) },
-+                    "oneVolleyOfOurBestEngineTakes" to perVolley, "volleysToBreak" to volleysToBreak, "cityShotAtOurBestFootSoldierTakes" to hitOnFoot, "approaches" to gate, "verdict" to verdict)
++                    "oneVolleyOfOurBestEngineTakes" to perVolley, "volleysToBreak" to volleysToBreak, "healsPerTurn" to healing, "turnsToBreak" to turnsToBreak,
++                    "defendersWithin3Tiles" to if (near.isEmpty()) null else defenders.size, "defendersStrength" to if (near.isEmpty()) null else defendersStrength, "antiAirWithin3Tiles" to if (near.isEmpty()) null else antiAir,
++                    "cityShotAtOurBestFootSoldierTakes" to hitOnFoot, "approaches" to gate, "verdict" to verdict)
 +            }.sortedBy { it["volleysToBreak"] as Int? ?: 999 }
 +        val unseen = civ.getKnownCivs().filter { it.isMajorCiv() && it.isAlive() }.associate { other -> other.civName to other.cities.count { !it.getCenterTile().isExplored(civ) } }.filterValues { it > 0 }
 +        return mapOf(
 +            "ourBestEngine" to bestEngine?.name, "ourBestFootSoldier" to bestFoot?.name, "siegeEngines" to siege.size, "footSoldiers" to melee.size,
-+            "ranged" to soldiers.count { it.baseUnit.isRanged() && !it.baseUnit.isProbablySiegeUnit() },
++            "ranged" to soldiers.count { it.baseUnit.isRanged() && !it.baseUnit.isProbablySiegeUnit() }, "ourAircraft" to aircraft,
 +            "citiesWeHaveSeen" to cities,
 +            "citiesNeverSeen" to unseen,
 +            "whoElseWouldFight" to civ.getKnownCivs().filter { it.isMajorCiv() && !civ.isAtWarWith(it) }.associate { target -> target.civName to
 +                (civ.gameInfo.civilizations.filter { ally -> ally != target && ally != civ && ally.isAlive() && ((ally.isMajorCiv() && ally.getDiplomacyManager(target)?.diplomaticStatus == com.unciv.logic.civilization.diplomacy.DiplomaticStatus.DefensivePact) || (ally.isCityState && ally.allyCiv == target)) }
 +                    .map { it.civName + (if (it.isCityState) " (city-state ally)" else " (defensive pact)") }) }.filterValues { it.isNotEmpty() },
 +
-+            "howToRead" to "Sums from the chancery's own reckoning of battle, at full health and even luck. A city is taken by breaking its health with engines and then walking a foot soldier in; it heals each turn, shoots one volley a turn at anything within two tiles, and its garrison and walls do the rest. Bowmen and crossbows barely scratch walls. What we have never seen we cannot judge - say so.")
++            "howToRead" to "Sums from the chancery's own reckoning of battle, at full health and even luck. A city is taken by breaking its health with engines and then walking a foot soldier in; it heals each turn, shoots one volley a turn at anything within two tiles, and its garrison and walls do the rest. Defenders and anti-air are counted within three tiles of the city, on the tiles we can see this turn. Bowmen and crossbows barely scratch walls. What we have never seen we cannot judge - say so.")
 +    }
 +
 +    /** The log as a look-in should read it: no bookkeeping echoes, repeats folded, and never more than the last sixty lines */
