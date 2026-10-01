@@ -108,6 +108,7 @@ export type Orders = {
   trade?: { with: string; give?: { item: string; amount?: number }[]; want?: { item: string; amount?: number }[] }[];
   peace?: string[];
   answerOffers?: { power: string; answer: "accept" | "refuse"; terms?: string }[];
+  answerDemands?: { power: string; answer: "agree" | "refuse" }[];
   friendship?: string[];
   gift?: { cityState: string; gold: number }[];
   cityFocus?: { city: string; focus: string }[];
