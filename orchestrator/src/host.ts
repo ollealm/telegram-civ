@@ -37,6 +37,10 @@ export type GameState = {
   turn: number;
   year: string;
   ruled: string[];
+  /** The shape of the world, by the engine's map type */
+  mapType?: string;
+  /** The ways this game can be won, as it was set up */
+  victoryTypes?: string[];
   majorCivs: { civ: string; alive: boolean; era?: string }[];
   winner: string | null;
   victoryType: string | null;
@@ -102,7 +106,7 @@ export type Orders = {
   rearm?: (number | "all")[];
   queue?: { city: string; items: string[] }[];
   build?: { city: string; item: string }[];
-  purchase?: { city: string; item: string }[];
+  purchase?: { city: string; item: string; with?: "gold" | "faith" }[];
   declareWar?: string[];
   units?: { unit: number; action: string; x?: number; y?: number; city?: string }[];
   trade?: { with: string; give?: { item: string; amount?: number }[]; want?: { item: string; amount?: number }[] }[];
@@ -148,7 +152,8 @@ function omitFromBriefing(briefing: Record<string, unknown>): Record<string, unk
 
 export const host = {
   state: () => call<GameState>("GET", "/state"),
-  newGame: (setup: { ruled: string[]; others: string[]; noWonders?: string[]; mapSize?: string; mapType?: string; cityStates?: number; difficulty?: string }) =>
+  /** victoryTypes: the ruleset's victory names (Scientific, Cultural, Domination, Diplomatic, Time); left out, every one but Time */
+  newGame: (setup: { ruled: string[]; others: string[]; noWonders?: string[]; mapSize?: string; mapType?: string; cityStates?: number; difficulty?: string; victoryTypes?: string[] }) =>
     call<GameState>("POST", "/new", setup),
   advance: (turns: number, wake = false) => call<RoundResult>("POST", "/advance", { turns, wake }),
   lookup: (civ: string, name: string) => call<Record<string, unknown>>("GET", `/lookup${civQuery(civ)}&name=${encodeURIComponent(name)}`),

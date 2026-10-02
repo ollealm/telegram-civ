@@ -10,6 +10,10 @@
 //   or "own" to hear each seat at the effort it played at.
 // LEAGUE_MAP_TYPE="Two Continents": the shape of the world (the engine's map types - Pangaea, Small Continents, Continent and Islands, Two Continents,
 //   Three Continents, Archipelago, Fractal, Perlin, and the rest the engine knows); Pangaea when unset.
+// LEAGUE_VICTORIES="Cultural,Domination,Diplomatic": the ways the game can be won, by the ruleset's names (Scientific, Cultural, Domination, Diplomatic, Time);
+//   every one but Time when unset. A name the host does not know stops the league before it starts, with the names it takes.
+// LEAGUE_CITY_STATES=6: how many city-states the world holds (a positive whole number); 4 when unset, so earlier runs stay comparable - a bad value is reported
+//   and 4 used.
 // LEAGUE_AIMS="Persia:diplomatic,2:cultural": a push, not a rule - the named seats start with that aim as the first line of their own standing intent
 //   (diplomatic | cultural | scientific | domination), which they may rewrite later like any other line. A seat is named by the people it was dealt
 //   or by its number in the seats argument (1 = the first); an entry that names neither is reported and ignored.
@@ -79,6 +83,15 @@ function pauseIfLimited(civ: string | undefined, why: string) {
   process.exit(4);
 }
 
+/** An order's failed list, whole: the result is cut for the file, the list never is (Run 18 lost forty of them to the cut) */
+const failedOf = (result: string): string[] | undefined => {
+  try {
+    const blocks = JSON.parse(result) as { type: string; text?: string }[];
+    const failed = (JSON.parse(blocks.find((block) => block.type === "text")?.text ?? "{}") as { failed?: string[] }).failed;
+    return failed?.length ? failed : undefined;
+  } catch { return undefined; }
+};
+
 // Every look-in: was it scheduled or a wake-up, did it change anything, what did it cost - to judge whether the fixed look-in earns its keep
 const passes = `../data/harness/league-${stamp}-passes.csv`;
 if (!resuming) appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
@@ -99,7 +112,7 @@ onTrace((trace) => {
   for (const call of trace.toolCalls) {
     const result = call.result ?? "";
     if (/\\"failed\\":\[\\"|is_error|isError|\\"error\\"/.test(result))
-      appendFileSync(problems, JSON.stringify({ civ: trace.civ, model: labelOf(trace.civ), role: trace.role, tool: call.name, input: call.input, result: result.slice(0, 1200) }) + "\n");
+      appendFileSync(problems, JSON.stringify({ civ: trace.civ, model: labelOf(trace.civ), role: trace.role, tool: call.name, input: call.input, result: result.slice(0, 1200), ...(failedOf(result) && { failed: failedOf(result) }) }) + "\n");
   }
   if (trace.reply.startsWith("(failed")) appendFileSync(problems, JSON.stringify({ civ: trace.civ, model: labelOf(trace.civ), role: trace.role, failed: trace.reply }) + "\n");
 });
@@ -139,10 +152,15 @@ if (resuming) {
     say(`${seat.civ}: ${name} on ${labelOf(seat.civ)}`);
   }
   const others = nations.slice(seatSpecs.length, seatSpecs.length + gameAi);
-  await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, mapType: process.env.LEAGUE_MAP_TYPE || undefined, cityStates: 4 });
+  const victoryTypes = process.env.LEAGUE_VICTORIES?.split(",").map((name) => name.trim()).filter(Boolean);
+  const cityStatesGiven = process.env.LEAGUE_CITY_STATES?.trim();
+  const cityStates = !cityStatesGiven ? 4 : /^[1-9]\d*$/.test(cityStatesGiven) ? Number(cityStatesGiven) : (say(`LEAGUE_CITY_STATES: '${cityStatesGiven}' is not a positive whole number - 4 city-states, as by default`), 4);
+  await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, mapType: process.env.LEAGUE_MAP_TYPE || undefined, cityStates, ...(victoryTypes?.length && { victoryTypes }) });
+  const made = await host.state();
+  say(`The world: ${made.mapType ?? "Pangaea"}, ${cityStates} city-states, won by ${(made.victoryTypes ?? []).join(", ") || "no victory at all"}`);
   // Seeded aims: the first line of a seat's own standing intent, written as its own - it may rewrite it at any new age, as the prompt allows
   const AIMS: Record<string, string> = {
-    diplomatic: "a diplomatic victory, won through the city-states' votes",
+    diplomatic: "a diplomatic victory, won in the world's vote once the United Nations stands",
     cultural: "a cultural victory",
     scientific: "a scientific victory",
     domination: "domination",

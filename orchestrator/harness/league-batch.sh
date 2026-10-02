@@ -5,7 +5,7 @@
 # Leagues are numbered on from the highest ../data/league-run<n> already there, so a new batch never touches a running one:
 # league n runs on port 8770+n (never 8765, the real game), keeps its data in ../data/league-run<n>, tags its result files run<n>
 # and logs to ../data/league-run<n>/league.log. No game-AI peoples; LEAGUE_MAP=Medium for a bigger map (default Small).
-# LEAGUE_CHARACTERS and LEAGUE_REFLECT_EFFORT pass through to league.mts. A league that hits the token limit pauses and resumes
+# LEAGUE_CHARACTERS, LEAGUE_REFLECT_EFFORT, LEAGUE_MAP_TYPE, LEAGUE_VICTORIES, LEAGUE_CITY_STATES and LEAGUE_AIMS pass through to league.mts. A league that hits the token limit pauses and resumes
 # itself (harness/league-loop.sh).
 cd "${0:A:h}/.."
 turns=$1; shift
