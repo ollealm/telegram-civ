@@ -3064,10 +3064,10 @@ index 0000000..e1741e2
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..03357c8
+index 0000000..c53c6d0
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1864 @@
+@@ -0,0 +1,1918 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -4743,7 +4743,8 @@ index 0000000..03357c8
 +            .map { unit -> "${unit.name} #${unit.id}" + (unit.religion?.let { " (of ${civ.gameInfo.religions[it]?.let(::named) ?: it})" } ?: "") + ": " + listOfNotNull(
 +                if (unit.hasUnique(com.unciv.models.ruleset.unique.UniqueType.MayFoundReligion) && manager.mayFoundReligionAtAll()) "can found our religion in a city of ours" else null,
 +                if (unit.hasUnique(com.unciv.models.ruleset.unique.UniqueType.MayEnhanceReligion) && manager.mayEnhanceReligionAtAll()) "can enhance our religion in a city of ours" else null,
-+                if (unit.hasUnique(com.unciv.models.ruleset.unique.UniqueType.CanSpreadReligion)) "can spread its religion in a city it stands in" else null
++                if (unit.hasUnique(com.unciv.models.ruleset.unique.UniqueType.CanSpreadReligion)) "can spread its religion in a city it stands in" else null,
++                RulerUnits.greatImprovementOf(unit)?.let { "can raise $it on an unimproved tile of ours (use, ability improvement)" }
 +            ).ifEmpty { listOf("nothing it can do now") }.joinToString(", ") + " - order it with use, ability religion, in the city" }.toList()
 +        return mapOf(
 +            "faithPerTurn" to civ.stats.statsForNextTurn.faith.toInt(),
@@ -4863,7 +4864,60 @@ index 0000000..03357c8
 +        find(ruleset.beliefs)?.let { b -> return mapOf("kind" to "belief", "name" to b.name, "type" to b.type.name.lowercase(), "gives" to beliefInWords(b).substringAfter(": "),
 +            "heldBy" to civ.gameInfo.religions.values.filter { it.hasBelief(b.name) }.map { "${it.getReligionDisplayName()} (${it.foundingCiv.civName}'s)" }) }
 +        find(ruleset.policies)?.let { p -> return mapOf("kind" to "policy", "name" to p.name, "branch" to p.branch.name, "effects" to p.uniques, "adopted" to civ.policies.isAdopted(p.name)) }
-+        throw ApiError(404, "The rulebook has nothing called '$name'")
++        val words = { uniques: Collection<String> -> uniques.filterNot { RulerUnits.isRulebookNoise(it) }.map { RulerUnits.inWords(it) } }
++        val yields = { stats: com.unciv.models.stats.Stats -> RulerUnits.statsInWords(stats).ifEmpty { null } }
++        find(ruleset.tileImprovements)?.let { i ->
++            val great = i.hasUnique(com.unciv.models.ruleset.unique.UniqueType.GreatImprovement)
++            // Who raises it: the Great Person whose ability names it (and whether that uses the unit up), or the workers
++            val raisers = ruleset.units.values.filter { u -> u.uniqueTo == null && u.uniqueObjects.any { it.type == com.unciv.models.ruleset.unique.UniqueType.ConstructImprovementInstantly && it.params[0] == i.name } }
++                .map { u -> u.name + if (u.uniqueObjects.any { it.type == com.unciv.models.ruleset.unique.UniqueType.ConstructImprovementInstantly && it.params[0] == i.name && "consuming" in it.text }) " (in an instant, and it uses the unit up)" else " (in an instant)" }
++            return mapOf("kind" to if (great) "great improvement" else "tile improvement", "name" to i.name,
++                "gives" to RulerUnits.improvementInWords(i),
++                "builtOn" to i.terrainsCanBeBuiltOn.joinToString().ifEmpty { "a resource's tile only" },
++                "builtBy" to raisers.ifEmpty { listOf(if (i.terrainsCanBeBuiltOn.any { ruleset.terrains[it]?.type == com.unciv.models.ruleset.tile.TerrainType.Water }) "Work Boats" else "a Worker") }.joinToString(" or "),
++                "requiresTech" to i.techRequired, "weHaveTheTech" to (i.techRequired == null || civ.tech.isResearched(i.techRequired!!)),
++                "uniqueTo" to i.uniqueTo,
++                "effects" to words(i.uniques.filter { it != "Great Improvement" && !it.startsWith("[+") }),
++                "note" to if (great) "a great improvement: the officials' workers never replace it, and pillaging it ruins it until repaired" else null)
++        }
++        find(ruleset.tileResources)?.let { r ->
++            return mapOf("kind" to "${r.resourceType.name.lowercase()} resource", "name" to r.name,
++                "gives" to yields(r.cloneStats()),
++                "improvedBy" to r.getImprovements().toList(), "whenImproved" to r.improvementStats?.let { yields(it) },
++                "revealedBy" to r.revealedBy, "weCanSeeIt" to (r.revealedBy == null || civ.tech.isResearched(r.revealedBy!!)),
++                "weHave" to (civ.getCivResourcesByName()[r.name] ?: 0),
++                "effects" to words(r.uniques).ifEmpty { null },
++                "note" to when (r.resourceType) {
++                    com.unciv.models.ruleset.tile.ResourceType.Luxury -> "each distinct luxury we hold makes the people happier; a second of the same adds nothing, but can be traded"
++                    com.unciv.models.ruleset.tile.ResourceType.Strategic -> "some units and buildings need it to be built and to stand; what we hold is in the briefing's strategicResources"
++                    else -> "it adds to the tile's yield once improved; it cannot be traded" })
++        }
++        find(ruleset.terrains)?.let { t ->
++            return mapOf("kind" to when (t.type) {
++                    com.unciv.models.ruleset.tile.TerrainType.NaturalWonder -> "natural wonder"
++                    com.unciv.models.ruleset.tile.TerrainType.TerrainFeature -> "terrain feature"
++                    else -> "terrain" }, "name" to t.name,
++                "yields" to yields(t.cloneStats()), "movementCost" to if (t.impassable) "impassable" else t.movementCost,
++                "defence" to if (t.defenceBonus != 0f) "${(t.defenceBonus * 100).toInt()}% for a unit standing on it" else null,
++                "effects" to words(t.uniques).ifEmpty { null })
++        }
++        find(ruleset.unitPromotions)?.let { p ->
++            return mapOf("kind" to "promotion", "name" to p.name, "effects" to words(p.uniques), "requires" to p.prerequisites.ifEmpty { null }, "forUnitTypes" to p.unitTypes)
++        }
++        find(ruleset.nations.filterValues { it.isMajorCiv })?.let { n ->
++            return mapOf("kind" to "people", "name" to n.name, "leader" to n.leaderName,
++                "ability" to (n.uniqueName.ifBlank { null }?.let { "$it: " } ?: "") + (n.uniqueText.ifBlank { null } ?: words(n.uniques).joinToString("; ")),
++                "uniqueUnits" to ruleset.units.values.filter { it.uniqueTo == n.name }.map { u -> u.name + (u.replaces?.let { " (in place of the $it)" } ?: "") },
++                "uniqueBuildings" to ruleset.buildings.values.filter { it.uniqueTo == n.name }.map { b -> b.name + (b.replaces?.let { " (in place of the $it)" } ?: "") },
++                "uniqueImprovements" to ruleset.tileImprovements.values.filter { it.uniqueTo == n.name }.map { it.name }.ifEmpty { null })
++        }
++        // A city-state kind, or a city-state by name (its kind)
++        (find(ruleset.cityStateTypes) ?: civ.gameInfo.civilizations.firstOrNull { it.isCityState && it.civName.equals(name, ignoreCase = true) }?.cityStateType)?.let { k ->
++            return mapOf("kind" to "city-state kind", "name" to k.name,
++                "toAFriend" to words(k.friendBonusUniques), "toItsAlly" to words(k.allyBonusUniques),
++                "note" to "a city-state is a friend at 30 influence and allied at 60 with the most influence of anyone; an ally also gets its luxuries and strategic resources, and its vote when the world votes")
++        }
++        throw ApiError(404, "The rulebook has nothing called '$name'. look_up knows buildings and wonders, units, technologies, policies, beliefs, treaties, tile improvements (great improvements too), resources, terrain and natural wonders, promotions, peoples (by name: their ability and unique units and buildings) and city-state kinds (or a city-state by name)")
 +    }
 +
 +    /** The treaties a deal can carry, as the rulebook would explain them: what each binds, what it costs, how long it runs, what it needs */
@@ -5050,10 +5104,10 @@ index 0000000..f4d43bf
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..d387439
+index 0000000..7f56e52
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,688 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -5167,6 +5221,7 @@ index 0000000..d387439
 +            val shelter = if (unit.isGreatPersonOfType("War") || unit.getTile().let { it.isCityCenter() && it.getOwner() == unit.civ && !claimed(unit, it) }) null else shelterFor(unit)
 +            orders[unit.id] = Order("hold", shelter?.position?.x?.toInt(), shelter?.position?.y?.toInt())
 +            log(unit.civ, "A ${unit.name} #${unit.id} is at ${where(unit.civ, unit.getTile())} and awaits orders (use, move, or release to the officials)" +
++                (greatImprovementOf(unit)?.let { "; with use, ability improvement, it can raise $it" } ?: "") +
 +                (shelter?.let { if (it.isCityCenter()) "; meanwhile it walks to ${it.getCity()!!.name} and waits there" else "; meanwhile it waits beside ${it.getCity()!!.name}, whose town another of ours holds" } ?: "") + ".")
 +        }
 +        val order = orders[unit.id] ?: return false
@@ -5584,7 +5639,8 @@ index 0000000..d387439
 +            "religion" -> "a city of ours to found or enhance our religion in, or a city of another faith to spread it to"
 +            else -> "movement left this turn"
 +        }
-+        return "it can now ${open.joinToString().ifEmpty { "do nothing here" }}" + (has - open.toSet()).takeIf { it.isNotEmpty() }?.let { blocked -> "; " + blocked.joinToString("; ") { "$it needs ${why(it)}" } }.orEmpty()
++        val named = { word: String -> if (word == "improvement") greatImprovementOf(unit)?.let { "improvement - $it" } ?: word else word }
++        return "it can now ${open.joinToString { named(it) }.ifEmpty { "do nothing here" }}" + (has - open.toSet()).takeIf { it.isNotEmpty() }?.let { blocked -> "; " + blocked.joinToString("; ") { "${named(it)} needs ${why(it)}" } }.orEmpty()
 +    }
 +
 +    /** The way there for a unit given a full turn's movement - orders are given between turns, when units have spent theirs, and Unciv finds no path for a spent unit */
@@ -5699,6 +5755,32 @@ index 0000000..d387439
 +            "trade mission" to listOf(UniqueType.CanTradeWithCityStateForGoldAndInfluence),
 +            "religion" to listOf(UniqueType.MayFoundReligion, UniqueType.MayEnhanceReligion, UniqueType.CanSpreadReligion),
 +            "golden age" to listOf(UniqueType.OneTimeEnterGoldenAge, UniqueType.OneTimeEnterGoldenAgeTurns))
++
++        /** A line of the rulebook in words: "[+2 Science] <after discovering [Scientific Theory]>" -> "+2 Science (after discovering Scientific Theory)" */
++        fun inWords(unique: String) = unique.replace(Regex("\\[([^\\]]*)\\]"), "$1").replace(Regex("\\s*<([^>]*)>"), " ($1)")
++
++        /** Yields in words, without the game's stat icons: "+6 Faith, +1 Gold" */
++        fun statsInWords(stats: com.unciv.models.stats.Stats) = stats.filter { it.value != 0f }.joinToString { "${if (it.value > 0) "+" else ""}${it.value.toInt()} ${it.key.name}" }
++
++        /** Rulebook lines a ruler has no use for: where the map generator puts a thing, and the AI's own weights */
++        fun isRulebookNoise(unique: String) = listOf("Generated", "Minor deposits", "Guaranteed with", "Deposits", "Considered ", "A Region", "Must be adjacent", "Must not be", "Must be on", "Occurs ").any { unique.startsWith(it) }
++            || "for AI decisions" in unique || "Will not be displayed" in unique
++
++        /** A tile improvement told plainly: its yield and the bonuses that come later - or, for one that yields nothing (a Citadel), what it does */
++        fun improvementInWords(improvement: com.unciv.models.ruleset.tile.TileImprovement): String {
++            val stats = statsInWords(improvement.cloneStats()).ifEmpty { null }
++            val later = improvement.uniques.filter { "after discovering" in it || "<" in it && it.startsWith("[+") }.map { inWords(it) }
++            val does = improvement.uniques.filter { it != "Great Improvement" && it !in listOf("Removes removable features when built", "Will not be replaced by automated units") && !it.startsWith("Pillaging") && !it.startsWith("[+") && !isRulebookNoise(it) }.map { inWords(it) }
++            return (listOfNotNull(stats?.let { "$it a turn on a worked tile" }) + later).ifEmpty { does }.joinToString("; ")
++        }
++
++        /** The improvement this unit can raise in an instant (a Great Person's), with what it gives and whether it uses the unit up; null for one that raises none */
++        fun greatImprovementOf(unit: MapUnit): String? {
++            val unique = unit.getMatchingUniques(UniqueType.ConstructImprovementInstantly).firstOrNull() ?: return null
++            val improvement = unit.civ.gameInfo.ruleset.tileImprovements[unique.params[0]] ?: return null
++            val consumed = "consuming" in unique.text
++            return "a ${improvement.name} (${improvementInWords(improvement)}${if (consumed) "; it uses up the ${unit.baseUnit.name}" else ""})"
++        }
 +
 +        /** "(x,y), 3 tiles NE of Rome" */
 +        fun where(civ: Civilization, tile: Tile): String {
