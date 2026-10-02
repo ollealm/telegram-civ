@@ -100,6 +100,8 @@ export type Orders = {
   neverBuild?: string[];
   neverPropose?: string[];
   goldReserve?: number | null;
+  /** Standing: the great power our vote for world leader is pledged to; null withdraws it (we abstain) */
+  worldVote?: string | null;
   /** Standing: when the officials re-arm units with gold on their own */
   officialsRearm?: "always" | "war" | "never";
   /** Immediate: re-arm these units now (unit numbers), or "all" */
