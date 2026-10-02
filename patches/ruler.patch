@@ -3232,10 +3232,10 @@ index 0000000..5afc553
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..43a00af
+index 0000000..936caf0
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1980 @@
+@@ -0,0 +1,1981 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -4939,6 +4939,7 @@ index 0000000..43a00af
 +     *  of ours is afloat and a coastal city of ours could build one (on an archipelago in Run 18 the officials built only Work Boats) */
 +    private fun noShipAtSea(civ: Civilization): String? {
 +        val game = civ.gameInfo
++        if (game.tileMap.mapParameters.type == com.unciv.logic.map.MapType.pangaea) return null // one landmass: every people can be walked to, and the line would only press ships on a court that needs none
 +        val others = game.civilizations.count { it.isMajorCiv() && it.isAlive() && it != civ }
 +        val met = civ.getKnownCivs().count { it.isMajorCiv() && it.isAlive() }
 +        if (met >= others || civ.units.getCivUnits().any { it.isMilitary() && it.baseUnit.isWaterUnit }) return null
