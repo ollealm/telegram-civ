@@ -189,7 +189,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         ...age.enemyMarches.filter((m) => !seats.some((other) => other.civ === m.whose)).map((m) => m.told),
         ...age.enemyLost.map((l) => `${l.whose} lost ${l.what} ${l.at}.`),
         ...age.citiesTaken.map((t) => `${t.city} fell to ${t.by} in ${t.year}.`),
-        ...age.explorers.map((e) => `A ${seat.civ} ${e.what} was seen as far as ${e.reached}.`),
+        ...age.explorers.map((e) => `${/^[AEIOU]/i.test(seat.civ) ? "An" : "A"} ${seat.civ} ${e.what} was seen as far as ${e.reached}.`),
       ];
     }).filter((line, index, all) => all.indexOf(line) === index);
     // Candidates for the oddity of the age, from every realm: the world's lines once, a realm's own lines under its name
