@@ -50,6 +50,8 @@ const attempt = async (action: () => Promise<unknown>) => {
   }
 };
 
+/** A trade item that is a call to war, as the host words it: "declaration of war on <power>" */
+const CALL_TO_WAR = /^(?:an? )?declaration of war on /i;
 const PERSONALITY_VALUES = ["Production", "Food", "Gold", "Science", "Culture", "Happiness", "Faith", "Military", "Aggressive", "DeclareWar", "Commerce", "Diplomacy", "Loyal", "Expansion"] as const;
 const weight = z.number().min(0).max(10);
 const PERSONALITY_HELP =
@@ -88,7 +90,14 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
       "get_options",
       "What we can choose from right now: researchable techs and all future tech names, policy branches, what each city can build and buy (with turns and gold cost), who we could declare war on.",
       {},
-      () => attempt(() => host.options(seat.civ)),
+      // A call to war we would give in a deal is a declaration of war by other means: without the leave declareWar needs, it is not among what we can offer
+      () => attempt(async () => {
+        const options = await host.options(seat.civ);
+        if (seat.kind === "agent" || canRecordWill || seat.mayDeclareWar) return options;
+        const diplomacy = options.diplomacy as { with?: { weCanOffer?: string[] }[] } | undefined;
+        for (const power of diplomacy?.with ?? []) power.weCanOffer = power.weCanOffer?.filter((item) => !CALL_TO_WAR.test(item));
+        return options;
+      }),
     ),
     tool(
       "look_up",
@@ -169,6 +178,9 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
           const warlike = orders.answerDemands.filter((entry) => entry.answer === "refuse" && demands.some((line) => line.startsWith(`${entry.power} demands`) && /promise not to attack/.test(line)));
           if (warlike.length) return { ...text(`Refused: refusing ${warlike.map((entry) => entry.power).join(" and ")}'s demand not to attack them is a declaration of war, and war is the ruler's alone to declare - they have not given you leave. Nothing in this order was carried out - agree, let it lapse (it lapses as agreed), or bring it to the ruler.`), isError: true };
         }
+        // A deal in which we give a declaration of war is one by other means: the same leave
+        if (orders.trade?.some((deal) => deal.give?.some((item) => CALL_TO_WAR.test(item.item))) && seat.kind !== "agent" && !canRecordWill && !seat.mayDeclareWar)
+          return { ...text("Refused: a deal in which we give a declaration of war on another power is a declaration of war, and war is the ruler's alone to declare - they have not given you leave. Nothing in this order was carried out - send the rest again without that item (asking THEM for a declaration of war is open to you), and bring the case for war to the ruler."), isError: true };
         // War is off by default: outside an audience an advisor can only declare it once the ruler has said, in plain words, that they may
         if (orders.declareWar?.length && seat.kind !== "agent" && !canRecordWill && !seat.mayDeclareWar)
           return { ...text("Refused: war is the ruler's alone to declare, and they have not given you leave to declare it on your own. Nothing in this order was carried out - send the rest again without declareWar, and bring the case for war to the ruler."), isError: true };
