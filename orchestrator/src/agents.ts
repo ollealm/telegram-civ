@@ -243,7 +243,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     seat.kind === "agent"
       ? tool(
           "proclaim",
-          "Say one thing aloud that the heralds may carry into the world's chronicle, in your own voice: what you make of the age's events, a mood, a boast, a grievance - the word a sovereign lets fall in the hall, never a plan, the treasury, research or a weakness. Once an age at most, and only when you have something to say; most look-ins say nothing.",
+          "Say one thing aloud that the heralds may carry into the world's chronicle, in your own voice: what you make of the age's events, a mood, a boast, a grievance - the word a sovereign lets fall in the hall, never a plan, the treasury, research or a weakness. A remark is about something that happened in this age, said as you would say it: a motto is not a remark, and a sentence another court could have spoken is not your own. Once an age at most, and only when you have something to say; most look-ins say nothing.",
           strict({ words: z.string().describe("One sentence, as you would say it aloud") }),
           async ({ words }) => {
             if (seat.proclamations?.length) return text("You have spoken once this age already; the heralds carry that.");

@@ -2131,10 +2131,10 @@ index 0000000..f256ed9
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerCampaigns.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerCampaigns.kt
 new file mode 100644
-index 0000000..aa2062e
+index 0000000..6c3c636
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerCampaigns.kt
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,243 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.unciv.logic.GameInfo
@@ -2336,6 +2336,9 @@ index 0000000..aa2062e
 +        val distance = near.getCenterTile().aerialDistanceTo(tile)
 +        val foes = if (mover == civ.civName) near.civ.civName in enemies else near.civ == civ
 +        return when {
++            // A ship's place is told in the sea's words: at a city's harbour, or in the waters off it - never its walls or its fields
++            tile.isWater && distance <= 1 -> "the harbour of ${named(near, civ, mover)}"
++            tile.isWater && distance <= 2 -> "the waters off ${named(near, civ, mover)}"
 +            distance <= 1 && foes -> "the walls of ${named(near, civ, mover)}"
 +            distance <= 2 -> "the fields of ${named(near, civ, mover)}"
 +            // Beyond a city's fields, the country or the waters that way, and distant ones well beyond; never a count of tiles
