@@ -6,6 +6,8 @@
 // wonders=advised leaves the world's wonders to the sovereigns: the game's own peoples raise none.
 // LEAGUE_CHARACTERS=harness/league-characters.json: every seat plays one of a few fixed sovereigns (by the game's leader name) instead of a
 //   freshly drafted one, handed out in turn within each model:effort, so each condition plays the same characters.
+//   A sheet is a person, never a plan: who they are, how they speak, what they trust - no goal for their people. Run 22 showed a goal in a
+//   sheet becomes the seat's aim to the end; the aim comes from the world, or from LEAGUE_AIMS when a league means to force one.
 // LEAGUE_REFLECT_EFFORT: the effort of the closing reviews and interviews - a level (default high, so answers compare across seats)
 //   or "own" to hear each seat at the effort it played at.
 // LEAGUE_MAP_TYPE="Two Continents": the shape of the world (the engine's map types - Pangaea, Small Continents, Continent and Islands, Two Continents,
