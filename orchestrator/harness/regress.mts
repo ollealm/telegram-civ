@@ -1,0 +1,268 @@
+// The saved-world half of the checks (smoke.mts is the other: every lever once on a new world). Each case starts its own host on a copy of a fixture
+// (data/fixtures, see its INDEX.md), plants a failure where it needs one (RULER_FAULT), gives orders, plays turns, and asserts on replies, briefings,
+// chancery lines, public events and exit codes - the reproductions the fixes of 2026-10-03 were proven on, kept.
+// Run:  npx tsx harness/regress.mts [case ...]        (all cases when none named; e.g. F1 W2)
+// REGRESS_PORT (default 8772; never 8765 or 8790), FIXTURES_DIR (default ../data/fixtures), HOST_SH (default ../host.sh). Sequential; about a minute on this machine (each host answers in a few seconds).
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { cpSync, existsSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+const PORT = Number(process.env.REGRESS_PORT ?? 8772);
+if (PORT === 8765 || PORT === 8790) throw new Error("REGRESS_PORT must not be a live or league host's port");
+const FIXTURES = resolve(process.env.FIXTURES_DIR ?? "../data/fixtures");
+const HOST_SH = resolve(process.env.HOST_SH ?? "../host.sh");
+const BASE = `http://127.0.0.1:${PORT}`;
+
+const results: { name: string; ok: boolean; detail: string }[] = [];
+const check = (name: string, ok: boolean, detail = "") => {
+  results.push({ name, ok, detail });
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? "  - " + detail.slice(0, 300) : ""}`);
+};
+
+type Host = { dir: string; proc: ChildProcess; exited: Promise<number | null>; log: string };
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+  const response = await fetch(BASE + path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await response.text();
+  let json: any; try { json = JSON.parse(text); } catch { json = text; }
+  return { status: response.status, json };
+}
+const get = (path: string) => call("GET", path);
+const post = (path: string, body: unknown = {}) => call("POST", path, body);
+const civ = (name: string) => encodeURIComponent(name);
+const logOf = async (name: string, since: number) => ((await get(`/log?civ=${civ(name)}&since=${since}`)).json as { turn: number; text: string }[]);
+const orders = (name: string, body: unknown) => post(`/orders?civ=${civ(name)}`, body);
+
+async function portFree() { for (let i = 0; i < 60; i++) { try { await fetch(BASE + "/state"); await sleep(500); } catch { return; } } throw new Error(`port ${PORT} stays busy`); }
+
+/** A save edited before the host loads it (base64 of gzipped JSON), for a case that needs a state no league left behind */
+type SaveEdit = (game: any) => void;
+function editSave(dir: string, edit: SaveEdit) {
+  const file = join(dir, "save.unciv");
+  const game = JSON.parse(gunzipSync(Buffer.from(readFileSync(file, "utf8"), "base64")).toString("utf8"));
+  edit(game);
+  writeFileSync(file, gzipSync(Buffer.from(JSON.stringify(game))).toString("base64"));
+}
+
+/** A host on a fresh copy of the fixture (or on the given directory, for a restart), with RULER_FAULT when the case plants one */
+async function start(fixture: string, fault = "", dir?: string, edit?: SaveEdit): Promise<Host> {
+  await portFree();
+  const at = dir ?? mkdtempSync(join(tmpdir(), `regress-${fixture}-`));
+  if (!dir) cpSync(join(FIXTURES, fixture), at, { recursive: true });
+  if (edit) editSave(at, edit);
+  const log = join(at, "host-run.log");
+  const out = openSync(log, "a");
+  const proc = spawn("/bin/zsh", [HOST_SH, at, String(PORT)], { env: { ...process.env, RULER_FAULT: fault }, stdio: ["ignore", out, out] });
+  const exited = new Promise<number | null>((done) => proc.on("exit", (code) => done(code)));
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(BASE + "/state")).ok) return { dir: at, proc, exited, log }; } catch { /* not up yet */ } await sleep(1000); }
+  proc.kill("SIGTERM");
+  throw new Error(`host on ${fixture} did not answer within two minutes (see ${log})`);
+}
+async function stop(host: Host) { if (host.proc.exitCode === null) { host.proc.kill("SIGTERM"); await Promise.race([host.exited, sleep(10000)]); } }
+const selfChecks = (host: Host) => existsSync(join(host.dir, "selfcheck.log")) ? readFileSync(join(host.dir, "selfcheck.log"), "utf8").trim().split("\n").filter(Boolean) : [];
+const hostLog = (host: Host) => readFileSync(host.log, "utf8");
+
+/** Each case: its own host(s), its own assertions; a case that throws is a FAIL, and the next still runs */
+const CASES: Record<string, () => Promise<void>> = {
+  // ---- planted failures: the guards of the robustness pair ----
+  async F1() { // a turn the engine fails partway: reload, every court told, 503, exit 3; restarted, the world is the turn before
+    const host = await start("run22-t234-greece", "engine:Greece");
+    const first = await post("/advance", { turns: 1 });
+    check("F1 the failed turn answers 500 'could not be played'", first.status === 500 && /could not be played/.test(JSON.stringify(first.json)), JSON.stringify(first.json));
+    const second = await post("/advance", { turns: 1 }).catch(() => ({ status: 0, json: "gone" }));
+    check("F1 a second advance before the exit is refused (503) or finds the host gone", second.status === 503 || second.status === 0, `${second.status}`);
+    const code = await Promise.race([host.exited, sleep(10000).then(() => "still running")]);
+    check("F1 the host exits with code 3", code === 3, `${code}`);
+    const again = await start("run22-t234-greece", "", host.dir);
+    check("F1 restarted, the world is at turn 234", (await get("/state")).json.turn === 234);
+    check("F1 every court was told", (await Promise.all(["Greece", "Inca", "Japan"].map((name) => logOf(name, 233)))).every((lines) => lines.some((line) => /The turn could not be played/.test(line.text))));
+    await stop(again);
+  },
+  async F2() { // one court's bookkeeping fails: its line says so, the others' are whole, the turns are saved and backed up
+    const host = await start("run22-t234-greece", "chancery:Greece");
+    const a = await post("/advance", { turns: 1 }), b = await post("/advance", { turns: 1 });
+    check("F2 both turns play", a.status === 200 && b.status === 200, `${a.status} ${b.status}`);
+    check("F2 Greece's chancery says its account could not be finished", (await logOf("Greece", 234)).some((line) => /could not be finished/.test(line.text)));
+    check("F2 another court's turn is told", (await logOf("Inca", 234)).some((line) => line.turn === 235));
+    check("F2 both turns are backed up", ["turn-0235", "turn-0236"].every((name) => existsSync(join(host.dir, "backups", name))));
+    await stop(host);
+  },
+  async F3() { // an order item that throws: under failed, the rest done, the standing order saved
+    const host = await start("run22-t234-greece", "order");
+    const reply = await orders("Greece", { goldReserve: 777, cityFocus: [{ city: "Athens", focus: "Gold" }, { city: "Sparta", focus: "Science" }] });
+    check("F3 the failing item is under failed", (reply.json.failed ?? []).some((line: string) => /RULER_FAULT/.test(line)), JSON.stringify(reply.json.failed));
+    check("F3 the next item went on", (reply.json.done ?? []).some((line: string) => /Sparta/.test(line)), JSON.stringify(reply.json.done));
+    check("F3 the standing order is saved", JSON.parse(readFileSync(join(host.dir, "host.json"), "utf8")).orders.Greece.goldReserve === 777);
+    await stop(host);
+  },
+  async F4() { // a hook that throws inside the engine's turn: the engine's default, the turn goes on, the self-check counts it
+    const host = await start("run20-t279-barbarians", "hook");
+    const a = await post("/advance", { turns: 1 });
+    check("F4 the turn plays", a.status === 200 && a.json.turn === 280, `${a.status}`);
+    check("F4 the fallback is in selfcheck.log", selfChecks(host).some((line) => /\thook\t/.test(line)), selfChecks(host).slice(0, 2).join(" | "));
+    check("F4 the next turn plays", (await post("/advance", { turns: 1 })).status === 200);
+    await stop(host);
+  },
+  async F5() { // a unit the officials cannot move: that unit's turn, never the turn
+    const host = await start("run22-t234-greece", "move");
+    const a = await post("/advance", { turns: 1 });
+    const told = (await Promise.all(["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"].map((name) => logOf(name, 234)))).flat();
+    check("F5 the turn plays", a.status === 200);
+    check("F5 one unit 'could not be moved this turn'", told.some((line) => /could not be moved this turn/.test(line.text)));
+    await stop(host);
+  },
+  async F6() { // the trail, the world's events and the vote steps fail: each skipped, the save still reached
+    const host = await start("run22-t234-greece", "trail,events,vote");
+    const a = await post("/advance", { turns: 1 });
+    check("F6 the turn plays and is saved", a.status === 200 && existsSync(join(host.dir, "backups", "turn-0235")));
+    check("F6 each failed step is printed", ["the trail", "the world's events", "the world's vote"].every((step) => hostLog(host).includes(`Bookkeeping step failed (${step})`)));
+    await stop(host);
+  },
+
+  // ---- saved worlds: the fixes as they were proven ----
+  async W1() { // Greece declares on Inca under attack: the garrison stays, the swept deals named, the allies told, the events two lines
+    const host = await start("run22-t234-greece");
+    const reply = await orders("Greece", { declareWar: ["Inca"], posture: { warAim: "Cuzco", stance: "attack", reserve: 3 } });
+    check("W1 the declaration names the agreement paid and lost", (reply.json.done ?? []).some((line: string) => /paid and now lost/.test(line)), JSON.stringify(reply.json.done).slice(0, 200));
+    for (const turn of [235, 236]) {
+      await post("/advance", { turns: 1 });
+      const units = (await get(`/briefing?civ=Greece`)).json.units as string[];
+      check(`W1 T${turn}: the garrison #69 is still in Sparta`, units.some((line) => /#69 at \(7,6\), in Sparta/.test(line)), units.find((line) => /#69/.test(line)) ?? "gone");
+    }
+    const events = ((await get("/events")).json as { turn: number; text: string }[]).filter((event) => event.turn === 235);
+    check("W1 the world's events: one declaration, one line of joins", events.some((event) => event.text === "Greece declared war on Inca.") && events.filter((event) => /joined the war/.test(event.text)).length === 1, events.map((event) => event.text).join(" | "));
+    await stop(host);
+  },
+  async W1b() { // raid with a reserve: no siege, the garrison stays
+    const host = await start("run22-t234-greece");
+    await orders("Greece", { declareWar: ["Inca"], posture: { warAim: "Cuzco", stance: "raid", reserve: 3 } });
+    await post("/advance", { turns: 3 });
+    const units = (await get(`/briefing?civ=Greece`)).json.units as string[];
+    check("W1b raid: the garrison #69 is still in Sparta after three turns", units.some((line) => /#69 at \(7,6\), in Sparta/.test(line)));
+    await stop(host);
+  },
+  async W2() { // Persia declares on England: Polynesia drawn in by its pact, told so; the joins folded
+    const host = await start("run23-t236-persia");
+    await orders("Persia", { declareWar: ["England"] });
+    const turn = await post("/advance", { turns: 1, wake: true });
+    check("W2 drawnIn names Polynesia at England's side", JSON.stringify(turn.json.drawnIn ?? []).includes("Polynesia") && JSON.stringify(turn.json.drawnIn).includes("England"), JSON.stringify(turn.json.drawnIn));
+    const events = ((await get("/events")).json as { text: string }[]).map((event) => event.text);
+    check("W2 the event: Polynesia came in by its pact", events.some((text) => /Polynesia came in at England's side by its pact/.test(text)));
+    const persia = await logOf("Persia", 236);
+    check("W2 Persia's joins are folded into one line per foe", persia.filter((line) => /have joined us in the war against England/.test(line.text)).length === 1 && !persia.some((line) => /^Quebec City has joined/.test(line.text)));
+    check("W2 Polynesia's chancery: joined England", (await logOf("Polynesia", 236)).some((line) => /We have joined England in the war against Persia/.test(line.text)));
+    await stop(host);
+  },
+  async W3() { // faith above the reserve; a free technology to the goal
+    const host = await start("run23-t241-persia");
+    await post(`/grant?civ=Persia`, { faith: 5000 });
+    await orders("Persia", { faithReserve: 4000, research: ["Lasers"] });
+    await post(`/grant?civ=Persia`, { freeTechs: 1 });
+    await post("/advance", { turns: 1 });
+    const religion = (await get(`/briefing?civ=Persia`)).json.religion;
+    const stored = typeof religion === "object" ? religion.faithStored : Number(/faith (\d+) stored/.exec(religion)?.[1]);
+    check("W3 the officials left the reserve", stored >= 4000, `${stored}`);
+    check("W3 the free technology went to the goal", (await logOf("Persia", 241)).some((line) => /A free technology: Lasers/.test(line.text)));
+    await stop(host);
+  },
+  async W4() { // a marriage by order: the city joins, the world hears it, nothing "destroyed"
+    const host = await start("run21-t294-austria");
+    await post("/advance", { turns: 3 });
+    const reply = await orders("Austria", { marry: ["Manila"] });
+    check("W4 Manila joined by marriage", (reply.json.done ?? []).some((line: string) => /joined us by marriage/.test(line)), JSON.stringify(reply.json).slice(0, 300));
+    const events = ((await get("/events")).json as { text: string }[]).map((event) => event.text);
+    check("W4 the world's event", events.includes("Manila joined Austria by marriage into its ruling family."));
+    const next = await post("/advance", { turns: 1, wake: true });
+    check("W4 no court woken by a city-state 'destroyed'", !JSON.stringify(next.json.wake ?? {}).includes("destroyed"));
+    await stop(host);
+  },
+  async W5() { // the vote: the United Nations raised again by Egypt sets one countdown for every power, a pledged vote is cast, the tally is told once
+    // The fixture's own countdown carries Run 19's desync (the fix applies when the UN is built): the UN is taken down and put back in Thebes' queue, finished
+    const host = await start("run19-t230-un", "", undefined, (game) => {
+      for (const civ of game.civilizations) { delete civ.flagsCountdown?.TurnsTillNextDiplomaticVote; delete civ.flagsCountdown?.ShouldResetDiplomaticVotes;
+        for (const city of civ.cities ?? []) { const built = city.cityConstructions; if (!built.builtBuildings?.includes("United Nations")) continue;
+          built.builtBuildings = built.builtBuildings.filter((name: string) => name !== "United Nations");
+          built.constructionQueue = ["United Nations", ...(built.constructionQueue ?? []).filter((name: string) => name !== "United Nations")];
+          (built.inProgressConstructions ??= {})["United Nations"] = 99999; } }
+      game.diplomaticVictoryVotesCast = {};
+    });
+    const courts = ["China", "Byzantium", "Siam", "Egypt", "The Ottomans", "India"];
+    await post("/advance", { turns: 1 });
+    const lines = await Promise.all(courts.map(async (name) => (await get(`/briefing?civ=${civ(name)}`)).json.victory?.diplomatic?.unitedNations as string));
+    const countdowns = lines.map((line) => /next vote in (\d+) turns?|votes this turn/.exec(line ?? "")?.[0]);
+    check("W5 every court reads the same countdown after the UN is built", new Set(countdowns).size === 1 && countdowns[0] !== undefined, countdowns.join(" | "));
+    await orders("India", { worldVote: "Egypt" });
+    for (let i = 0; i < 11; i++) await post("/advance", { turns: 1 });
+    check("W5 India's vote went to Egypt by its pledge", (await logOf("India", 231)).some((line) => /our vote went to Egypt/.test(line.text)));
+    const counted = await Promise.all(courts.map(async (name) => (await logOf(name, 231)).filter((line) => /The world's vote for its leader was counted/.test(line.text)).length));
+    check("W5 every court hears the tally once", counted.every((count) => count === 1), counted.join(","));
+    await stop(host);
+  },
+  async W6() { // war at sea and on land in the world's words: no hit-point arithmetic, no "An enemy", no raw templates
+    const host = await start("run20-t279-barbarians");
+    await post("/advance", { turns: 3 });
+    const all = (await Promise.all(["France", "Spain", "Inca", "Songhai", "Rome"].map((name) => logOf(name, 279)))).flat();
+    check("W6 no '(-N HP)' in any chancery line", !all.some((line) => /\(-\d+ HP\)/.test(line.text)));
+    check("W6 no engine 'An enemy ...' line", !all.some((line) => /^An enemy /.test(line.text)));
+    check("W6 no brackets or braces", !all.some((line) => /[[\]{}]/.test(line.text)));
+    await stop(host);
+  },
+  async W7() { // the war estimate: enemies first, each city with how we stand with its power
+    const host = await start("run21-t300-war");
+    const cities = (await get(`/briefing?civ=Aztecs`)).json.warEstimate?.citiesWeHaveSeen as { ourRelation: string }[];
+    const firstPeace = cities.findIndex((city) => city.ourRelation !== "at war"), lastWar = cities.map((city) => city.ourRelation).lastIndexOf("at war");
+    check("W7 enemy cities first", cities[0]?.ourRelation === "at war" && (firstPeace === -1 || firstPeace > lastWar), cities.slice(0, 4).map((city) => city.ourRelation).join(","));
+    await stop(host);
+  },
+  async W8() { // a fallen realm has no briefing; a won game plays no more
+    const host = await start("run23-t245-won");
+    check("W8 a fallen realm's briefing is 410", (await get(`/briefing?civ=Iroquois`)).status === 410);
+    check("W8 a won game refuses to advance (409)", (await post("/advance", { turns: 1 })).status === 409);
+    await stop(host);
+  },
+  async W9() { // mid-game briefing size and the one-line sections
+    const host = await start("t100-world");
+    for (const name of ["Greece", "Babylon", "Japan", "Inca", "Iroquois", "The Ottomans"]) {
+      const brief = (await get(`/briefing?civ=${civ(name)}`)).json;
+      const size = JSON.stringify(brief).length;
+      check(`W9 ${name}: briefing at most 16 KB, without score, goldBreakdown or victory.note`, size <= 16000 && !("score" in brief) && !("goldBreakdown" in brief) && !("note" in (brief.victory ?? {})), `${size}`);
+      check(`W9 ${name}: the spaceship and the vote are one line before they matter`, typeof brief.spaceship === "string" && Object.keys(brief.victory?.diplomatic ?? {}).join() === "unitedNations");
+    }
+    await stop(host);
+  },
+  async W9b() { // late-game briefing size
+    const host = await start("run22-t234-greece");
+    for (const name of ["Greece", "Babylon", "Japan"]) {
+      const size = JSON.stringify((await get(`/briefing?civ=${civ(name)}`)).json).length;
+      check(`W9b ${name}: late briefing at most 30 KB`, size <= 30000, `${size}`);
+    }
+    await stop(host);
+  },
+  async W10() { // "all" barred: no officials' proposal or demand in ten turns; the faith reserve kept
+    const host = await start("run22-t234-greece");
+    const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
+    for (const name of courts) await orders(name, { neverPropose: ["all"], faithReserve: 10000 });
+    await post("/advance", { turns: 10 });
+    const all = (await Promise.all(courts.map((name) => logOf(name, 234)))).flat();
+    check("W10 no officials' proposal", !all.some((line) => /^The officials proposed/.test(line.text)), all.find((line) => /^The officials proposed/.test(line.text))?.text);
+    check("W10 no officials' demand", !all.some((line) => /^The officials made a demand/.test(line.text)));
+    check("W10 no officials' faith spent past a 10,000 reserve", !all.some((line) => /^The officials spent \d+ faith/.test(line.text)));
+    check("W10 ten turns backed up", existsSync(join(host.dir, "backups", "turn-0244")));
+    await stop(host);
+  },
+};
+
+const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(CASES);
+const started = Date.now();
+for (const name of wanted) {
+  const run = CASES[name];
+  if (!run) { check(`${name}: no such case`, false); continue; }
+  try { await run(); } catch (error) { check(`${name} ran to the end`, false, String((error as Error).message)); }
+}
+const failed = results.filter((result) => !result.ok);
+console.log(`\n${results.length - failed.length} of ${results.length} checks passed in ${Math.round((Date.now() - started) / 1000)} s${failed.length ? `; failed: ${failed.map((result) => result.name).join("; ")}` : ""}`);
+process.exit(failed.length ? 1 : 0);

@@ -3,6 +3,9 @@
 !.env.example
 node_modules/
 dist/
-data/
+data/*
+!data/fixtures/
+data/fixtures/*
+!data/fixtures/INDEX.md
 unciv/
 .DS_Store
