@@ -103,6 +103,13 @@ export type RoundResult = {
   rankings: { civ: string; score: number; cities: number }[];
 };
 
+/** The host's lists (GET /schema): an order's fields by kind, the officials' acts by default, and the words each field takes */
+export type HostSchema = {
+  orderFields: { standing: string[]; immediate: string[]; orchestrator: string[] };
+  officials: { open: string[]; closed: string[]; never: string[] };
+  unitActions: string[]; abilities: string[]; stances: string[]; cityActions: string[]; cityFocus: string[];
+};
+
 export type Orders = {
   /** The war leave, held by the host and checked there for every way of declaring war: a sovereign's always, an advisor's by the ruler's plain word */
   mayDeclareWar?: boolean;
@@ -188,6 +195,8 @@ export const host = {
   options: (civ: string, audience = false) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ) + (audience ? "&audience=1" : "")),
   /** The standing orders as the host holds them */
   standing: (civ: string) => call<Record<string, unknown>>("GET", "/orders" + civQuery(civ)),
+  /** The lists an order is checked against: the tools list the same */
+  schema: () => call<HostSchema>("GET", "/schema"),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
   /** Any people's cities with their lie of the land, largest first - a painter's anchor */
