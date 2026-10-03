@@ -79,14 +79,24 @@ export type Campaign = {
   fromXY: [number, number]; toXY: [number, number]; route: [number, number][];
 };
 
+/** One war of an emergency council, as the host saw it declared: who drew the sword, on whom, and who was pulled in by a pact; a war the host only
+ *  found at war (no declaration seen) has null for both powers and its bare fact in news */
+export type CouncilWar = { declaredBy: string | null; target: string | null; drawnIn: { civ: string; with: string }[]; news: string };
+
 export type RoundResult = {
   fromTurn: number;
   fromYear: string;
   turn: number;
   year: string;
   stoppedEarly: string | null;
-  /** The ruled realm whose own order began the war that stopped the round, if one did */
+  /** The power that declared the first war of the council that stopped the round (a ruled realm's own order among them), if the host saw it declared */
   declaredBy?: string | null;
+  /** The power it declared on */
+  target?: string | null;
+  /** The pact partners pulled into that war, each with the partner whose pact drew it in */
+  drawnIn?: CouncilWar["drawnIn"];
+  /** Every war of the council, the first of them repeated in the three fields above */
+  wars?: CouncilWar[];
   /** civ -> what just happened that its advisor should see before the next scheduled look-in */
   wake?: Record<string, string[]>;
   publicEvents: PublicEvent[];

@@ -149,10 +149,14 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       // One ruler's failed letter must not cost the others theirs
       const summoned = await Promise.allSettled(
         rulers.map(async (seat) => {
-          // A ruler whose own order began the war hears how it has begun, not that they were attacked; any other realm the news names was struck
-          const part = finished.declaredBy === seat.civ ? "declarer" : news.includes(seat.civ) ? "struck" : "other";
+          // A ruler whose own order began the war hears how it has begun, not that they were attacked; one pulled in by its own pact hears that; the realm
+          // declared on was struck. The host's fields say which; a war it only found at war names nobody, and a realm the sentence names was struck
+          const war = (finished.wars ?? []).find((w) => w.declaredBy === seat.civ || w.target === seat.civ || w.drawnIn.some((d) => d.civ === seat.civ));
+          const pact = war?.drawnIn.find((d) => d.civ === seat.civ)?.with;
+          const part = war ? (war.declaredBy === seat.civ ? "declarer" : pact ? "drawnIn" : "struck")
+            : finished.declaredBy === seat.civ ? "declarer" : news.includes(seat.civ) ? "struck" : "other";
           const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
-          const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing, part));
+          const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing, part, pact));
           // The ruler must see at a glance that this is not the regular audience, and may dismiss it with one tap
           dispatch.heading = `Emergency council, ${finished.year}: ${news.replace(/[.!]+$/, "")}.`;
           dispatch.question = [dispatch.question, "/onward"].filter(Boolean).join("\n\n");
