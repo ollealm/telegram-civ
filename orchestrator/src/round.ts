@@ -212,7 +212,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     const settled = await Promise.allSettled([
       ...seats.map(async (seat) => {
         const governLogs = notes.get(seat.civ)!;
-        const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
+        // The letter reads the whole age's log, not the host's last twelve turns (the first age is 24 turns long)
+        const briefing = await host.briefing(seat.civ, finished.fromTurn).catch(() => ({ note: `${seat.civ} is no more.` }));
         if (seat.kind === "agent") {
           // An agent realm holds no council with itself: its journal is its own look-in notes, and it weighs the longer game at the first look-in of the next age
           const entry = governLogs.map((note) => note.replace(/^T\d+: /, "")).filter((note) => !/^nothing to change/i.test(note)).join(" ");

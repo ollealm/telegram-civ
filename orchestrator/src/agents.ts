@@ -260,6 +260,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
           "Let something the ruler said this audience leak to the heralds, for the world's chronicle: a remark, a mood, a turn of phrase with their character in it - the small detail a court gossips about, never a plan, the treasury, research or a weakness. Once an audience at most, when they said anything with their own voice in it; nothing if they did not.",
           strict({ words: z.string().describe(`What was heard, kept close to the ruler's own phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}, on the Russian offer: a pact is a pact, and Moscow will learn what that costs."`) }),
           async ({ words }) => {
+            if (seat.proclamations?.length) return text("Something already leaked from this audience; the heralds carry that.");
             (seat.proclamations ??= []).push(words);
             persist();
             return text("The heralds have it.");
@@ -429,7 +430,7 @@ const TELEGRAM_STYLE =
 const WHILE_AWAY = "While the ruler is away you use your judgement within their wishes: you spend, build and negotiate towards them, settle the small and the plainly right on your own, and bring the real forks in the road - the risky, the costly to undo, anything that touches war or a sworn word - to the next audience. If the ruler has told you to ask first about something, or given you leave to do more on your own, it stands in your record of their wishes and it governs.";
 
 /** How the host answers to orders, for advisors and sovereigns alike */
-const HOST_FACTS = "A soldier under your own order (move, garrison, fortify, hold) is out of the officials' hands: it stands where you put it and never attacks until you release it. The briefing's warEstimate is the chancery's reckoning of every enemy city we have seen against our engines, and citiesNeverSeen what we have not seen - read it before you weigh the odds of a war or choose its aim. The court's tools reach you under the prefix mcp__realm__ (set_orders is mcp__realm__set_orders, and so for each); the names here leave the prefix off.";
+const HOST_FACTS = "A soldier under your own order (move, garrison, fortify, hold) is out of the officials' hands: it stands where you put it and never attacks until you release it. warEstimate is the chancery's reckoning of every rival city we have seen against our engines, enemies first and each with how we stand with its power, and citiesNeverSeen what we have not seen - read it before you weigh the odds of a war or choose its aim. At war (or with a war aim) it is in the briefing; at peace the briefing holds only a note, and the table is in get_options. The court's tools reach you under the prefix mcp__realm__ (set_orders is mcp__realm__set_orders, and so for each); the names here leave the prefix off.";
 
 /** War: a ruler's advisor may declare it only on the ruler's word or recorded leave; a sovereign declares it for its own reasons (the passage below) */
 const warRule = (seat: Seat) =>
@@ -521,12 +522,11 @@ If you met a decision in this look-in that you truly wished you could have put t
 /** Where the realm stands among the powers it knows - computed from the briefing, so it cannot drift with the advisor's mood */
 export const standingOf = (briefing: any, rankings: RoundResult["rankings"] = []): string => {
   if (!briefing?.knownCivs) return "";
-  // The scores are the round's own rankings: the briefing no longer carries each power's score
-  const rivals = (briefing.knownCivs as any[]).filter((civ) => typeof civ.techs === "number").map((civ) => ({ ...civ, score: rankings.find((rank) => rank.civ === civ.civ)?.score ?? 0 }));
+  const rivals = (briefing.knownCivs as any[]).filter((civ) => typeof civ.techs === "number");
   if (!rivals.length) return "We know no other great power yet.";
-  const us = { civ: "we", techs: Array.isArray(briefing.techsResearched) ? briefing.techsResearched.length : Number(briefing.techsResearched), militaryStrength: briefing.militaryStrength, cities: briefing.cities?.length ?? 0, score: briefing.score };
+  const us = { civ: "we", techs: Array.isArray(briefing.techsResearched) ? briefing.techsResearched.length : Number(briefing.techsResearched), militaryStrength: briefing.militaryStrength, cities: briefing.cities?.length ?? 0 };
   const ordinal = (place: number) => ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth"][place - 1] ?? `${place}th`;
-  const line = (label: string, key: "techs" | "militaryStrength" | "cities" | "score") => {
+  const line = (label: string, key: "techs" | "militaryStrength" | "cities") => {
     const table = [us, ...rivals].sort((a, b) => b[key] - a[key]);
     const place = table.findIndex((row) => row.civ === "we") + 1;
     const leader = table[0];
@@ -534,7 +534,12 @@ export const standingOf = (briefing: any, rankings: RoundResult["rankings"] = []
     const gap = ratio >= 3 ? "by a wide margin" : ratio >= 1.5 ? "clearly" : ratio >= 1.15 ? "by some way" : "narrowly";
     return `${label}: ${ordinal(place)} of ${table.length}${leader.civ === "we" ? `, leading ${gap}` : ` - ${leader.civ} leads ${gap}`}`;
   };
-  return [line("Learning", "techs"), line("Arms", "militaryStrength"), line("Cities", "cities"), line("Overall", "score")].join("; ") + ".";
+  // Overall: the place in the world's reckoning (the round's rankings, foremost first) among the powers we know - the order only, never the figure, which no ruler sees
+  const known = new Set([briefing.civ, ...rivals.map((civ) => civ.civ)]);
+  const order = rankings.map((rank) => rank.civ).filter((civ) => known.has(civ));
+  const place = order.indexOf(briefing.civ) + 1;
+  const overall = place > 0 ? `Overall: ${ordinal(place)} of ${order.length}${place === 1 ? "" : ` - ${order[0]} foremost`}` : undefined;
+  return [line("Learning", "techs"), line("Arms", "militaryStrength"), line("Cities", "cities"), overall].filter(Boolean).join("; ") + ".";
 };
 
 export type Dispatch = { /** What the realm's people did in the age, from the host; the campaign map is painted from it */ age?: AgeSummary; /** A line above the letter: the advisor's own summons, or the round's reason for an emergency council */ heading?: string; text: string; strategy: string; question: string; image?: { caption: string; description: string }; journal: string };
@@ -544,16 +549,18 @@ const Letter = z.object({ summons: z.string(), dispatch: z.string(), strategy: z
 
 /** The chancery's lines as a letter should weigh them: deals folded into one line, the housekeeping (re-arming, research steps, treasury, garrison shuffles) left out */
 const forTheLetter = (briefing: unknown) => {
-  const b = briefing as { log?: { turn: number; text: string }[] } | undefined;
+  const b = briefing as { log?: string[] } | undefined;
   if (!b?.log) return briefing;
   const struck: string[] = []; const ended: string[] = [];
-  const kept = b.log.filter(({ text }) => {
+  // The briefing's log lines are strings, "T238: ..." - the fold once read them as {turn, text} and folded nothing (audit 2026-10-03)
+  const kept = b.log.filter((line) => {
+    const text = String(line).replace(/^T\d+: /, "");
     const deal = /^Deals: /.exec(text);
     if (deal) { /in force with ([^.]+)/.exec(text)?.[1] && struck.push(/in force with ([^.]+)/.exec(text)![1]); /ended with ([^.]+)/.exec(text)?.[1] && ended.push(/ended with ([^.]+)/.exec(text)![1]); return false; }
-    return !/offers a deal|We proposed a trade|Our proposal to|The officials proposed a deal|By your order: we (accepted|refused)|re-arming|relieved the|marches in to garrison|Research is now on|The treasury now holds|The officials spent|The officials queued|rewarded you with|has been built in|earlier lines omitted/.test(text);
+    return !/offers a deal|We proposed a trade|Our proposal to|The officials proposed a deal|By your order: we (accepted|refused)|re-arming|relieved the|marches in to garrison|Research is now on|The treasury now holds|The officials spent|The officials queued|rewarded (?:you|us) with|has been built in|earlier lines omitted/.test(text);
   });
   const digest = [struck.length && `Deals struck in these years: ${struck.join("; ")}.`, ended.length && `Deals that ended: ${ended.join("; ")}.`].filter(Boolean).join(" ");
-  return { ...b, log: digest ? [...kept, { turn: 0, text: digest }] : kept };
+  return { ...b, log: digest ? [...kept, digest] : kept };
 };
 
 /** inputs: "deeds" (the age summary first, the ledger folded) or "ledger" (the chancery's every line, as letters were written before 2026-09-25) */
@@ -681,7 +688,7 @@ With the chapter go one or two images: pictures for it, as a painter of the peri
       section("Events of these years", round.publicEvents.map((event) => `${event.year}: ${event.text}`)),
       section("What the armies and ships did in these years, as the world saw it", campaigns.map((line) => `- ${line}`)),
       section("Said in the courts and halls in these years", proclamations),
-      section("The standing of the great powers now, by score", round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`)),
+      section("The standing of the great powers now, foremost first", round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`)),
       section("Who rules where", cast),
       alreadyPainted(["chronicle"]),
       ...(earlier.length ? [section("Further back, before your last chapters", earlier.map((event) => `${event.year}: ${event.text}`))] : []),
