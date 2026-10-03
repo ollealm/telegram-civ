@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..1b63a36
+index 0000000..f6de922
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,205 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -140,6 +140,17 @@ index 0000000..1b63a36
 +        try { move() } catch (ex: Exception) {
 +            System.err.println("The officials could not move ${unit.civ.civName}'s ${unit.name} #${unit.id}: $ex")
 +            unitNotMoved?.invoke(unit.civ, unit, if (ex is com.unciv.logic.map.mapunit.movement.UnitMovement.UnreachableDestinationException) "the way the officials chose for it would not open" else "the officials' routine failed on it")
++        }
++    }
++
++    /** Called with (civ, what, why) when a block of a ruled civ's officials' work moving several units at once failed: the turn goes on without it */
++    @Volatile var blockFailed: ((Civilization, String, String) -> Unit)? = null
++    /** A block of the officials' work for a ruled civ ([what]: "escorting our settlers"): whatever goes wrong skips that block for the turn, never the turn itself */
++    fun guardedBlock(civ: Civilization, what: String, block: () -> Unit) {
++        if (civ.civID !in ruledCivs) return block()
++        try { block() } catch (ex: Exception) {
++            System.err.println("The officials could not finish $what for ${civ.civName}: $ex")
++            blockFailed?.invoke(civ, what, if (ex is com.unciv.logic.map.mapunit.movement.UnitMovement.UnreachableDestinationException) "a way they chose would not open" else "their routine failed")
 +        }
 +    }
 +
@@ -284,7 +295,7 @@ index 5474cfd..ddda57d 100644
          val enemyCivs = civInfo.getCivsAtWarWith().filter { it.isMajorCiv() }
              .sortedByDescending { it.getStatForRanking(RankingType.Force) }
 diff --git a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
-index b997da7..52fa47a 100644
+index b997da7..a2828c3 100644
 --- a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 @@ -2,6 +2,7 @@ package com.unciv.logic.automation.civilization
@@ -368,7 +379,7 @@ index b997da7..52fa47a 100644
              }
              .toList()
  
-@@ -415,7 +422,10 @@ object NextTurnAutomation {
+@@ -415,16 +422,22 @@ object NextTurnAutomation {
          for (unit in sortedUnits) {
              // settlers need to move before automateSettlerEscorting(),
              // move spaceship parts before that to make sure we're not blocking them
@@ -379,8 +390,11 @@ index b997da7..52fa47a 100644
 +            }
          }
  
-         if (civInfo.cities.isNotEmpty()) automateSettlerEscorting(civInfo)
-@@ -424,7 +434,10 @@ object NextTurnAutomation {
+-        if (civInfo.cities.isNotEmpty()) automateSettlerEscorting(civInfo)
++        if (civInfo.cities.isNotEmpty()) RulerOverrides.guardedBlock(civInfo, "escorting our settlers") { automateSettlerEscorting(civInfo) }
+ 
+-        for (city in citiesRequiringManualPlacement) automateCityConquer(civInfo, city)
++        for (city in citiesRequiringManualPlacement) RulerOverrides.guardedBlock(civInfo, "the assault on ${city.name}") { automateCityConquer(civInfo, city) }
  
          for (unit in sortedUnits) {
              // spaceship parts and settlers have already moved
@@ -3416,10 +3430,10 @@ index 0000000..f1ae69e
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..c786974
+index 0000000..956fb42
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,2076 @@
+@@ -0,0 +1,2077 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -3543,6 +3557,7 @@ index 0000000..c786974
 +            false
 +        } }
 +        RulerOverrides.hasOrder = { unit -> unit.id in units.orders }
++        RulerOverrides.blockFailed = { civ, what, why -> log(civ, "The officials could not finish $what this turn: $why. The units it moved stand where they were left, and the officials try again next turn.") }
 +        RulerOverrides.unitNotMoved = { civ, unit, why -> log(civ, "Our ${unit.name} #${unit.id} could not be moved this turn: $why. It stands ${describeWhere(civ, unit.getTile())}, and the officials try again next turn.") }
 +        units.researchRefill = { civ -> applyResearchGoals(civ) }
 +        RulerOverrides.rulersFirst = { civ -> units.rearmDue(civ) }
