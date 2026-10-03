@@ -296,6 +296,27 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W17 an engineless court's war estimate says so once, and no city carries a verdict", typeof estimate?.withoutEngines === "string" && (estimate.citiesWeHaveSeen as any[]).every((city) => !("verdict" in city)) && JSON.stringify(estimate).length < 6000, `${JSON.stringify(estimate).length}`);
     await stop(late);
   },
+  async W18() { // one spending floor around the officials' whole turn: the gold and faith reserves hold, the floor is put back, nothing goes unaccounted
+    const persia = await start("run23-t241-persia");
+    await post(`/grant?civ=Persia`, { faith: 5000 });
+    await orders("Persia", { faithReserve: 4000 });
+    await post("/advance", { turns: 3 });
+    const religion = (await get(`/briefing?civ=Persia`)).json.religion;
+    const faith = typeof religion === "object" ? religion.faithStored : Number(/faith (\d+) stored/.exec(religion)?.[1]);
+    check("W18 the faith reserve holds, and the officials spent above it", faith >= 4000 && (await logOf("Persia", 241)).some((line) => /^The officials spent \d+ faith/.test(line.text)), `${faith}`);
+    check("W18 no faith self-check", !selfChecks(persia).some((line) => /\tfaith\t/.test(line)), selfChecks(persia).slice(0, 2).join(" | "));
+    await stop(persia);
+    // The Aztecs at war re-arm on their own every turn (14 lines in the five turns before the fixture): a reserve above the treasury leaves them nothing
+    const aztecs = await start("run21-t300-war");
+    const before = (await get(`/briefing?civ=Aztecs`)).json.gold as number;
+    await orders("Aztecs", { goldReserve: before + 5000 });
+    await post("/advance", { turns: 3 });
+    const gold = (await get(`/briefing?civ=Aztecs`)).json.gold as number;
+    const spent = (await logOf("Aztecs", 300)).filter((line) => /^The officials spent \d+ gold/.test(line.text) && line.turn > 300);
+    check("W18 under a reserve above the treasury the officials spend no gold in three turns of war, and the treasury is whole after", spent.length === 0 && gold > before, `${before} -> ${gold}; ${spent.map((line) => line.text.slice(0, 60)).join(" | ")}`);
+    check("W18 no gold self-check", !selfChecks(aztecs).some((line) => /\tgold\t/.test(line)), selfChecks(aztecs).slice(0, 2).join(" | "));
+    await stop(aztecs);
+  },
   async W10() { // "all" barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
