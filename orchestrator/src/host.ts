@@ -144,7 +144,7 @@ export type Orders = {
 };
 
 /** BRIEFING_OMIT: briefing fields left out, for the leagues' removal tests - comma-separated top-level names ("techsKnown", "militaryNote")
- *  and dotted paths into objects or lists of objects ("cities.buildings", "knownCivs.score", "victory.note"). Two names thin the unit list
+ *  and dotted paths into objects or lists of objects ("cities.buildings", "knownCivs.theirAttitude", "victory.cultural"). Two names thin the unit list
  *  instead: "units.automatedWorkers" and "units.automatedSoldiers" keep a count of those lines in place of the lines. Empty: the briefing whole */
 const OMIT = (process.env.BRIEFING_OMIT ?? "").split(",").map((path) => path.trim()).filter(Boolean);
 function omitFromBriefing(briefing: Record<string, unknown>): Record<string, unknown> {
