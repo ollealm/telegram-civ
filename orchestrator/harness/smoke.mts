@@ -112,7 +112,7 @@ if (greeceKnown) {
   if (rome.gold >= 15) {
     r = await order("Rome", { trade: [{ with: "Greece", give: [{ item: "Gold", amount: 15 }] }] });
     // Greece is an advised court: the offer waits for its advisor, who takes it here
-    const answered = await order("Greece", { answerOffers: [{ power: "Rome", answer: "accept", terms: "we give nothing for Gold x15" }] });
+    const answered = await order("Greece", { answerOffers: [{ power: "Rome", answer: "accept", terms: "we give nothing; they give Gold x15" }] });
     if (answered.failed.length) console.log("answerOffers failed:", answered.failed.join(" "));
     await host.advance(1);
     const romeAfter = await briefing("Rome");
