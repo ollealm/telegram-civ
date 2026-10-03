@@ -71,9 +71,9 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     const fromTurn = pending?.fromTurn ?? opening.turn;
     const untilTurn = pending ? pending.untilTurn ?? opening.turn + (pending.remaining ?? 0) : fromTurn + roundLength(fromTurn);
     const length = untilTurn - fromTurn;
-    // What the rulers said aloud before this round began belongs to the chapter about it
-    const spoken = seats.flatMap((seat) => seat.proclamations ?? []);
-    for (const seat of seats) seat.proclamations = undefined;
+    // What the rulers said aloud before this round began belongs to the chapter about it (a sovereign's word, said at a look-in, is gathered when the age ends)
+    const spoken = seats.filter((seat) => seat.kind !== "agent").flatMap((seat) => seat.proclamations ?? []);
+    for (const seat of seats) if (seat.kind !== "agent") seat.proclamations = undefined;
     (state.proclaimed ??= []).push(...spoken.map((text) => ({ turn: fromTurn, year: opening.year, text })));
     const proclaimed = [...(pending?.proclaimed ?? []), ...spoken];
     const notes = new Map(seats.map((seat) => [seat.civ, [...(pending?.notes?.[seat.civ] ?? [])]]));
@@ -195,6 +195,16 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     // Candidates for the oddity of the age, from every realm: the world's lines once, a realm's own lines under its name
     const curiosities = seats.flatMap((seat) => (ages.get(seat.civ)?.curiosities ?? []).map((line) => (/^Our /.test(line) ? `${seat.civ}: ${line}` : line)))
       .filter((line, index, all) => all.indexOf(line) === index);
+    // A sovereign's word was said during the age, at a look-in: it belongs to this chapter, and is cleared for the next age
+    const sovereignsSaid = seats.filter((seat) => seat.kind === "agent").flatMap((seat) => seat.proclamations ?? []);
+    for (const seat of seats) if (seat.kind === "agent") seat.proclamations = undefined;
+    (state.proclaimed ??= []).push(...sovereignsSaid.map((text) => ({ turn: finished.fromTurn, year: finished.fromYear, text })));
+    const proclaimedInAge = [...proclaimed, ...sovereignsSaid];
+    // The Chronicler reads its own last two chapters whole; of what lies further back, only the last few events
+    const lastChapters = (state.chapters ?? []).slice(-2).map(({ years, text }) => ({ years, text }));
+    const lastChaptersFrom = state.ageStarts?.at(-1 - lastChapters.length) ?? finished.fromTurn;
+    const cast = seats.map((seat) => `${seat.civ}: ${seat.kind === "agent" ? `${seat.character?.name ?? "a sovereign"}${seat.character?.title ? `, ${seat.character.title}` : ""}` : seat.rulerName ?? "a ruler"}`);
+    persist();
     const settled = await Promise.allSettled([
       ...seats.map(async (seat) => {
         const governLogs = notes.get(seat.civ)!;
@@ -221,7 +231,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
       host
         .events()
-        .then((all) => heraldNewspaper(finished, all.filter((event) => event.turn <= finished.fromTurn), proclaimed, campaigns))
+        .then((all) => heraldNewspaper(finished, { earlier: all.filter((event) => event.turn < lastChaptersFrom).slice(-8), lastChapters, proclamations: proclaimedInAge, campaigns, cast }))
         .then(({ chapter, images }) => {
           (state.chapters ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, text: chapter, undelivered: true });
           return io.chronicle(chapter, images, finished, { campaigns, curiosities });

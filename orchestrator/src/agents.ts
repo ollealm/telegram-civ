@@ -240,16 +240,28 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         return text("The painter has it.");
       },
     ) as never,
-    tool(
-      "proclaim",
-      "Let something the ruler said this audience leak to the heralds, for the world's chronicle: a remark, a mood, a turn of phrase with their character in it - the small detail a court gossips about, never a plan, the treasury, research or a weakness. Once an audience at most, when they said anything with their own voice in it; nothing if they did not.",
-      strict({ words: z.string().describe(`What was heard, kept close to the ruler's own phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}, on the Russian offer: a pact is a pact, and Moscow will learn what that costs."`) }),
-      async ({ words }) => {
-        (seat.proclamations ??= []).push(words);
-        persist();
-        return text("The heralds have it.");
-      },
-    ) as never,
+    seat.kind === "agent"
+      ? tool(
+          "proclaim",
+          "Say one thing aloud that the heralds may carry into the world's chronicle, in your own voice: what you make of the age's events, a mood, a boast, a grievance - the word a sovereign lets fall in the hall, never a plan, the treasury, research or a weakness. Once an age at most, and only when you have something to say; most look-ins say nothing.",
+          strict({ words: z.string().describe("One sentence, as you would say it aloud") }),
+          async ({ words }) => {
+            if (seat.proclamations?.length) return text("You have spoken once this age already; the heralds carry that.");
+            seat.proclamations = [`${seat.character?.name ?? "The sovereign"}${seat.character?.title ? `, ${seat.character.title}` : ""}, sovereign of ${seat.civ}, in their own words: ${words}`];
+            persist();
+            return text("The heralds have it.");
+          },
+        ) as never
+      : tool(
+          "proclaim",
+          "Let something the ruler said this audience leak to the heralds, for the world's chronicle: a remark, a mood, a turn of phrase with their character in it - the small detail a court gossips about, never a plan, the treasury, research or a weakness. Once an audience at most, when they said anything with their own voice in it; nothing if they did not.",
+          strict({ words: z.string().describe(`What was heard, kept close to the ruler's own phrasing, e.g. "${seat.rulerName ?? "The ruler"} of ${seat.civ}, on the Russian offer: a pact is a pact, and Moscow will learn what that costs."`) }),
+          async ({ words }) => {
+            (seat.proclamations ??= []).push(words);
+            persist();
+            return text("The heralds have it.");
+          },
+        ) as never,
     tool(
       "smaller_matters",
       "With a closing: the smaller matters you would otherwise settle alone once the court rises - up to eight, each with your lean and, where there is one, the larger subject behind it, numbered as in your message - so the ruler can name one to open or leave them all to you. Only calls you are about to make; never the age's big question, never a routine renewal. A later call replaces the list; call it with what is left once some are settled.",
@@ -496,10 +508,11 @@ export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: numb
     `${persona(seat)}
 
 ${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} ${wokenBy.length ? `You were sent for ahead of your usual look-in because: ${wokenBy.join("; ")}. Deal with that first.\n` : ""}Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}: lines that begin "By your order" were yours, "The officials..." theirs. Put things right for the next ${turnsAhead} turns: read the warnings and the log against the will, put right what the will, your standing orders or plain sense demand, answer what waits for an answer (offers and demands alike), and leave the rest to the officials - a look-in that changes nothing is a good look-in when the orders are still right. A warning you have seen at three look-ins running and left standing has become a decision of yours: decide it this look-in, whatever you decide - act, or let it stand for a reason you can name and acknowledge it${seat.kind === "agent" ? "" : ", or keep it for the ruler as a matter at the closing"}. Keep your operating plan current when your intentions change. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${warRule(seat)}
-${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be. Then read your operating plan against the realm as it now is, and rewrite it if it has gone stale.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".${seat.kind === "agent" ? "" : `
+${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be. Then read your operating plan against the realm as it now is, and rewrite it if it has gone stale.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".${seat.kind === "agent" ? `
+A sovereign is heard of in the world's history by what they let fall: once an age at most, when the age has moved you to it, proclaim says one sentence aloud in your own voice for the heralds to carry. Never a plan, the treasury, research or a weakness.` : `
 If you met a decision in this look-in that you truly wished you could have put to the ruler before acting - one their record does not answer and that could not wait for the next audience - set it down with wish_i_could_ask. You cannot send for them; this is kept to learn whether advisors should ever be able to. Most look-ins have no such wish.`}`,
     `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
-    { seat, canRecordWill: newAge, sideTools: seat.kind === "agent" ? [] : ["wish_i_could_ask"] },
+    { seat, canRecordWill: newAge, sideTools: seat.kind === "agent" ? ["proclaim"] : ["wish_i_could_ask"] },
   );
 
 /** Where the realm stands among the powers it knows - computed from the briefing, so it cannot drift with the advisor's mood */
@@ -633,17 +646,44 @@ export const advisorGreeting = (seat: Seat, replaced?: string) =>
     ? `You have just been taken on as chief advisor to ${seat.rulerName ?? "the ruler"} of ${seat.civ}, in place of ${replaced}, partway through this realm's history. Their record of the ruler's wishes and their journal are now yours (below). Introduce yourself in four or five sentences in your own voice, say one thing about how you find the realm, and ask what the ruler wants of you first. No tools.\n\n${memory(seat)}`
     : `You are meeting ${seat.rulerName ?? "the ruler"} for the first time, at the very beginning of ${seat.civ}'s history. Introduce yourself in four or five sentences in your own voice, say how you like to work, and ask what they want this realm to become. No tools.`);
 
-export const heraldNewspaper = (round: RoundResult, earlier: PublicEvent[], proclamations: string[] = [], campaigns: string[] = []) => {
+/** What the Chronicler is given besides the age itself: its own last chapters, what the courts said, what the world saw of the armies, and who rules where */
+export type ChapterContext = {
+  /** Events from before the last chapters, oldest first: a few of the furthest threads */
+  earlier: PublicEvent[];
+  /** The Chronicler's own last chapters, oldest first, as they were published */
+  lastChapters: { years: string; text: string }[];
+  proclamations: string[];
+  campaigns: string[];
+  /** Who rules each realm at the table, by name */
+  cast: string[];
+};
+
+export const heraldNewspaper = (round: RoundResult, { earlier, lastChapters, proclamations, campaigns, cast }: ChapterContext) => {
   const [, winner, victory] = /^(.+?) has won an? (.+?) victory/.exec(round.stoppedEarly ?? "") ?? [];
+  const section = (title: string, lines: string[]) => `${title}:\n${lines.join("\n") || "-"}`;
   return runStructured(
     "herald",
     HERALD_MODEL,
     `You are the Chronicler, keeper of the one history all the rival rulers read. Each round you add a new chapter covering the years below, in the voice of a historian looking back: what happened, what it meant, how the world's shape is changing. Name the years when they matter ("In 1240 BC..."), never turn numbers. Give it a short chapter title. Under 160 words; two to four paragraphs; wry, unhurried, occasionally grand. A quiet age deserves a quiet chapter, not padding.
-${winner ? `This is the last chapter of this history: ${winner} has won a ${victory} victory. The chapter ends the world's story - the victory is its chief event. The court painter paints the moment of victory itself, so your pictures show something else of these last years.\n` : ""}What leaked from the courts is how history hears the rulers: a remark, a mood, a phrase overheard. Work them into the chapter as a historian restates what was said - "the ruler of Denmark was heard to say that a pact was a pact, and that Moscow would learn what it cost" - never in quotation marks, never as a list; the meaning and the speaker are sacred, the wording is yours to dress, a little grander than it was said. Use them where they fit the events, at most two or three in a chapter; never put a sentiment in a ruler's mouth that they did not voice, never invent one, and never guess at a court's plans from what leaked.
-Once in the chapter, in a sentence of your own judgement, say how the great powers are accounted against one another now (from the standing below) - who is foremost, who is rising, who has slipped - without figures. You flatter no court.
-Report only the events listed - these are things the whole world could witness. An army on the march, a battle, a company lost in the field, a city that fell and a ship on a far sea are witnessed too: "What the armies and ships did" below is the world's account of them, and a chapter with a war in it tells where the host went and where it fought, not only that war was declared. Never speculate about any realm's plans, treasury, research or the armies nobody saw. ${TELEGRAM_STYLE}
+${winner ? `This is the last chapter of this history: ${winner} has won a ${victory} victory. The chapter ends the world's story - the victory is its chief event. The court painter paints the moment of victory itself, so your pictures show something else of these last years.\n` : ""}A chapter is made of what happened. What did not happen is not news: no court that kept silent, no sail that went unsighted, no war that failed to come. A quiet age may be called quiet in a phrase; it is not told by its absences.
+Your last chapters are below, as you wrote them. This one goes on from them: carry their threads where the years carry them, and do not tell again what they told.
+What leaked from the courts is how history hears the rulers: a remark, a mood, a phrase overheard. Work them into the chapter as a historian restates what was said - "the ruler of Denmark was heard to say that a pact was a pact, and that Moscow would learn what it cost" - never in quotation marks, never as a list; the meaning and the speaker are sacred, the wording is yours to dress, a little grander than it was said. Some of it is a sovereign's own word, said aloud in their hall and meant to be carried, and reads as theirs - "the sovereign of Ethiopia was heard to say..." - not as something overheard at a ruler's court. Use them where they fit the events, at most two or three in a chapter; never put a sentiment in a ruler's mouth that they did not voice, never invent one, and never guess at a court's plans from what leaked.
+How the great powers are accounted against one another is said when it has changed since your last chapters said it - who has become foremost, who has risen, who has slipped - in a sentence of your own judgement, without figures, and never in the form you used last time. When it has not changed, it goes unsaid. You flatter no court.
+The realms are known by their peoples - "the ruler of Denmark" - and that is how you mostly name them. The names of those who rule are below: a name may stand once in a chapter where the person is the story, never as a habit.
+Report only the events listed - these are things the whole world could witness. An army on the march, a battle, a company lost in the field, a city that fell and a ship on a far sea are witnessed too: "What the armies and ships did" below is the world's account of them, and a chapter with a war in it tells where the host went and where it fought, not only that war was declared. A wandering company seen far from home is colour, at most once in a chapter and only where it tells something - the first word of an unknown shore, armour of another century among the rice fields; the rest of those sightings are yours to leave out. Never speculate about any realm's plans, treasury, research or the armies nobody saw.
+You may allow yourself one touch that no record holds - the weather on a day, a face in a crowd, what the old men said - so long as it bends no fact: which realms, who fought whom, what rose and fell and to whom, and the years stay as they were, for the rulers learn their world from this page. ${TELEGRAM_STYLE}
 With the chapter go one or two images: pictures for it, as a painter of the period would have made them. The first is a scene from its chief event; add a second only if the chapter holds another event of a different kind that is worth seeing - never two pictures of one event. Every completed wonder gets its own picture from the court painter, and so does each people's entry into a new age, so leave both out of yours; in an age of nothing but wonders, paint a moment of ordinary life in the foremost realm. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events. ${CAPTION_CRAFT}`,
-    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${round.publicEvents.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nWhat the armies and ships did in these years, as the world saw it:\n${campaigns.map((line) => `- ${line}`).join("\n") || "(no army left its home fields, and no ship was seen on a far sea)"}\n\nProclaimed from the courts in these years:\n${proclamations.join("\n") || "(nothing was proclaimed)"}\n\nThe standing of the great powers now, by score:\n${round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`).join("\n")}\n\n${alreadyPainted(["chronicle"])}\n\nEarlier chapters told of:\n${earlier.slice(-12).map((event) => `${event.year}: ${event.text}`).join("\n") || "(this is the first chapter)"}`,
+    [
+      `The years ${round.fromYear} to ${round.year}.`,
+      section("Events of these years", round.publicEvents.map((event) => `${event.year}: ${event.text}`)),
+      section("What the armies and ships did in these years, as the world saw it", campaigns.map((line) => `- ${line}`)),
+      section("Said in the courts and halls in these years", proclamations),
+      section("The standing of the great powers now, by score", round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`)),
+      section("Who rules where", cast),
+      alreadyPainted(["chronicle"]),
+      ...(earlier.length ? [section("Further back, before your last chapters", earlier.map((event) => `${event.year}: ${event.text}`))] : []),
+      lastChapters.length ? `Your last chapters, as you wrote them:\n\n${lastChapters.map((chapter) => `[${chapter.years}]\n${chapter.text}`).join("\n\n")}` : "This is the first chapter.",
+    ].join("\n\n"),
     z.object({ chapter: z.string().describe("The chapter, with its title"), images: z.array(Picture).min(1).max(2) }),
   );
 };
