@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..1a54e75
+index 0000000..60455de
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,162 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -121,6 +121,11 @@ index 0000000..1a54e75
 +        val purpose = (construction as IHasUniques).uniqueObjects.filter { it.type != UniqueType.OnlyAvailable && it.type != UniqueType.CannotBeHurried && it.type != UniqueType.TriggersAlertOnCompletion }
 +        return purpose.isNotEmpty() && purpose.all { it.type == UniqueType.EnablesConstructionOfSpaceshipParts || it.type == UniqueType.SpaceshipPart || "Spaceship part" in it.params }
 +    }
++
++    /** Set by the host: is this unit of a ruled civ under the ruler's own order? Routines that draft units of their own (the settler escort) pass it by */
++    @Volatile var hasOrder: ((MapUnit) -> Boolean)? = null
++    @yairm210.purity.annotations.Readonly
++    fun isUnderOrders(unit: MapUnit) = unit.civ.civID in ruledCivs && hasOrder?.invoke(unit) == true
 +
 +    /** Called with (civ, unit, why) when a ruled civ's automation disbands a unit for a reason of its own, before it goes */
 +    @Volatile var unitDisbanded: ((com.unciv.logic.civilization.Civilization, MapUnit, String) -> Unit)? = null
@@ -247,7 +252,7 @@ index 5474cfd..ddda57d 100644
          val enemyCivs = civInfo.getCivsAtWarWith().filter { it.isMajorCiv() }
              .sortedByDescending { it.getStatForRanking(RankingType.Force) }
 diff --git a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
-index b997da7..60f2301 100644
+index b997da7..045a39b 100644
 --- a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 @@ -2,6 +2,7 @@ package com.unciv.logic.automation.civilization
@@ -355,7 +360,16 @@ index b997da7..60f2301 100644
          
          
          fun attackIfPossible(unit: MapUnit, tile: Tile){
-@@ -614,7 +627,7 @@ object NextTurnAutomation {
+@@ -509,6 +522,8 @@ object NextTurnAutomation {
+             .mapNotNull { it.militaryUnit }.filter {
+                 it.civ == civInfo
+                     && it.health >= 100
++                    // the ruler's own orders stand: a soldier on its way to garrison a city is not drafted away (Run 20: Spain's Swordsman, and a crash after)
++                    && !RulerOverrides.isUnderOrders(it)
+                     // only draft a unit from the core of the empire, or it'll interfere with other anti-barb activities
+                     && (it.currentTile.aerialDistanceTo(capitalTile) < tile.aerialDistanceTo(capitalTile))
+                     && it.movement.canReach(tile) 
+@@ -614,7 +629,7 @@ object NextTurnAutomation {
              }
          if (settlersInFlight >= maxSettlersInFlight) return
          val settlerUnits = civInfo.gameInfo.ruleset.units.values
@@ -364,7 +378,7 @@ index b997da7..60f2301 100644
                      personality.getMatchingUniques(UniqueType.WillNotBuild, civInfo.state)
                          .none { unique -> it.matchesFilter(unique.params[0], civInfo.state) } }
          if (settlerUnits.isEmpty()) return
-@@ -641,6 +654,9 @@ object NextTurnAutomation {
+@@ -641,6 +656,9 @@ object NextTurnAutomation {
      // However, that can be added in another update, this PR is large enough as it is.
      private fun tryVoteForDiplomaticVictory(civ: Civilization) {
          if (!civ.mayVoteForDiplomaticVictory()) return
@@ -374,7 +388,7 @@ index b997da7..60f2301 100644
          val rng = civ.state.stateBasedRandom("NextTurnAutomation.tryVoteForDiplomaticVictory")
  
          val chosenCiv: Civilization? = if (civ.isMajorCiv()) {
-@@ -702,8 +718,10 @@ object NextTurnAutomation {
+@@ -702,8 +720,10 @@ object NextTurnAutomation {
              else -> {
                  val threatLevel = Automation.threatAssessment(civInfo, offendingCiv)
                  if (threatLevel < ThreatLevel.High // don't piss them off for no reason please.
@@ -3232,10 +3246,10 @@ index 0000000..5afc553
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..936caf0
+index 0000000..9519a42
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,1981 @@
+@@ -0,0 +1,1987 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -3352,7 +3366,13 @@ index 0000000..936caf0
 +        load()
 +        RulerOverrides.forbidden = { civ, construction -> civ.civID in RulerOverrides.ruledCivs && isForbidden(civ, construction) }
 +        RulerOverrides.spendingNoted = { civ, gold, what -> if (civ.civID in RulerOverrides.ruledCivs) spending.getOrPut(civ.civName) { ArrayList() } += Pair(gold, what) }
-+        RulerOverrides.unitHandler = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && units.handle(unit) }
++        // Whatever goes wrong with one unit's order costs that order, never the turn: Run 20 stopped dead at T123 on an unreachable tile
++        RulerOverrides.unitHandler = { unit -> unit.civ.civID in RulerOverrides.ruledCivs && try { units.handle(unit) } catch (e: Exception) {
++            System.err.println("Order of ${unit.civ.civName}'s ${unit.name} #${unit.id} failed: $e")
++            units.dropAfterFailure(unit)
++            false
++        } }
++        RulerOverrides.hasOrder = { unit -> unit.id in units.orders }
 +        units.researchRefill = { civ -> applyResearchGoals(civ) }
 +        RulerOverrides.rulersFirst = { civ -> units.rearmDue(civ) }
 +        RulerOverrides.worldVoteOf = { civ -> castWorldVote(civ) }
@@ -5335,10 +5355,10 @@ index 0000000..f4d43bf
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..1877245
+index 0000000..020e823
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,730 @@
+@@ -0,0 +1,739 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -5347,6 +5367,7 @@ index 0000000..1877245
 +import com.unciv.logic.civilization.diplomacy.DiplomacyFlags
 +import com.unciv.logic.map.HexMath
 +import com.unciv.logic.map.mapunit.MapUnit
++import com.unciv.logic.map.mapunit.movement.UnitMovement
 +import com.unciv.logic.map.tile.Tile
 +import com.unciv.models.UnitActionType
 +import com.unciv.models.UpgradeUnitAction
@@ -5493,7 +5514,8 @@ index 0000000..1877245
 +            // The city is held by one of ours: walk up beside it, the swap happens once we are adjacent
 +            if (unit.currentMovement <= 0f) return true
 +            val beside = target.neighbors.filter { canMarch(unit, it) }.minByOrNull { it.aerialDistanceTo(unit.getTile()) }
-+            if (beside != null) { if (beside != unit.getTile()) unit.movement.headTowards(beside); return true }
++            // canMarch reckons with full movement; with less left the step may not open this turn - then it waits for the next
++            if (beside != null) { if (beside != unit.getTile()) try { unit.movement.headTowards(beside) } catch (_: UnitMovement.UnreachableDestinationException) {}; return true }
 +        }
 +        if (target != null && unit.getTile() != target) {
 +            // The escort and upgrade routines may have moved this soldier already this turn: no movement left is not "cannot reach"
@@ -5515,7 +5537,7 @@ index 0000000..1877245
 +            // sent where our Worker stands (China's waited three turns beside its own Worker and lost its order, Run 19). A held Great Person never gets here: it found another place above
 +            if (unit.isCivilian() && target.civilianUnit?.civ == civ && unit.getTile().aerialDistanceTo(target) == 1 && unit.movement.canUnitSwapTo(target)) {
 +                unit.movement.swapMoveToTile(target)
-+            } else unit.movement.headTowards(target)
++            } else try { unit.movement.headTowards(target) } catch (_: UnitMovement.UnreachableDestinationException) {} // not moved: counted as stuck below
 +            if (unit.getTile() != target) {
 +                val spot = unit.getTile().position.toString()
 +                order.turnsStuck = if (spot == order.lastSpot) order.turnsStuck + 1 else 0
@@ -5695,6 +5717,13 @@ index 0000000..1877245
 +            .sortedBy { it.aerialDistanceTo(unit.getTile()) }.take(8).firstOrNull { canMarch(unit, it) }
 +
 +    /** An order dropped for good: a Great Person goes to the officials with it, or the hold at the top of [handle] would take it back next turn and the ruler would be asked again */
++    /** An order that could not be carried out at all - the engine refused a step of it: dropped, said in the chancery, and the officials take the unit */
++    fun dropAfterFailure(unit: MapUnit) {
++        val order = orders[unit.id] ?: return
++        log(unit.civ, "Our ${unit.name} #${unit.id} could not carry out its ${order.action} order${order.x?.let { " for ${where(unit.civ, unit.civ.gameInfo.tileMap[it, order.y!!])}" } ?: ""} from ${where(unit.civ, unit.getTile())}: the way would not open. The order is dropped and the officials take it back.")
++        drop(unit)
++    }
++
 +    private fun drop(unit: MapUnit) {
 +        orders.remove(unit.id)
 +        if (unit.isGreatPerson()) released += unit.id
