@@ -255,6 +255,18 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W11 the audience's word is not kept as standing", JSON.parse(readFileSync(join(host.dir, "host.json"), "utf8")).orders.Greece.mayDeclareWar === false);
     await stop(host);
   },
+  async W12() { // one near-victory source: a power a step from victory is named beside the walls, as in the deals; two steps away it is not
+    const steps = async (edit?: SaveEdit) => {
+      const host = await start("run22-t234-greece", "", undefined, edit);
+      const named = (await get(`/options?civ=Japan`)).json.warEstimate?.aStepFromVictory as string[] | undefined;
+      await stop(host);
+      return named;
+    };
+    const before = await steps();
+    check("W12 Greece at 4 of 6 parts is not named", !before?.some((fact) => /Greece/.test(fact)), JSON.stringify(before));
+    const after = await steps((game) => { game.civilizations.find((c: any) => c.civName === "Greece").victoryManager.currentsSpaceshipParts["SS Engine"] = 1; });
+    check("W12 Greece at 5 of 6 parts is named in the war estimate", after?.some((fact) => /Greece has 5 of 6 parts/.test(fact)) === true, JSON.stringify(after));
+  },
   async W10() { // "all" barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
