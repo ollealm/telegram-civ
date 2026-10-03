@@ -45,10 +45,10 @@ index 0a2fd63..ba25f43 100644
              }
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..047cbc6
+index 0000000..fc2bfe6
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,382 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -71,6 +71,10 @@ index 0000000..047cbc6
 + *  Not serialized with the save - the host persists and re-applies them.
 + */
 +object RulerOverrides {
++    /** A city's fields: the ring of tiles about it that the chancery's words call its own ground - "the fields of Athens", a site's surroundings, home ground */
++    const val FIELDS = 2
++    /** "Near": the one distance the briefing means by it - the soldiers about an enemy city in the war estimate, the soldiers about ours in the threats */
++    const val NEAR = 3
 +    /** civID -> personality replacing the nation's ruleset personality for all AI decisions */
 +    val personalities = ConcurrentHashMap<String, Personality>()
 +
@@ -196,7 +200,7 @@ index 0000000..047cbc6
 +        if (reach.isEmpty()) return null
 +        val kept = HashSet(dangerousTiles); kept += reach
 +        if (unit.getTile() in reach) {
-+            val nearHome = unit.civ.cities.flatMap { it.getCenterTile().getTilesInDistance(2) }.toHashSet()
++            val nearHome = unit.civ.cities.flatMap { it.getCenterTile().getTilesInDistance(FIELDS) }.toHashSet()
 +            kept += unit.getTile().getTilesInDistance(3).filter { it !in nearHome }
 +        }
 +        return kept
@@ -1950,6 +1954,38 @@ index a0565d8..41ee213 100644
              unit.civ.addNotification(
                  "Our [${unit.name}] took [$tileDamage] tile damage and was destroyed",
                  unit.currentTile.position,
+diff --git a/core/src/com/unciv/logic/trade/Trade.kt b/core/src/com/unciv/logic/trade/Trade.kt
+index 2ac7326..cda1dd9 100644
+--- a/core/src/com/unciv/logic/trade/Trade.kt
++++ b/core/src/com/unciv/logic/trade/Trade.kt
+@@ -54,6 +54,8 @@ class Trade : IsPartOfGameInfoSerialization {
+ 
+ class TradeRequest : IsPartOfGameInfoSerialization {
+     fun decline(decliningCiv: Civilization) {
++        // A ruled court refuses as a player does, by its ruler's word: the proposer waits as long as it would after a human's refusal
++        val refusedByAI = decliningCiv.isAI() && !decliningCiv.hasPlayerStanding()
+         val requestingCivInfo = decliningCiv.gameInfo.getCivilization(requestingCiv)
+         val requestingCivDiploManager = requestingCivInfo.getDiplomacyManager(decliningCiv)!!
+         // the numbers of the flags (20,5) are the amount of turns to wait until offering again
+@@ -65,14 +67,14 @@ class TradeRequest : IsPartOfGameInfoSerialization {
+         if (trade.ourOffers.any { it.name == Constants.defensivePact })
+             requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedDefensivePact,10)
+         if (trade.ourOffers.any { it.name == Constants.openBorders })
+-            requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedOpenBorders, if (decliningCiv.isAI()) 5 else 10)
++            requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedOpenBorders, if (refusedByAI) 5 else 10)
+         if (trade.ourOffers.any { it.name == Constants.acceptEmbassy }
+             || trade.theirOffers.any { it.name == Constants.acceptEmbassy })
+-            requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedEmbassy, if (decliningCiv.isAI()) 5 else 10)
++            requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedEmbassy, if (refusedByAI) 5 else 10)
+         if (trade.theirOffers.any { it.type == TradeOfferType.WarDeclaration })
+-            requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedJoinWarOffer, if (decliningCiv.isAI()) 5 else 10)
++            requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedJoinWarOffer, if (refusedByAI) 5 else 10)
+         if (trade.ourOffers.any { it.type == TradeOfferType.WarDeclaration })
+-            requestingCivDiploManager.otherCivDiplomacy().setFlag(DiplomacyFlags.DeclinedJoinWarOffer, if (decliningCiv.isAI()) 5 else 10)
++            requestingCivDiploManager.otherCivDiplomacy().setFlag(DiplomacyFlags.DeclinedJoinWarOffer, if (refusedByAI) 5 else 10)
+ 
+         if (trade.isPeaceTreaty()) requestingCivDiploManager.setFlag(DiplomacyFlags.DeclinedPeace, 3)
+     }
 diff --git a/core/src/com/unciv/models/ruleset/Building.kt b/core/src/com/unciv/models/ruleset/Building.kt
 index d636187..089cbb3 100644
 --- a/core/src/com/unciv/models/ruleset/Building.kt
@@ -2034,6 +2070,55 @@ index d1a6cb1..8c78f54 100644
  tasks.register<JavaExec>("debug") {
      dependsOn(tasks.getByName("classes"))
      mainClass.set(mainClassName)
+diff --git a/desktop/src/com/unciv/app/desktop/ruler/Desk.kt b/desktop/src/com/unciv/app/desktop/ruler/Desk.kt
+new file mode 100644
+index 0000000..7056b85
+--- /dev/null
++++ b/desktop/src/com/unciv/app/desktop/ruler/Desk.kt
+@@ -0,0 +1,43 @@
++package com.unciv.app.desktop.ruler
++
++import com.badlogic.gdx.utils.JsonValue
++import com.unciv.app.desktop.ruler.Prose.plural
++import com.unciv.logic.civilization.Civilization
++
++/** The turns anything laid before a court waits for the ruler's answer before it lapses: an offer of a deal or of peace, a friendship, a demand */
++const val DESK_WAITS = 8
++
++/**
++ *  One kind of thing laid before a court for the ruler's answer, with the one clock every kind keeps. Only the turn's bookkeeping (announce) enters an
++ *  item in the log and starts its clock - a briefing shows what waits and changes nothing - and after [DESK_WAITS] turns unanswered it lapses. What a
++ *  lapse does is the kind's own and is said in its own words: an offer refused, a peace withdrawn, a friendship refused, a demand agreed (a lapse must
++ *  never start a war). Keys are "us<them...", the clocks kept in host.json.
++ */
++class Desk {
++    private val since = HashMap<String, Int>()
++
++    operator fun contains(key: String) = key in since
++    fun forget(key: String) { since.remove(key) }
++    /** At the bookkeeping: the clocks of what has left [civ]'s desk stop */
++    fun keepOnly(civ: Civilization, waiting: Collection<String>) { since.keys.removeAll { it.startsWith("${civ.civName}<") && it !in waiting } }
++
++    /**
++     *  One waiting item: what the briefing says of it, or null once it has lapsed. Before the bookkeeping has entered it, [fresh] (just arrived); at the
++     *  bookkeeping, [arrive] enters it in the log; once its turns are up, [lapse] does what the kind does and says so. [told] says it with the turns left
++     */
++    fun item(key: String, turn: Int, announce: Boolean, fresh: () -> String, arrive: () -> Unit, lapse: () -> Unit, told: (left: Int) -> String): String? {
++        val start = since[key] ?: if (!announce) return fresh() else { arrive(); since[key] = turn; turn }
++        if (announce && turn - start >= DESK_WAITS) { since.remove(key); lapse(); return null }
++        return told((DESK_WAITS - (turn - start)).coerceAtLeast(0))
++    }
++
++    fun clear() = since.clear()
++    fun toMap(): Map<String, Int> = since
++    /** [key] renames a key saved in an older wording */
++    fun load(json: JsonValue?, key: (String) -> String = { it }) { json?.forEach { since[key(it.name)] = it.asInt() } }
++
++    companion object {
++        /** The clock in words: "waits 3 more turns[after]", or [atLast] on the last turn before it lapses */
++        fun waits(left: Int, atLast: String, after: String = "") = if (left == 0) atLast else "waits $left more turn${plural(left)}$after"
++    }
++}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/Json.kt b/desktop/src/com/unciv/app/desktop/ruler/Json.kt
 new file mode 100644
 index 0000000..53fd859
@@ -2833,10 +2918,10 @@ index 0000000..03dc363
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerCampaigns.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerCampaigns.kt
 new file mode 100644
-index 0000000..52483b6
+index 0000000..ec06cec
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerCampaigns.kt
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,251 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.unciv.logic.GameInfo
@@ -2848,6 +2933,7 @@ index 0000000..52483b6
 +import com.unciv.app.desktop.ruler.Prose.andList
 +import com.unciv.app.desktop.ruler.Prose.article
 +import com.unciv.app.desktop.ruler.Prose.pluralOf
++import com.unciv.logic.automation.RulerOverrides
 +
 +/**
 + *  An age's movements as a history atlas draws them: not every unit's wiggle, but the few forces that went somewhere together -
@@ -2938,14 +3024,14 @@ index 0000000..52483b6
 +        val groups = ArrayList<MutableList<Member>>()
 +        for (m in movers.sortedByDescending { it.reach }) {
 +            val group = groups.firstOrNull { g -> g[0].sea == m.sea && g[0].start.aerialDistanceTo(m.start) <= 4 &&
-+                (g[0].target.aerialDistanceTo(m.target) <= 3 || cityNear(game, g[0].target, 2)?.let { it == cityNear(game, m.target, 2) } == true) }
++                (g[0].target.aerialDistanceTo(m.target) <= 3 || cityNear(game, g[0].target, RulerOverrides.FIELDS)?.let { it == cityNear(game, m.target, RulerOverrides.FIELDS) } == true) }
 +            if (group != null) group += m else groups += mutableListOf(m)
 +        }
 +        val taken = trail.marks.filter { it.kind == "taken" && it.civ == owner && it.turn in from..to }.mapNotNull { game.tileMap.getIfTileExistsOrNull(it.x, it.y) }
 +        return groups.map { group ->
 +            // The force's way is the way its most typical member went
 +            val medoid = group.minBy { m -> group.sumOf { o -> m.start.aerialDistanceTo(o.start) + m.target.aerialDistanceTo(o.target) } }
-+            val took = taken.firstOrNull { city -> group.any { it.target.aerialDistanceTo(city) <= 2 } }
++            val took = taken.firstOrNull { city -> group.any { it.target.aerialDistanceTo(city) <= RulerOverrides.FIELDS } }
 +            val outcome = when {
 +                took != null -> Outcome.Took
 +                group.count { it.fell } * 2 >= group.size -> Outcome.Broken
@@ -2959,7 +3045,7 @@ index 0000000..52483b6
 +            if (took != null && way.last() != took) way += took
 +            val route = broadWay(way)
 +            val homeward = if (outcome == Outcome.Back) broadWay(medoid.path.subList(medoid.goal, medoid.path.size)) else emptyList()
-+            val city = took?.getCity() ?: cityNear(game, medoid.target, 2)
++            val city = took?.getCity() ?: cityNear(game, medoid.target, RulerOverrides.FIELDS)
 +            Campaign(owner, ours, group, outcome, city, took != null && city?.civ?.civName != owner, route, homeward)
 +        }.filter { c -> worthAnArrow(game, c, owner) }.sortedByDescending { weight(it) }
 +    }
@@ -2969,7 +3055,7 @@ index 0000000..52483b6
 +    private fun worthAnArrow(game: GameInfo, c: Campaign, owner: String): Boolean {
 +        if (c.reach < 3) return false
 +        val foes = game.civilizations.firstOrNull { it.civName == owner }?.let { enemiesOf(it) } ?: emptySet()
-+        val onAFoe = game.getCities().any { it.civ.civName in foes && it.getCenterTile().aerialDistanceTo(c.route.last()) <= 3 }
++        val onAFoe = game.getCities().any { it.civ.civName in foes && it.getCenterTile().aerialDistanceTo(c.route.last()) <= RulerOverrides.NEAR }
 +        return when (c.outcome) {
 +            Outcome.Took -> true
 +            Outcome.Broken -> c.size >= 2 || c.reach >= 6 // one soldier lost a few tiles out is a skirmish, told among the losses
@@ -3041,9 +3127,9 @@ index 0000000..52483b6
 +        return when {
 +            // A ship's place is told in the sea's words: at a city's harbour, or in the waters off it - never its walls or its fields
 +            tile.isWater && distance <= 1 -> "the harbour of ${named(near, civ, mover)}"
-+            tile.isWater && distance <= 2 -> "the waters off ${named(near, civ, mover)}"
++            tile.isWater && distance <= RulerOverrides.FIELDS -> "the waters off ${named(near, civ, mover)}"
 +            distance <= 1 && foes -> "the walls of ${named(near, civ, mover)}"
-+            distance <= 2 -> "the fields of ${named(near, civ, mover)}"
++            distance <= RulerOverrides.FIELDS -> "the fields of ${named(near, civ, mover)}"
 +            // Beyond a city's fields, the country or the waters that way, and distant ones well beyond; never a count of tiles
 +            else -> "the ${if (distance > 5) "distant " else ""}${if (tile.isWater) "waters" else "country"} ${compassOf(HexMath.hex2WorldCoords(tile.position), HexMath.hex2WorldCoords(near.getCenterTile().position))} of ${named(near, civ, mover)}"
 +        }
@@ -3089,10 +3175,10 @@ index 0000000..52483b6
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
 new file mode 100644
-index 0000000..68e7e8b
+index 0000000..6d9ecfe
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
-@@ -0,0 +1,1162 @@
+@@ -0,0 +1,1144 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -3119,9 +3205,9 @@ index 0000000..68e7e8b
 + *  for that court's advisor. Either way the engine tells the host what became of it ([RulerOverrides.tradeAnswered]) and the chancery log
 + *  says so, with the terms. Every offer made to an advised court waits for its ruler in the same way (answerOffers).
 + */
-+private const val PEACE_OFFER_WAITS = 8
 +/** Turns the officials of both sides leave terms alone after a court refused them: the engine's own wait after a human player's refusal */
-+private const val HOLD_OFF = 10
++/** The engine's own wait after its officials refuse a proposal of friendship (NextTurnAutomation): a court's refusal holds the proposer off as long */
++private const val FRIENDSHIP_REFUSED_WAITS = 10
 +/** What proposeTrade says when the same offer of theirs waited on our desk and was accepted instead */
 +private const val TAKEN_THEIRS = "their offer was taken"
 +/** The war leave, said once: the host refuses every way of declaring war (the order, a deal that has us declare it, a refused demand not to attack) without it -
@@ -3156,20 +3242,21 @@ index 0000000..68e7e8b
 +    private fun loosely(text: String) = sansTurns(text).replace(Regex("\\s+"), " ").trim().lowercase()
 +    private fun isLuxury(game: GameInfo, name: String) = game.ruleset.tileResources[name]?.resourceType?.name == "Luxury"
 +
-+    /** A court's refusal (or a lapse) holds the officials of both sides off those terms for [HOLD_OFF] turns, as the engine holds them off a human
-+     *  player's refusal. The engine's own declined flags ([TradeRequest.decline]) are set only on the proposer's side, and for five turns when the one
-+     *  refusing counts as an AI - a ruled court does - so the refusing side's own officials offered the very deal their court had just refused, the next turn */
-+    private fun holdOff(decliner: Civilization, request: TradeRequest) {
++    /** A court's refusal (or a lapse) holds the officials of both sides off those terms as long as the engine's own refusal holds the proposer's
++     *  (TradeRequest.decline sets its waits per kind, by the proposer's weights): the refusing court's officials are held off the same terms as long,
++     *  so they do not offer back what their court just refused. The turns held, 0 when the engine holds no kind of these terms */
++    private fun holdOff(decliner: Civilization, request: TradeRequest): Int {
 +        val proposer = decliner.gameInfo.getCivilization(request.requestingCiv)
-+        val offers = request.trade.ourOffers + request.trade.theirOffers
-+        val flags = listOfNotNull(
-+            DiplomacyFlags.DeclinedLuxExchange.takeIf { offers.isNotEmpty() && offers.all { it.type == TradeOfferType.Luxury_Resource } },
-+            DiplomacyFlags.DeclinedResearchAgreement.takeIf { offers.any { it.name == Constants.researchAgreement } },
-+            DiplomacyFlags.DeclinedDefensivePact.takeIf { offers.any { it.name == Constants.defensivePact } },
-+            DiplomacyFlags.DeclinedOpenBorders.takeIf { offers.any { it.name == Constants.openBorders } },
-+            DiplomacyFlags.DeclinedEmbassy.takeIf { offers.any { it.name == Constants.acceptEmbassy } })
-+        for (manager in listOfNotNull(proposer.getDiplomacyManager(decliner), decliner.getDiplomacyManager(proposer)))
-+            for (flag in flags) if (manager.getFlag(flag) < HOLD_OFF) manager.setFlag(flag, HOLD_OFF)
++        val theirs = proposer.getDiplomacyManager(decliner) ?: return 0
++        val ours = decliner.getDiplomacyManager(proposer)
++        var held = 0
++        for (flag in listOf(DiplomacyFlags.DeclinedLuxExchange, DiplomacyFlags.DeclinedResearchAgreement, DiplomacyFlags.DeclinedDefensivePact,
++                DiplomacyFlags.DeclinedOpenBorders, DiplomacyFlags.DeclinedEmbassy)) {
++            val turns = theirs.getFlag(flag).takeIf { theirs.hasFlag(flag) } ?: continue
++            held = maxOf(held, turns)
++            if (ours != null && ours.getFlag(flag) < turns) ours.setFlag(flag, turns)
++        }
++        return held
 +    }
 +
 +    /** What one side of a request can no longer give, named from [civ]'s side ("our Horses x1", "Greece's Copper x1"); the request holds the trade as [receiver] sees it */
@@ -3327,7 +3414,7 @@ index 0000000..68e7e8b
 +            "accepted" -> "was accepted - the deal is in force"
 +            "declined" -> "was refused"
 +            "countered" -> { counters += "${civ.civName}<${receiver.civName}"; "got a counteroffer, which now waits on our desk for your answer (answerOffers accept or refuse)" }
-+            "lapsed" -> "waited $PEACE_OFFER_WAITS turns at their court unanswered and lapsed as refused"
++            "lapsed" -> "waited $DESK_WAITS turns at their court unanswered and lapsed as refused"
 +            "invalid" -> "could not be honoured when their officials weighed it (a resource or the treasury had changed) and was dropped"
 +            "voided" -> shortOf(request, receiver, civ).let { short -> if (short.isEmpty()) "lapsed: one side could no longer supply what was offered (a resource ran out, or a treaty state changed)"
 +                else "lapsed: ${short.joinToString(" and ")} ${if (short.size == 1) "was" else "were"} no longer there to give" }
@@ -3504,7 +3591,7 @@ index 0000000..68e7e8b
 +            val terms = describeOffer(offer, civ.gameInfo)
 +            val logic = TradeLogic(civ, other)
 +            logic.currentTrade.set(offer.trade)
-+            civ.tradeRequests.remove(offer); peaceOfferedOn.remove("${civ.civName}<${other.civName}")
++            civ.tradeRequests.remove(offer); peaceOfferedOn.forget("${civ.civName}<${other.civName}")
 +            settle(offer, civ, "accepted")
 +            logic.acceptTrade()
 +            other.addNotification("[${civ.civName}] has accepted your trade request", com.unciv.logic.civilization.NotificationCategory.Trade, com.unciv.logic.civilization.NotificationIcon.Trade, civ.civName)
@@ -3552,7 +3639,7 @@ index 0000000..68e7e8b
 +    /** Does a proposal of friendship from [other] wait on [civ]'s desk? (an engine popup alert, which the officials leave alone at a ruled court) */
 +    private fun friendshipFrom(civ: Civilization, other: Civilization) = civ.popupAlerts.any { it.type == AlertType.DeclarationOfFriendship && it.value == other.civID }
 +    /** turn on which each proposal of friendship on our desk was first seen, keyed "us<them" */
-+    private val friendshipOfferedOn = HashMap<String, Int>()
++    private val friendshipOfferedOn = Desk()
 +
 +    /**
 +     *  Proposals of a Declaration of Friendship made to this court: they wait for the ruler's answer (answerOffers, terms "Declaration of Friendship")
@@ -3561,40 +3648,34 @@ index 0000000..68e7e8b
 +    fun friendshipOffers(civ: Civilization, announce: Boolean = false): List<String> {
 +        val turn = civ.gameInfo.turns
 +        val waiting = civ.popupAlerts.filter { it.type == AlertType.DeclarationOfFriendship }.mapNotNull { alert -> civ.gameInfo.civilizations.firstOrNull { it.civID == alert.value } }.distinct()
-+        if (announce) friendshipOfferedOn.keys.removeAll { key -> key.startsWith("${civ.civName}<") && waiting.none { key == "${civ.civName}<${it.civName}" } }
++        if (announce) friendshipOfferedOn.keepOnly(civ, waiting.map { "${civ.civName}<${it.civName}" })
 +        return waiting.mapNotNull { other ->
 +            val key = "${civ.civName}<${other.civName}"
 +            if (!other.isAlive() || !civ.diplomacyFunctions.canSignDeclarationOfFriendshipWith(other)) {
 +                // War, a denouncement or a friendship made meanwhile: nothing left to answer
-+                if (announce) { civ.popupAlerts.removeAll { it.type == AlertType.DeclarationOfFriendship && it.value == other.civID }; friendshipOfferedOn.remove(key) }
++                if (announce) { civ.popupAlerts.removeAll { it.type == AlertType.DeclarationOfFriendship && it.value == other.civID }; friendshipOfferedOn.forget(key) }
 +                return@mapNotNull null
 +            }
-+            val since = friendshipOfferedOn[key]
-+                ?: if (!announce) return@mapNotNull "${other.civName}: a Declaration of Friendship (just arrived; answerOffers accept or refuse, terms \"Declaration of Friendship\")" + nearVictoryNote(other)
-+                else {
-+                    log(civ, "${other.civName} proposes a Declaration of Friendship. It waits for your answer - accept or refuse it with answerOffers (terms \"Declaration of Friendship\"); unanswered, it lapses as refused in $PEACE_OFFER_WAITS turns.")
-+                    friendshipOfferedOn[key] = turn
-+                    turn
-+                }
-+            if (announce && turn - since >= PEACE_OFFER_WAITS) {
-+                friendshipOfferedOn.remove(key)
-+                refuseFriendship(civ, other)
-+                log(civ, "${other.civName}'s proposal of a Declaration of Friendship went unanswered and lapsed as refused.")
-+                null
-+            } else "${other.civName}: a Declaration of Friendship (${(PEACE_OFFER_WAITS - (turn - since)).coerceAtLeast(0).let { if (it == 0) "lapses at the next turn" else "waits $it more turns" }}; answerOffers accept or refuse, terms \"Declaration of Friendship\")" + nearVictoryNote(other)
++            friendshipOfferedOn.item(key, turn, announce,
++                fresh = { "${other.civName}: a Declaration of Friendship (just arrived; answerOffers accept or refuse, terms \"Declaration of Friendship\")" + nearVictoryNote(other) },
++                arrive = { log(civ, "${other.civName} proposes a Declaration of Friendship. It waits for your answer - accept or refuse it with answerOffers (terms \"Declaration of Friendship\"); unanswered, it lapses as refused in $DESK_WAITS turns.") },
++                lapse = {
++                    refuseFriendship(civ, other)
++                    log(civ, "${other.civName}'s proposal of a Declaration of Friendship went unanswered and lapsed as refused.") },
++                told = { left -> "${other.civName}: a Declaration of Friendship (${Desk.waits(left, "lapses at the next turn")}; answerOffers accept or refuse, terms \"Declaration of Friendship\")" + nearVictoryNote(other) })
 +        }
 +    }
 +
 +    private fun refuseFriendship(civ: Civilization, other: Civilization) {
 +        civ.popupAlerts.removeAll { it.type == AlertType.DeclarationOfFriendship && it.value == other.civID }
 +        // The engine's own answer for a refusal: the proposer's officials wait before they ask again
-+        other.getDiplomacyManager(civ)?.let { if (it.getFlag(DiplomacyFlags.DeclinedDeclarationOfFriendship) < HOLD_OFF) it.setFlag(DiplomacyFlags.DeclinedDeclarationOfFriendship, HOLD_OFF) }
++        other.getDiplomacyManager(civ)?.let { if (it.getFlag(DiplomacyFlags.DeclinedDeclarationOfFriendship) < FRIENDSHIP_REFUSED_WAITS) it.setFlag(DiplomacyFlags.DeclinedDeclarationOfFriendship, FRIENDSHIP_REFUSED_WAITS) }
 +        other.addNotification("[${civ.civName}] has denied our Declaration of Friendship!", com.unciv.logic.civilization.NotificationCategory.Diplomacy, com.unciv.logic.civilization.NotificationIcon.Diplomacy, civ.civName)
 +    }
 +
 +    /** The ruler's answer to a proposal of friendship on the desk; each side's log hears it (the proposer's through the engine's notice) */
 +    private fun answerFriendship(civ: Civilization, other: Civilization, answer: String, byRenewal: Boolean = false): String {
-+        friendshipOfferedOn.remove("${civ.civName}<${other.civName}")
++        friendshipOfferedOn.forget("${civ.civName}<${other.civName}")
 +        return when (answer.lowercase().trim()) {
 +            "accept" -> {
 +                if (!civ.diplomacyFunctions.canSignDeclarationOfFriendshipWith(other)) throw IllegalArgumentException("A Declaration of Friendship with ${other.civName} cannot be made now (at war, denounced, or already friends)")
@@ -3609,7 +3690,7 @@ index 0000000..68e7e8b
 +            "refuse" -> {
 +                refuseFriendship(civ, other)
 +                log(civ, "By your order: we refused ${other.civName}'s Declaration of Friendship.")
-+                "Refused ${other.civName}'s Declaration of Friendship. Their officials do not propose it again for $HOLD_OFF turns; you still may"
++                "Refused ${other.civName}'s Declaration of Friendship. Their officials do not propose it again for $FRIENDSHIP_REFUSED_WAITS turns; you still may"
 +            }
 +            else -> throw IllegalArgumentException("answer must be accept or refuse")
 +        }
@@ -3791,9 +3872,9 @@ index 0000000..68e7e8b
 +    }
 +
 +    /** turn on which each waiting offer of peace was first seen, keyed "us<them" */
-+    private val peaceOfferedOn = HashMap<String, Int>()
-+    /** turn on which each waiting offer of a deal was first seen, keyed "us<them: terms" */
-+    private val dealOfferedOn = HashMap<String, Int>()
++    private val peaceOfferedOn = Desk()
++    /** Each waiting offer of a deal, keyed "us<them: terms" */
++    private val dealOfferedOn = Desk()
 +
 +    private fun isPeace(request: TradeRequest) = (request.trade.ourOffers + request.trade.theirOffers).any { it.name == Constants.peaceTreaty }
 +
@@ -3806,28 +3887,25 @@ index 0000000..68e7e8b
 +        val turn = game.turns
 +        val waiting = civ.tradeRequests.filter { !isPeace(it) }
 +        val keyOf = { request: TradeRequest -> "${civ.civName}<${game.getCivilization(request.requestingCiv).civName}: ${request.trade.brief(game)}" }
-+        if (announce) dealOfferedOn.keys.removeAll { key -> key.startsWith("${civ.civName}<") && waiting.none { keyOf(it) == key } }
++        if (announce) dealOfferedOn.keepOnly(civ, waiting.map(keyOf))
 +        return waiting.mapNotNull { request ->
 +            val other = game.getCivilization(request.requestingCiv)
 +            val key = keyOf(request)
 +            val terms = request.trade.brief(game)
-+            val since = dealOfferedOn[key]
-+                ?: if (!announce) return@mapNotNull "${other.civName}: $terms (just arrived - it may have replaced an offer you saw before; answer it with these terms, as written here)" + warnGivingAway(civ, request) + nearVictoryNote(other, request.trade.ourOffers + request.trade.theirOffers)
-+                else {
++            val notes = { warnGivingAway(civ, request) + nearVictoryNote(other, request.trade.ourOffers + request.trade.theirOffers) }
++            dealOfferedOn.item(key, turn, announce,
++                fresh = { "${other.civName}: $terms (just arrived - it may have replaced an offer you saw before; answer it with these terms, as written here)" + notes() },
++                arrive = {
 +                    val advised = other.civID in RulerOverrides.ruledCivs
 +                    val inAnswer = counters.remove("${civ.civName}<${other.civName}")
-+                    log(civ, "${other.civName}${if (advised) " (an advised court)" else ""} offers a deal${if (inAnswer) " in answer to ours" else ""}: $terms. It waits for your answer - accept or refuse it with answerOffers (a counter is a refusal and a new proposal); unanswered, it lapses as refused in $PEACE_OFFER_WAITS turns.${nearVictoryNote(other, request.trade.ourOffers + request.trade.theirOffers)}")
-+                    dealOfferedOn[key] = turn
-+                    turn
-+                }
-+            if (announce && turn - since >= PEACE_OFFER_WAITS) {
-+                civ.tradeRequests.remove(request); request.decline(civ); holdOff(civ, request); dealOfferedOn.remove(key)
-+                noteGone(civ, other, terms, "went unanswered and lapsed as refused")
-+                settle(request, civ, "lapsed")
-+                other.addNotification("[${civ.civName}] has denied your trade request", com.unciv.logic.civilization.NotificationCategory.Trade, civ.civName, com.unciv.logic.civilization.NotificationIcon.Trade)
-+                log(civ, "${other.civName}'s offer ($terms) went unanswered and lapsed as refused.")
-+                null
-+            } else "${other.civName}: $terms (${(PEACE_OFFER_WAITS - (turn - since)).coerceAtLeast(0).let { if (it == 0) "lapses at the next turn" else "waits $it more turns" }}; answerOffers accept or refuse)" + warnGivingAway(civ, request) + nearVictoryNote(other, request.trade.ourOffers + request.trade.theirOffers)
++                    log(civ, "${other.civName}${if (advised) " (an advised court)" else ""} offers a deal${if (inAnswer) " in answer to ours" else ""}: $terms. It waits for your answer - accept or refuse it with answerOffers (a counter is a refusal and a new proposal); unanswered, it lapses as refused in $DESK_WAITS turns.") },
++                lapse = {
++                    civ.tradeRequests.remove(request); request.decline(civ); holdOff(civ, request)
++                    noteGone(civ, other, terms, "went unanswered and lapsed as refused")
++                    settle(request, civ, "lapsed")
++                    other.addNotification("[${civ.civName}] has denied your trade request", com.unciv.logic.civilization.NotificationCategory.Trade, civ.civName, com.unciv.logic.civilization.NotificationIcon.Trade)
++                    log(civ, "${other.civName}'s offer ($terms) went unanswered and lapsed as refused.") },
++                told = { left -> "${other.civName}: $terms (${Desk.waits(left, "lapses at the next turn")}; answerOffers accept or refuse)" + notes() })
 +        }
 +    }
 +
@@ -3893,7 +3971,7 @@ index 0000000..68e7e8b
 +                        request.trade.theirOffers.filter { offer -> logic.theirAvailableOffers.none { it.name == offer.name && it.amount >= offer.amount } }.map { "their ${it.brief(game)}" }
 +                    throw IllegalArgumentException("${other.civName}'s offer ($summary) can no longer be honoured: ${short.ifEmpty { listOf("a resource or the treasury") }.joinToString()} ${if (short.size == 1) "is" else "are"} no longer there to give. It stays on the desk: refuse it, or let it lapse")
 +                }
-+                civ.tradeRequests.remove(request); dealOfferedOn.remove(key)
++                civ.tradeRequests.remove(request); dealOfferedOn.forget(key)
 +                settle(request, civ, "accepted")
 +                val logic = TradeLogic(civ, other)
 +                logic.currentTrade.set(request.trade)
@@ -3906,12 +3984,12 @@ index 0000000..68e7e8b
 +                "Accepted ${other.civName}'s offer: $summary" + (if (mirror != null) " (our own proposal of the same swap to them is withdrawn)" else "")
 +            }
 +            "refuse" -> {
-+                civ.tradeRequests.remove(request); dealOfferedOn.remove(key)
-+                request.decline(civ); holdOff(civ, request)
++                civ.tradeRequests.remove(request); dealOfferedOn.forget(key)
++                request.decline(civ); val held = holdOff(civ, request)
 +                settle(request, civ, "declined")
 +                other.addNotification("[${civ.civName}] has denied your trade request", com.unciv.logic.civilization.NotificationCategory.Trade, civ.civName, com.unciv.logic.civilization.NotificationIcon.Trade)
 +                log(civ, "By your order: we refused ${other.civName}'s offer ($summary).")
-+                "Refused ${other.civName}'s offer: $summary. Neither side's officials offer these terms again for $HOLD_OFF turns; you still may"
++                "Refused ${other.civName}'s offer: $summary. " + (if (held > 0) "Neither side's officials offer these terms again for $held turns" else "Their officials may offer them again when they choose") + "; you still may"
 +            }
 +            else -> throw IllegalArgumentException("answer must be accept or refuse")
 +        }
@@ -3921,7 +3999,7 @@ index 0000000..68e7e8b
 +    private fun reworded(saved: String) = Regex("^(.*?we give .*?) for (?!\\d+ turns?\\b)(.*)$").find(saved)?.takeIf { "; they give " !in saved }?.let { "${it.groupValues[1]}; they give ${it.groupValues[2]}" } ?: saved
 +
 +    /** turn on which each demand on our desk was first seen, keyed "us<them: kind" */
-+    private val demandOfferedOn = HashMap<String, Int>()
++    private val demandOfferedOn = Desk()
 +
 +    /** What a demand asks of us, in plain words */
 +    private fun asked(demand: Demand) = when (demand) {
@@ -3944,25 +4022,20 @@ index 0000000..68e7e8b
 +        val turn = civ.gameInfo.turns
 +        val waiting = demandsOnDesk(civ)
 +        val keyOf = { demand: Demand, from: Civilization -> "${civ.civName}<${from.civName}: ${demand.name}" }
-+        if (announce) demandOfferedOn.keys.removeAll { key -> key.startsWith("${civ.civName}<") && waiting.none { (demand, from) -> keyOf(demand, from) == key } }
++        if (announce) demandOfferedOn.keepOnly(civ, waiting.map { (demand, from) -> keyOf(demand, from) })
 +        return waiting.mapNotNull { (demand, from) ->
 +            val key = keyOf(demand, from)
-+            if (!from.isAlive()) { if (announce) { civ.popupAlerts.removeAll { it.type == demand.demandAlert && it.value == from.civID }; demandOfferedOn.remove(key) }; return@mapNotNull null }
++            if (!from.isAlive()) { if (announce) { civ.popupAlerts.removeAll { it.type == demand.demandAlert && it.value == from.civID }; demandOfferedOn.forget(key) }; return@mapNotNull null }
 +            val terms = "${from.civName} demands that we ${asked(demand)}. Agreeing binds a promise for 100 turns, and breaking it later is remembered as betrayal; ${refusing(demand, from)}"
-+            val since = demandOfferedOn[key]
-+                ?: if (!announce) return@mapNotNull "$terms (just arrived; answerDemands agree or refuse)"
-+                else {
-+                    log(civ, "${from.civName} demands that we ${asked(demand)}. It waits for your answer - agree or refuse it with answerDemands" +
-+                        (if (demand == Demand.DoNotAttackUs) " (to refuse it is to declare war on ${from.civName})" else "") + "; unanswered, it lapses as agreed in $PEACE_OFFER_WAITS turns.")
-+                    demandOfferedOn[key] = turn
-+                    turn
-+                }
-+            if (announce && turn - since >= PEACE_OFFER_WAITS) {
-+                civ.popupAlerts.removeAll { it.type == demand.demandAlert && it.value == from.civID }; demandOfferedOn.remove(key)
-+                civ.getDiplomacyManager(from)?.agreeToDemand(demand)
-+                log(civ, "${from.civName}'s demand that we ${asked(demand)} went unanswered and lapsed as agreed: we are bound by that promise for 100 turns.")
-+                null
-+            } else "$terms (${(PEACE_OFFER_WAITS - (turn - since)).coerceAtLeast(0).let { if (it == 0) "lapses as agreed at the next turn" else "waits $it more turns, then lapses as agreed" }}; answerDemands agree or refuse)"
++            demandOfferedOn.item(key, turn, announce,
++                fresh = { "$terms (just arrived; answerDemands agree or refuse)" },
++                arrive = { log(civ, "${from.civName} demands that we ${asked(demand)}. It waits for your answer - agree or refuse it with answerDemands" +
++                    (if (demand == Demand.DoNotAttackUs) " (to refuse it is to declare war on ${from.civName})" else "") + "; unanswered, it lapses as agreed in $DESK_WAITS turns.") },
++                lapse = {
++                    civ.popupAlerts.removeAll { it.type == demand.demandAlert && it.value == from.civID }
++                    civ.getDiplomacyManager(from)?.agreeToDemand(demand)
++                    log(civ, "${from.civName}'s demand that we ${asked(demand)} went unanswered and lapsed as agreed: we are bound by that promise for 100 turns.") },
++                told = { left -> "$terms (${Desk.waits(left, "lapses as agreed at the next turn", ", then lapses as agreed")}; answerDemands agree or refuse)" })
 +        }
 +    }
 +
@@ -3980,7 +4053,7 @@ index 0000000..68e7e8b
 +            throw IllegalArgumentException("Refusing ${from.civName}'s demand not to attack them is a declaration of war, and $WAR_LEAVE. Agree, let it lapse (it lapses as agreed), or bring it to the ruler")
 +        val told = waiting.map { (demand, _) ->
 +            civ.popupAlerts.removeAll { it.type == demand.demandAlert && it.value == from.civID }
-+            demandOfferedOn.remove("${civ.civName}<${from.civName}: ${demand.name}")
++            demandOfferedOn.forget("${civ.civName}<${from.civName}: ${demand.name}")
 +            val dealsBefore = dealsInForce(civ)
 +            if (agree) manager.agreeToDemand(demand) else manager.refuseDemand(demand)
 +            // A refusal that declared war cleared our deals with them in the same breath: named here, where the turn's compare cannot see them
@@ -4157,20 +4230,20 @@ index 0000000..68e7e8b
 +    fun toMap() = mapOf(
 +        "pending" to pending.map { mapOf("from" to it.first, "to" to it.second, "terms" to it.third) },
 +        "officialsPending" to officialsPending.map { mapOf("from" to it.first, "to" to it.second, "terms" to it.third) },
-+        "peaceOfferedOn" to peaceOfferedOn,
-+        "dealOfferedOn" to dealOfferedOn,
-+        "demandOfferedOn" to demandOfferedOn,
-+        "friendshipOfferedOn" to friendshipOfferedOn,
++        "peaceOfferedOn" to peaceOfferedOn.toMap(),
++        "dealOfferedOn" to dealOfferedOn.toMap(),
++        "demandOfferedOn" to demandOfferedOn.toMap(),
++        "friendshipOfferedOn" to friendshipOfferedOn.toMap(),
 +        "renewals" to renewals.map { it.toMap() })
 +
 +    fun load(json: JsonValue?) {
 +        reset()
 +        json?.get("pending")?.forEach { pending += Triple(it.getString("from"), it.getString("to"), reworded(it.getString("terms"))) }
 +        json?.get("officialsPending")?.forEach { officialsPending += Triple(it.getString("from"), it.getString("to"), it.getString("terms")) }
-+        json?.get("peaceOfferedOn")?.forEach { peaceOfferedOn[it.name] = it.asInt() }
-+        json?.get("dealOfferedOn")?.forEach { dealOfferedOn[reworded(it.name)] = it.asInt() }
-+        json?.get("demandOfferedOn")?.forEach { demandOfferedOn[it.name] = it.asInt() }
-+        json?.get("friendshipOfferedOn")?.forEach { friendshipOfferedOn[it.name] = it.asInt() }
++        peaceOfferedOn.load(json?.get("peaceOfferedOn"))
++        dealOfferedOn.load(json?.get("dealOfferedOn"), ::reworded)
++        demandOfferedOn.load(json?.get("demandOfferedOn"))
++        friendshipOfferedOn.load(json?.get("friendshipOfferedOn"))
 +        json?.get("renewals")?.forEach { entry -> renewals += Renewal(entry.getString("civ"), entry.getString("partner"), entry.getString("terms"),
 +            entry.get("give").map { it.getString("item") to it.getInt("amount") }, entry.get("want").map { it.getString("item") to it.getInt("amount") }, entry.getBoolean("afterFriendship", false)) }
 +    }
@@ -4183,35 +4256,30 @@ index 0000000..68e7e8b
 +        val game = civ.gameInfo
 +        val turn = game.turns
 +        val waiting = civ.tradeRequests.filter { isPeace(it) }
-+        if (announce) peaceOfferedOn.keys.removeAll { key -> key.startsWith("${civ.civName}<") && waiting.none { key == "${civ.civName}<${game.getCivilization(it.requestingCiv).civName}" } }
++        if (announce) peaceOfferedOn.keepOnly(civ, waiting.map { "${civ.civName}<${game.getCivilization(it.requestingCiv).civName}" })
 +        return waiting.mapNotNull { request ->
 +            val other = game.getCivilization(request.requestingCiv)
-+            val key = "${civ.civName}<${other.civName}"
 +            val terms = describeOffer(request, game)
-+            val since = peaceOfferedOn[key]
-+                ?: if (!announce) return@mapNotNull "${other.civName} offers $terms (just arrived, not yet entered in the log; order peace with ${other.civName} to accept)"
-+                else {
-+                    log(civ, "${other.civName} offers peace: $terms. The offer waits for your answer - order peace with ${other.civName} to accept it; left unanswered it is withdrawn in $PEACE_OFFER_WAITS turns.")
-+                    peaceOfferedOn[key] = turn
-+                    turn
-+                }
-+            if (announce && turn - since >= PEACE_OFFER_WAITS) {
-+                civ.tradeRequests.remove(request); request.decline(civ); peaceOfferedOn.remove(key)
-+                settle(request, civ, "lapsed")
-+                log(civ, "${other.civName}'s offer of peace went unanswered and has been withdrawn.")
-+                null
-+            } else "${other.civName} offers $terms (${(PEACE_OFFER_WAITS - (turn - since)).coerceAtLeast(0).let { if (it == 0) "withdrawn at the next turn" else "waits $it more turns" }}; order peace with ${other.civName} to accept)"
++            peaceOfferedOn.item("${civ.civName}<${other.civName}", turn, announce,
++                fresh = { "${other.civName} offers $terms (just arrived, not yet entered in the log; order peace with ${other.civName} to accept)" },
++                arrive = { log(civ, "${other.civName} offers peace: $terms. The offer waits for your answer - order peace with ${other.civName} to accept it; left unanswered it is withdrawn in $DESK_WAITS turns, which is how a peace is refused.") },
++                lapse = {
++                    civ.tradeRequests.remove(request); request.decline(civ)
++                    settle(request, civ, "lapsed")
++                    log(civ, "${other.civName}'s offer of peace went unanswered and has been withdrawn.") },
++                told = { left -> "${other.civName} offers $terms (${Desk.waits(left, "withdrawn at the next turn")}; order peace with ${other.civName} to accept)" })
 +        }
 +    }
 +
 +    /** The running account of all deals: what goes out and comes in each turn, and which deals are about to end */
-+    fun ledger(civ: Civilization): Map<String, Any?> {
++    /** [soon]: the turns that make a deal "ending soon" - a look-in away */
++    fun ledger(civ: Civilization, soon: Int): Map<String, Any?> {
 +        val trades = civ.diplomacy.values.flatMap { manager -> manager.trades.map { manager.otherCivName to it } }
 +        fun goldPerTurn(offers: List<TradeOffer>) = offers.filter { it.type == TradeOfferType.Gold_Per_Turn }.sumOf { it.amount }
 +        return mapOf(
 +            "goldPerTurnWePay" to trades.sumOf { goldPerTurn(it.second.ourOffers) },
 +            "goldPerTurnWeReceive" to trades.sumOf { goldPerTurn(it.second.theirOffers) },
-+            "endingSoon" to endingSoon(civ, 5).map { deal -> deal + if (renewals.any { it.civ == civ.civName && sansTurns(deal) == "${it.partner}: ${it.terms}" }) " - by your order, offered again the turn it ends"
++            "endingSoon" to endingSoon(civ, soon).map { deal -> deal + if (renewals.any { it.civ == civ.civName && sansTurns(deal) == "${it.partner}: ${it.terms}" }) " - by your order, offered again the turn it ends"
 +                else " - order renew to have it offered again the turn it ends" },
 +            "renewOrdered" to renewals.filter { it.civ == civ.civName }.map { "${it.partner}: ${it.terms}" }.ifEmpty { null })
 +    }
@@ -4251,16 +4319,16 @@ index 0000000..68e7e8b
 +                    "influence" to state.getDiplomacyManager(civ)?.getInfluence()?.toInt(),
 +                    "influenceFor250Gold" to state.cityStateFunctions.influenceGainedByGift(civ, 250))
 +            }.toList(),
-+            "note" to "Offers: luxury/strategic resource names, 'Gold' (amount), 'Gold per turn' (amount), '${Constants.openBorders}', '${Constants.researchAgreement}', '${Constants.defensivePact}', '${Constants.acceptEmbassy}', 'declaration of war on <power>' (a call to war, where the lists carry it: in want, they declare it on accepting; in give, we do, and it needs the same leave as declareWar). A proposal to an unadvised power is answered by its officials on their turn; one to an advised court waits for that court's advisor, who answers at their next look-in. Nothing wakes you for the answer - watch the log."
++            "note" to "Offers: luxury/strategic resource names, 'Gold' (amount), 'Gold per turn' (amount), '${Constants.openBorders}', '${Constants.researchAgreement}', '${Constants.defensivePact}', '${Constants.acceptEmbassy}', 'declaration of war on <power>' (a call to war, where the lists carry it: in want, they declare it on accepting; in give, we do, and it needs the same leave as declareWar). A proposal to an unadvised power is answered by its officials on their turn; one to an advised court waits for that court's advisor, who answers at their next look-in. An answer does not send for you - watch the log - but an offer from an advised court does, a counteroffer among them."
 +        )
 +    }
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..7dfd113
+index 0000000..54f2cb6
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,2641 @@
+@@ -0,0 +1,2657 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -4480,10 +4548,13 @@ index 0000000..7dfd113
 +                Regex("#\\d+").containsMatchIn(text) && !asksForOrders.containsMatchIn(text) -> selfCheck("words", civ.civName, "a unit's number in prose: $text")
 +            }
 +        }
-+        // A soldier the ruler put in place (hold, fortify, garrison) that stood on its spot when the turn began and stands elsewhere now
++        // A unit the ruler put in place (hold, fortify, garrison) that stood on its spot when the turn began, under the same order still, and stands
++        // elsewhere now. One on its way may move; so may one whose order changed within the turn (a held Great Person's shelter taken, a new hold)
 +        for ((id, order) in units.orders) {
 +            if (order.action !in setOf("hold", "fortify", "garrison")) continue
 +            val was = before.units[id]?.second ?: continue
++            val start = before.unitOrders[id] ?: continue
++            if (start != Triple(order.action, order.x, order.y)) continue
 +            if (order.x != null && (was.position.x.toInt() != order.x || was.position.y.toInt() != order.y)) continue // still on its way
 +            val now = civ.units.getUnitById(id)?.getTile() ?: continue
 +            if (now != was) selfCheck("orders", civ.civName, "${civ.units.getUnitById(id)?.name} #$id under a ${order.action} order moved from ${was.position} to ${now.position}")
@@ -4578,7 +4649,12 @@ index 0000000..7dfd113
 +            "GET /nations" -> RulesetCache[com.unciv.models.metadata.BaseRuleset.Civ_V_GnK.fullName]!!.nations.values
 +                .filter { it.isMajorCiv }.map { mapOf("name" to it.name, "leader" to it.leaderName) }
 +            "POST /new" -> newGame(json)
-+            "POST /advance" -> advance(json.getInt("turns", 10), json.getBoolean("wake", false))
++            "POST /advance" -> {
++                // The orchestrator's cadence, told with every advance: the host's windows follow it instead of guessing it
++                json.get("ageTurns")?.takeUnless { it.isNull }?.let { ageTurns = it.asInt().coerceAtLeast(1) }
++                json.get("lookInTurns")?.takeUnless { it.isNull }?.let { lookInTurns = it.asInt().coerceAtLeast(1) }
++                advance(json.getInt("turns", ageTurns), json.getBoolean("wake", false))
++            }
 +            "GET /briefing" -> pruned(briefing(civ(), query["since"]?.toIntOrNull()))
 +            "GET /options" -> pruned(options(civ(), query["audience"] == "1"))
 +            "GET /log" -> chanceryLog(civ(), query["sinceYear"]?.toIntOrNull()?.let { turnOfYear(it) } ?: since, query["until"]?.toIntOrNull() ?: Int.MAX_VALUE).let { lines ->
@@ -4589,7 +4665,7 @@ index 0000000..7dfd113
 +                        (if (lines.size - 150 > 150) " - and the same sinceTurn - and so on, a page at a time" else "") + ")")) + shown
 +                } }
 +            "GET /lookup" -> lookup(civ(), query["name"] ?: throw ApiError(400, "Missing name"))
-+            "GET /map.png" -> (query["since"]?.toIntOrNull() ?: (game().turns - 10)).coerceAtLeast(0).let { from ->
++            "GET /map.png" -> (query["since"]?.toIntOrNull() ?: (game().turns - ageTurns)).coerceAtLeast(0).let { from ->
 +                val until = query["until"]?.toIntOrNull()
 +                Png(MapRenderer.render(civ(), query["style"] ?: "atlas", trail = trail, since = from, sinceYear = yearText(from), until = until ?: Int.MAX_VALUE, untilYear = until?.let { yearText(it) } ?: "")) }
 +            "GET /orders" -> civ().let { orders.getOrPut(it.civName) { StandingOrders() }.toMap(it) }
@@ -4674,23 +4750,55 @@ index 0000000..7dfd113
 +        // Also into the dev GUI's save list (working dir is android/assets), so `gradlew desktop:run` can watch the world as spectator
 +        File("SaveFiles").mkdirs()
 +        File("SaveFiles/Ruler game").writeText(saveData)
-+        writeAtomically(File(dataDir, "host.json"), Json.write(mapOf(
-+            "orders" to orders.mapValues { it.value.toMap() },
-+            "noWonders" to wonderless.toList(),
-+            "publicEvents" to publicEvents,
-+            "chancery" to chancery,
-+            "unitOrders" to units.toMap(),
-+            "unitState" to units.stateToMap(),
-+            "worldVoteState" to mapOf("tallied" to voteTallied, "reminded" to voteReminded, "unHolder" to unHolder),
-+            "diplomacy" to diplomacy.toMap(),
-+            "warsDeclared" to warsDeclared.map { it.toString() },
-+            "trail" to trail.toMap(),
-+            "ages" to ages.toMap(),
-+            "lockedCities" to RulerOverrides.lockedCities.toList(),
-+            "focusedCities" to RulerOverrides.focusedCities.toList(),
-+            "inPlay" to inPlaySeen.filterValues { it.isNotEmpty() }.mapValues { it.value.sorted() }
-+        )))
++        writeAtomically(File(dataDir, "host.json"), Json.write(memories.filter { it.kept }.associate { it.name to it.save() }))
 +    }
++
++    /** A memory of the host's, declared once: [kept] in host.json under [name], or not (it lives a turn or less), and how it is forgotten, saved and
++     *  read back. A new game forgets every one, save and load go through every kept one: none can be left out of one of the three, as shipRaids and
++     *  warningsWoken were left out of the save (a restart re-woke every advisor for every warning, and forgot a raider - audit 2026-10-04) */
++    private class Memory(val name: String, val kept: Boolean, val clear: () -> Unit, val save: () -> Any? = { null }, val load: (JsonValue?) -> Unit = {})
++
++    /** The orchestrator's cadence, told with every advance (12 and 4 until it is): the turns of an age, and the turns between look-ins. What the host
++     *  shows "since the last age" (the briefing's log, the map) and what it calls "a look-in away" (a deal ending, a dry treasury, the vote) follow it */
++    private var ageTurns = 12
++    private var lookInTurns = 4
++
++    /** Every memory of the host's, in the order load reads them */
++    private val memories: List<Memory> by lazy { listOf(
++        Memory("orders", true, { orders.clear() }, { orders.mapValues { it.value.toMap() } },
++            { json -> json?.forEach { entry -> orders[entry.name] = StandingOrders().apply { readFrom(entry) } } }),
++        Memory("noWonders", true, { wonderless.clear() }, { wonderless.toList() }, { json -> json?.asStringArray()?.let { wonderless += it } }),
++        Memory("publicEvents", true, { publicEvents.clear() }, { publicEvents },
++            { json -> json?.forEach { event -> publicEvents += mapOf("turn" to event.getInt("turn"), "year" to event.getString("year", ""), "text" to event.getString("text")) } }),
++        Memory("chancery", true, { chancery.clear() }, { chancery },
++            { json -> json?.forEach { civLog -> chancery[civLog.name] = ArrayList(civLog.map { mapOf("turn" to it.getInt("turn"), "text" to it.getString("text")) }) } }),
++        Memory("unitOrders", true, { units.reset() }, { units.toMap() }, { json -> units.load(json) }),
++        Memory("unitState", true, {}, { units.stateToMap() }, { json -> units.loadState(json) }), // older files have none: the clocks start afresh
++        Memory("worldVoteState", true, { voteTallied = -1; voteReminded.clear(); unHolder = null }, { mapOf("tallied" to voteTallied, "reminded" to voteReminded, "unHolder" to unHolder) },
++            { json -> json?.let { saved -> voteTallied = saved.getInt("tallied", -1); unHolder = saved.getString("unHolder", null); saved.get("reminded")?.forEach { voteReminded[it.name] = it.asInt() } }
++                // A save from before the vote was the ruler's: whoever holds the United Nations now is no news
++                ?: run { voteTallied = -1; unHolder = game().civilizations.firstOrNull { it.isMajorCiv() }?.victoryManager?.getUNBuildingAndOwnerNames()?.second?.let { game().getCivilization(it).civName } } }),
++        Memory("diplomacy", true, { diplomacy.reset() }, { diplomacy.toMap() }, { json -> diplomacy.load(json) }),
++        Memory("warsDeclared", true, { warsDeclared.clear() }, { warsDeclared.map { it.toString() } }, { json -> json?.asStringArray()?.forEach { warsDeclared += WarRecord.parse(it) } }),
++        Memory("trail", true, { trail.clear() }, { trail.toMap() }, { json -> trail.load(json) }),
++        Memory("ages", true, { ages.clear() }, { ages.toMap() }, { json -> ages.load(json) }),
++        Memory("lockedCities", true, { RulerOverrides.lockedCities.clear() }, { RulerOverrides.lockedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.lockedCities += it } }),
++        Memory("focusedCities", true, { RulerOverrides.focusedCities.clear() }, { RulerOverrides.focusedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.focusedCities += it } }),
++        Memory("cadence", true, { ageTurns = 12; lookInTurns = 4 }, { mapOf("ageTurns" to ageTurns, "lookInTurns" to lookInTurns) },
++            { json -> json?.let { ageTurns = it.getInt("ageTurns", 12); lookInTurns = it.getInt("lookInTurns", 4) } }),
++        Memory("inPlay", true, { inPlaySeen.clear() }, { inPlaySeen.filterValues { it.isNotEmpty() }.mapValues { it.value.sorted() } },
++            { json -> json?.forEach { civ -> inPlaySeen[civ.name] = civ.asStringArray().toHashSet() } }), // older files have none: latched afresh
++        Memory("warningsWoken", true, { warningsWoken.clear() }, { warningsWoken.mapValues { it.value.sorted() } },
++            { json -> json?.forEach { civ -> warningsWoken[civ.name] = civ.asStringArray().toHashSet() } }),
++        Memory("shipRaids", true, { shipRaids.clear() },
++            { shipRaids.mapValues { (_, raids) -> raids.mapKeys { it.key.toString() }.mapValues { (_, r) -> mapOf("turn" to r.turn, "owner" to r.owner, "target" to r.target, "from" to r.from) } } },
++            { json -> json?.forEach { civ -> shipRaids[civ.name] = HashMap(civ.associate { r -> r.name.toInt() to ShipRaid(r.getInt("turn"), r.getString("owner"), r.getString("target"), r.getString("from")) }) } }),
++        // What the orders set in the engine, read again from the orders at load
++        Memory("orders in the engine", false, { RulerOverrides.postures.clear(); RulerOverrides.goldReserve.clear(); RulerOverrides.faithReserve.clear(); RulerOverrides.officialsOrders.clear(); RulerOverrides.noWonders.clear() }),
++        // A turn's buckets, filled by the hooks and drained by the bookkeeping; and what the last turn left for the next briefing
++        Memory("turn buckets", false, { spending.clear(); losses.clear(); strikes.clear(); blows.clear(); expended.clear(); disbandedFor.clear(); destroyed.clear()
++            faithSpending.clear(); freeTechs.clear(); hostAdopted.clear(); notificationsSeen.clear(); officialsSpent.clear(); lastFaithSpent.clear(); worldAtLastAdvance = null })
++    ) }
 +
 +    /** A copy of the world after every stretch of turns, so a test game can be wound back (the last dozen are kept) */
 +    private fun backup() {
@@ -4718,12 +4826,7 @@ index 0000000..7dfd113
 +    }
 +
 +    /** Everything the host remembers about a game, forgotten in one place - so a new world starts clean whatever the last one left behind */
-+    private fun resetHostState() {
-+        orders.clear(); publicEvents.clear(); chancery.clear(); spending.clear(); warningsWoken.clear(); losses.clear(); warsDeclared.clear(); notificationsSeen.clear(); shipRaids.clear(); inPlaySeen.clear()
-+        units.reset(); diplomacy.reset(); trail.clear(); ages.clear()
-+        worldAtLastAdvance = null
-+        RulerOverrides.lockedCities.clear(); RulerOverrides.focusedCities.clear(); RulerOverrides.postures.clear(); RulerOverrides.goldReserve.clear(); RulerOverrides.faithReserve.clear(); RulerOverrides.officialsOrders.clear(); RulerOverrides.noWonders.clear()
-+    }
++    private fun resetHostState() { for (memory in memories) memory.clear() }
 +
 +    /** Written to a sibling file and moved into place, so a crash mid-write never leaves a half file behind */
 +    private fun writeAtomically(file: File, text: String) {
@@ -4740,36 +4843,13 @@ index 0000000..7dfd113
 +        gameInfo = loaded
 +        UncivGame.Current.gameInfo = loaded
 +        val host = JsonReader().parse(hostFile.readText())
-+        for (entry in host.get("orders")) orders[entry.name] = StandingOrders().apply { readFrom(entry) }
-+        wonderless.clear(); host.get("noWonders")?.asStringArray()?.let { wonderless += it }
++        for (memory in memories) { memory.clear(); if (memory.kept) memory.load(host.get(memory.name)) }
 +        applyWonderless()
-+        for (event in host.get("publicEvents"))
-+            publicEvents += mapOf("turn" to event.getInt("turn"), "year" to event.getString("year", ""), "text" to event.getString("text"))
-+        host.get("chancery")?.forEach { civLog ->
-+            chancery[civLog.name] = ArrayList(civLog.map { mapOf("turn" to it.getInt("turn"), "text" to it.getString("text")) })
-+        }
-+        units.load(host.get("unitOrders"))
-+        units.loadState(host.get("unitState")) // older files have none: the clocks start afresh
-+        voteReminded.clear()
-+        host.get("worldVoteState")?.let { saved ->
-+            voteTallied = saved.getInt("tallied", -1); unHolder = saved.getString("unHolder", null)
-+            saved.get("reminded")?.forEach { voteReminded[it.name] = it.asInt() } }
-+            // A save from before the vote was the ruler's: whoever holds the United Nations now is no news
-+            ?: run { voteTallied = -1; unHolder = loaded.civilizations.firstOrNull { it.isMajorCiv() }?.victoryManager?.getUNBuildingAndOwnerNames()?.second?.let { loaded.getCivilization(it).civName } }
-+        diplomacy.load(host.get("diplomacy"))
-+        warsDeclared.clear(); host.get("warsDeclared")?.asStringArray()?.forEach { warsDeclared += WarRecord.parse(it) }
 +        units.dropMistakenHolds(loaded, chancery.values)
 +        // A war declared by order before a restart is still news to the next advance: the round's start is the world before it, not the loaded world
 +        worldAtLastAdvance = WorldSnapshot(loaded).also { start -> start.wars.removeAll { war -> war.toList().let { (first, second) -> warsDeclared.any { it.covers(first, second) } } } }
-+        trail.load(host.get("trail"))
-+        ages.load(host.get("ages"))
 +        trail.record(loaded) // a save from before the trail was kept starts one here
 +        for ((name, standing) in orders) game().civilizations.firstOrNull { it.civName == name }?.let { RulerOverrides.postures[it.civID] = RulerOverrides.Posture(standing.warAim, standing.stance, standing.reserve) }
-+        RulerOverrides.lockedCities.clear()
-+        host.get("lockedCities")?.asStringArray()?.let { RulerOverrides.lockedCities += it }
-+        RulerOverrides.focusedCities.clear()
-+        host.get("focusedCities")?.asStringArray()?.let { RulerOverrides.focusedCities += it }
-+        inPlaySeen.clear(); host.get("inPlay")?.forEach { civ -> inPlaySeen[civ.name] = civ.asStringArray().toHashSet() } // older files have none: latched afresh
 +        registerRuledCivs()
 +        println("Loaded game at turn ${loaded.turns}, ruled: ${orders.keys}")
 +    }
@@ -5397,6 +5477,8 @@ index 0000000..7dfd113
 +        val turnsLeft = RulerHost.dealTurnsLeft(civ)
 +        val faith = civ.religionManager.storedFaith
 +        val policies = civ.policies.getAdoptedPolicies().toSet()
++        /** The ruler's standing unit orders as the turn began: the action and its place, each unit by number */
++        val unitOrders = civ.units.getCivUnits().mapNotNull { unit -> RulerHost.units.orders[unit.id]?.let { unit.id to Triple(it.action, it.x, it.y) } }.toMap()
 +    }
 +
 +    internal fun dealsOf(civ: Civilization) = diplomacy.dealsInForce(civ)
@@ -5611,7 +5693,9 @@ index 0000000..7dfd113
 +        }
 +        // Deals: say exactly what came into force and what ended
 +        val dealsNow = diplomacy.dealsInForce(civ)
-+        for (deal in diplomacy.endingSoon(civ, 5) - diplomacy.endingSoon(civ, 4).toSet()) log(civ, "A deal ends in five turns, in ${yearText(turn + 5)}: $deal. The same terms can be offered to them again only once it has ended; order renew and they are offered again that very turn, as our proposal.")
++        // Told once, the turn a deal comes to end just past the next look-in: there is time yet to order it renewed
++        val soon = lookInTurns + 1
++        for (deal in diplomacy.endingSoon(civ, soon) - diplomacy.endingSoon(civ, soon - 1).toSet()) log(civ, "A deal ends in $soon turns, in ${yearText(turn + soon)}: $deal. The same terms can be offered to them again only once it has ended; order renew and they are offered again that very turn, as our proposal.")
 +        val began = (dealsNow - before.deals).toList(); val ended = (before.deals - dealsNow).toList()
 +        // A deal that ends the turn its renewal begins was replaced, not lost: same partner, same goods, only the numbers differ
 +        val (changed, lapsed) = ended.partition { old -> began.any { diplomacy.sameGoods(it) == diplomacy.sameGoods(old) } }
@@ -5690,7 +5774,7 @@ index 0000000..7dfd113
 +        // A vote close at hand with our vote unpledged: said once per vote, in time for a look-in
 +        for (civ in ruled.filter { it.isAlive() }) {
 +            val due = civ.getTurnsTillNextDiplomaticVote() ?: continue
-+            if (due !in 1..4 || orders[civ.civName]?.worldVote != null || voteReminded[civ.civName] == game.turns + due) continue
++            if (due !in 1..lookInTurns || orders[civ.civName]?.worldVote != null || voteReminded[civ.civName] == game.turns + due) continue
 +            voteReminded[civ.civName] = game.turns + due
 +            log(civ, "The world votes for its leader in $due turn${plural(due)}, and our vote is not pledged: unpledged, we abstain. Set worldVote to pledge it to a great power.")
 +        }
@@ -5824,8 +5908,8 @@ index 0000000..7dfd113
 +            if (city.isCoastal()) "on the coast" else null,
 +            if (centre.isAdjacentToRiver()) "by a river" else null,
 +            if (centre.isHill()) "on a hill" else null,
-+            centre.getTilesInDistance(2).count { it.terrainFeatures.contains("Forest") }.takeIf { it >= 3 }?.let { "among forests" },
-+            centre.getTilesInDistance(2).any { it.baseTerrain == "Mountain" }.takeIf { it }?.let { "under mountains" },
++            centre.getTilesInDistance(RulerOverrides.FIELDS).count { it.terrainFeatures.contains("Forest") }.takeIf { it >= 3 }?.let { "among forests" },
++            centre.getTilesInDistance(RulerOverrides.FIELDS).any { it.baseTerrain == "Mountain" }.takeIf { it }?.let { "under mountains" },
 +            centre.baseTerrain.lowercase().takeIf { it in listOf("desert", "tundra", "snow", "plains", "grassland") }?.let { "$it country" }).joinToString(", ").ifEmpty { "inland" }
 +    }
 +
@@ -6222,11 +6306,11 @@ index 0000000..7dfd113
 +            "strategicResources" to strategicResources(civ),
 +            "religion" to told(civ, "religion"),
 +            "knownCivs" to diplomacy.relations(civ),
-+            "log" to condensed(chanceryLog(civ, logSince ?: (turn - 12)).map { "T${it["turn"]}: ${it["text"]}" }),
++            "log" to condensed(chanceryLog(civ, logSince ?: (turn - ageTurns)).map { "T${it["turn"]}: ${it["text"]}" }),
 +            "peaceOffers" to diplomacy.peaceOffers(civ),
 +            "tradeOffers" to diplomacy.tradeOffers(civ) + diplomacy.friendshipOffers(civ),
 +            "demands" to diplomacy.demands(civ),
-+            "dealsLedger" to diplomacy.ledger(civ),
++            "dealsLedger" to diplomacy.ledger(civ, lookInTurns + 1),
 +            "standingOrders" to orders[civ.civName]?.toMap(civ)
 +        )
 +    }
@@ -6365,9 +6449,9 @@ index 0000000..7dfd113
 +                val allEnginesTake = siege.sumOf { (volley(it, city)).coerceIn(0, com.unciv.logic.battle.CityCombatant(city).getMaxHealth()) }
 +                val outpaced = allEnginesTake > healing
 +                val hitOnFoot = bestFoot?.let { cityHits(it, city) }
-+                // What stands about the city within three tiles, on the tiles we can see: its soldiers, and whatever shoots at aircraft (a SAM, a fighter on
++                // What stands near the city (RulerOverrides.NEAR), on the tiles we can see: its soldiers, and whatever shoots at aircraft (a SAM, a fighter on
 +                // its field, a building that intercepts). Of the tiles we cannot see we say nothing - the walls alone misled three sieges in Run 11
-+                val near = city.getCenterTile().getTilesInDistance(3).filter { it.isVisible(civ) }.toList()
++                val near = city.getCenterTile().getTilesInDistance(RulerOverrides.NEAR).filter { it.isVisible(civ) }.toList()
 +                val defenders = near.filter { it != city.getCenterTile() }.flatMap { it.getUnits() }.filter { it.civ == city.civ && it.isMilitary() && it.baseUnit.isLandUnit }
 +                val defendersStrength = defenders.sumOf { RulerOverrides.might(it) }
 +                val antiAirUnits = near.flatMap { it.getUnits() }.filter { it.civ == city.civ && it.interceptChance() > 0 }
@@ -6424,7 +6508,7 @@ index 0000000..7dfd113
 +                    "garrison" to city.getCenterTile().militaryUnit?.name, "tilesFromOurNearestCity" to civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(city.getCenterTile()) },
 +                    "acrossTheSea" to (acrossTheSea != null).takeIf { it },
 +                    "oneVolleyOfOurBestEngineTakes" to perVolley, "volleysToBreak" to volleysToBreak, "healsPerTurn" to healing, "marchTurns" to marchTurns,
-+                    "defendersWithin3Tiles" to if (near.isEmpty()) null else defenders.size, "defendersStrength" to if (near.isEmpty()) null else defendersStrength, "antiAirWithin3Tiles" to if (near.isEmpty()) null else antiAir,
++                    "defendersNear" to if (near.isEmpty()) null else defenders.size, "defendersStrength" to if (near.isEmpty()) null else defendersStrength, "antiAirNear" to if (near.isEmpty()) null else antiAir,
 +                    "cityShotAtOurBestFootSoldierTakes" to hitOnFoot, "approaches" to gate, "verdict" to verdict)
 +            // Enemies first, then the rest: an ally's capital once headed an at-war briefing as the softest walls (audit 2026-10-03)
 +            }.sortedWith(compareBy({ it["ourRelation"] != "at war" }, { it["volleysToBreak"] as Int? ?: 999 }, { it["tilesFromOurNearestCity"] as Int? ?: 999 }))
@@ -6441,7 +6525,7 @@ index 0000000..7dfd113
 +                (civ.gameInfo.civilizations.filter { ally -> ally != target && ally != civ && ally.isAlive() && ((ally.isMajorCiv() && ally.getDiplomacyManager(target)?.diplomaticStatus == com.unciv.logic.civilization.diplomacy.DiplomaticStatus.DefensivePact) || (ally.isCityState && ally.allyCiv == target)) }
 +                    .map { it.civName + (if (it.isCityState) " (city-state ally)" else " (defensive pact)") }) }.filterValues { it.isNotEmpty() },
 +
-+            "howToRead" to "Sums from the chancery's own reckoning of battle, at full health and even luck. A city is taken by breaking its health with engines and then walking a foot soldier in; it heals each turn, shoots one volley a turn at anything within two tiles, and its garrison and walls do the rest. Defenders and anti-air are counted within three tiles of the city, on the tiles we can see this turn. Bowmen and crossbows barely scratch walls. A city across the sea is reached only by embarking, and its verdict says so first; tilesFromOurNearestCity is a straight line over land and water alike. footSoldiers are those free to march: one standing in a city of ours holds it. What we have never seen we cannot judge - say so.")
++            "howToRead" to "Sums from the chancery's own reckoning of battle, at full health and even luck. A city is taken by breaking its health with engines and then walking a foot soldier in; it heals each turn, shoots one volley a turn at anything within two tiles, and its garrison and walls do the rest. Defenders and anti-air are counted near the city - within ${RulerOverrides.NEAR} tiles of it - on the tiles we can see this turn. Bowmen and crossbows barely scratch walls. A city across the sea is reached only by embarking, and its verdict says so first; tilesFromOurNearestCity is a straight line over land and water alike. footSoldiers are those free to march: one standing in a city of ours holds it. What we have never seen we cannot judge - say so.")
 +    }
 +
 +    /** The log as a look-in should read it: no bookkeeping echoes, repeats folded, and never more than the last sixty lines */
@@ -6517,7 +6601,7 @@ index 0000000..7dfd113
 +            if (city.cityConstructions.constructionQueue.isEmpty()) warnings += "${city.name} has an empty build queue."
 +            if (city.foodForNextTurn() < 0) warnings += "${city.name} is starving."
 +        }
-+        if (civ.gold < 0 || civ.gold + civ.stats.statsForNextTurn.gold * 5 < 0) warnings += "The treasury is running dry (${civ.gold} gold, ${civ.stats.statsForNextTurn.gold.toInt()} per turn)."
++        if (civ.gold < 0 || civ.gold + civ.stats.statsForNextTurn.gold * (lookInTurns + 1) < 0) warnings += "The treasury is running dry (${civ.gold} gold, ${civ.stats.statsForNextTurn.gold.toInt()} per turn)."
 +        if (civ.units.getCivUnits().none { !it.isCivilian() }) warnings += "We have no military units at all."
 +        // A settler that has stood still for ten turns or more: held by order, or left to officials who found no site. Said with the price of one more city, so the wait is a weighed choice
 +        for (settler in civ.units.getCivUnits().filter { it.hasUnique(com.unciv.models.ruleset.unique.UniqueType.FoundCity) }) {
@@ -6721,7 +6805,7 @@ index 0000000..7dfd113
 +            val ship = unit.baseUnit.isWaterUnit
 +            val nearest = civ.cities.filter { !ship || it.isCoastal() }.minByOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: continue
 +            val raid = raids[unit.id]
-+            if (nearest.getCenterTile().aerialDistanceTo(tile) > (if (ship) maxOf(4, unit.getMaxMovement() + unit.getRange()) else 4) && raid == null) continue
++            if (nearest.getCenterTile().aerialDistanceTo(tile) > (if (ship) maxOf(RulerOverrides.NEAR, unit.getMaxMovement() + unit.getRange()) else RulerOverrides.NEAR) && raid == null) continue
 +            val stance = when {
 +                unit.civ.isBarbarian -> "hostile"
 +                civ.isAtWarWith(unit.civ) -> "AT WAR"
@@ -7021,7 +7105,7 @@ index 0000000..6dccfc1
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..327c8e2
+index 0000000..166ec87
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 @@ -0,0 +1,797 @@
@@ -7727,7 +7811,7 @@ index 0000000..327c8e2
 +            .filter { it.isExplored(civ) && it.isLand && (civ.tech.unitsCanEmbark || it.getContinent() in home) && settleProblem(civ, it) == null }
 +        return candidates.associateWith { tile ->
 +            var score = 0f
-+            for (near in tile.getTilesInDistance(2)) {
++            for (near in tile.getTilesInDistance(RulerOverrides.FIELDS)) {
 +                if (!near.isExplored(civ)) continue
 +                score += when (near.baseTerrain) { "Grassland" -> 2f; "Plains" -> 1.6f; "Coast" -> 1f; "Desert", "Tundra", "Snow", "Ocean", "Mountain" -> 0.2f; else -> 1f }
 +                if (near.resource != null) score += 3f
@@ -7742,7 +7826,7 @@ index 0000000..327c8e2
 +    }
 +
 +    private fun describeSite(civ: Civilization, tile: Tile, rank: Float): String {
-+        val resources = tile.getTilesInDistance(2).mapNotNull { it.resource }.groupingBy { it }.eachCount()
++        val resources = tile.getTilesInDistance(RulerOverrides.FIELDS).mapNotNull { it.resource }.groupingBy { it }.eachCount()
 +            .entries.joinToString { if (it.value > 1) "${it.key} x${it.value}" else it.key }
 +        val features = listOfNotNull(
 +            tile.baseTerrain,
