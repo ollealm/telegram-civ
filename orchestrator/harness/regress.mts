@@ -269,6 +269,33 @@ const CASES: Record<string, () => Promise<void>> = {
     const after = await steps((game) => { game.civilizations.find((c: any) => c.civName === "Greece").victoryManager.currentsSpaceshipParts["SS Engine"] = 1; });
     check("W12 Greece at 5 of 6 parts is named in the war estimate", after?.some((fact) => /Greece has 5 of 6 parts/.test(fact)) === true, JSON.stringify(after));
   },
+  async W17() { // the Section table: religion latched through a prophet's birth and a restart; no empty keys; the engineless war estimate folded
+    const host = await start("t100-world");
+    const religion = async () => (await get(`/briefing?civ=Greece`)).json.religion;
+    check("W17 Greece's religion is in full at T100 (145 faith)", typeof (await religion()) === "object");
+    await post("/advance", { turns: 4 });
+    const after = await religion();
+    check("W17 a prophet's birth took the faith below 100, and religion stays in full", typeof after === "object" && after.faithStored < 100, JSON.stringify(after).slice(0, 80));
+    await stop(host);
+    const again = await start("t100-world", "", host.dir);
+    check("W17 the latch is kept over a restart", typeof (await religion()) === "object");
+    const empties: string[] = [];
+    const keep = new Set(["warnings", "units", "cities", "log", "peaceOffers", "tradeOffers", "demands", "threats", "citySites", "knownCivs", "strategicResources", "policies", "researchQueue", "buildQueue", "canDeclareWarOn", "researchableNow"]);
+    const walk = (node: unknown, path: string) => {
+      if (Array.isArray(node)) node.forEach((item, i) => walk(item, `${path}[${i}]`));
+      else if (node && typeof node === "object") for (const [key, value] of Object.entries(node)) {
+        if (value === null || value === false || ((Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) && !keep.has(key))) empties.push(`${path}.${key}`);
+        walk(value, `${path}.${key}`);
+      }
+    };
+    for (const name of ["Greece", "Babylon"]) { walk((await get(`/briefing?civ=${name}`)).json, `${name}.briefing`); walk((await get(`/options?civ=${name}`)).json, `${name}.options`); }
+    check("W17 no null, false or empty key in a briefing or options", empties.length === 0, empties.slice(0, 5).join(", "));
+    await stop(again);
+    const late = await start("run22-t234-greece");
+    const estimate = (await get(`/options?civ=Greece`)).json.warEstimate;
+    check("W17 an engineless court's war estimate says so once, and no city carries a verdict", typeof estimate?.withoutEngines === "string" && (estimate.citiesWeHaveSeen as any[]).every((city) => !("verdict" in city)) && JSON.stringify(estimate).length < 6000, `${JSON.stringify(estimate).length}`);
+    await stop(late);
+  },
   async W10() { // "all" barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
