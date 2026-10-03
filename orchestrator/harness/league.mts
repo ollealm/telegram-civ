@@ -158,11 +158,9 @@ if (resuming) {
   const cityStatesGiven = process.env.LEAGUE_CITY_STATES?.trim();
   const cityStates = !cityStatesGiven ? 4 : /^[1-9]\d*$/.test(cityStatesGiven) ? Number(cityStatesGiven) : (say(`LEAGUE_CITY_STATES: '${cityStatesGiven}' is not a positive whole number - 4 city-states, as by default`), 4);
   await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, mapType: process.env.LEAGUE_MAP_TYPE || undefined, cityStates, ...(victoryTypes?.length && { victoryTypes }) });
-  // As createWorld does for every court: the officials propose no Defensive Pact and call no one into our wars until the sovereign lifts it
-  for (const seat of state.seats) {
-    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact", "calls to war"], mayDeclareWar: true }).catch((error) => say(`barring pacts and calls to war for ${seat.civ} failed:`, error.message));
-    seat.pactsBarredOnce = seat.callsToWarBarredOnce = true;
-  }
+  // As createWorld does: every league court is a sovereign, the war leave its own
+  for (const seat of state.seats)
+    await host.setOrders(seat.civ, { mayDeclareWar: true }).catch((error) => say(`setting the war leave for ${seat.civ} failed:`, error.message));
   const made = await host.state();
   say(`The world: ${made.mapType ?? "Pangaea"}, ${cityStates} city-states, won by ${(made.victoryTypes ?? []).join(", ") || "no victory at all"}`);
   // Seeded aims: the first line of a seat's own standing intent, written as its own - it may rewrite it at any new age, as the prompt allows

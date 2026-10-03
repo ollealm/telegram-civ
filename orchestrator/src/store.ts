@@ -67,10 +67,6 @@ export type Seat = {
   rerolled?: boolean;
   /** War is the ruler's alone unless they have said, in plain words, that the advisor may declare it */
   mayDeclareWar?: boolean;
-  /** A ruler's court starts with the officials barred from proposing Defensive Pacts (a pact can drag the realm into a war): set once, then the advisor's to change */
-  pactsBarredOnce?: boolean;
-  /** ...and from calling other powers into our wars ("calls to war"), likewise: set once, then the advisor's to change */
-  callsToWarBarredOnce?: boolean;
   /** The turn this seat last read the chancery log - at a look-in, or at a ruler's audience: the next look-in reads on from there, across rounds */
   lookedAt?: number;
   /** Setup round in progress: the answers given so far */

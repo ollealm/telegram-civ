@@ -110,12 +110,9 @@ async function createWorld() {
     : state.wonders === "advised" ? others : [];
   const mapType = state.mapType ?? "Pangaea";
   await host.newGame({ ruled, others, noWonders, mapSize, mapType, cityStates: CITY_STATES[mapSize] ?? 6, difficulty: state.difficulty ?? "Prince" });
-  // Every advised court starts with the officials barred from proposing Defensive Pacts and from calling other powers into our wars - either binds the realm
-  // to a war its advisor did not choose (a sovereign's officials proposed 16 pacts for Rome in Run 20); the advisor, or the sovereign, may lift them
-  for (const seat of state.seats) {
-    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact", "calls to war"], mayDeclareWar: seat.kind === "agent" || !!seat.mayDeclareWar }).catch((error) => log(`barring pacts and calls to war for ${seat.civ} failed:`, error.message));
-    seat.pactsBarredOnce = seat.callsToWarBarredOnce = true;
-  }
+  // The war leave, the host's to hold: a sovereign has it; an advisor only by the ruler's plain word (the officials' own acts have their defaults in the host)
+  for (const seat of state.seats)
+    await host.setOrders(seat.civ, { mayDeclareWar: seat.kind === "agent" || !!seat.mayDeclareWar }).catch((error) => log(`setting the war leave for ${seat.civ} failed:`, error.message));
   state.phase = "audience";
   persist();
   log(`New world: ${mapSize}; ruled ${ruled.join(", ")}; AI ${others.join(", ") || "none"}`);

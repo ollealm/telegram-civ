@@ -248,7 +248,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const host = await start("run22-t234-greece");
     const without = await orders("Greece", { mayDeclareWar: false, declareWar: ["Inca"], personality: { DeclareWar: 5, Science: 7 } });
     check("W11 no leave: the declaration is refused in the host's words", (without.json.failed ?? []).some((line: string) => /War on Inca was not declared: war is the ruler's alone to declare/.test(line)), JSON.stringify(without.json.failed));
-    check("W11 no leave: DeclareWar above 0 refused, the other weights set", (without.json.failed ?? []).some((line: string) => /DeclareWar above 0/.test(line)) && without.json.orders?.personality?.Science === 7, JSON.stringify(without.json.orders?.personality));
+    check("W11 the DeclareWar weight is the court's to set: war is never the officials' (Act.War)", without.json.orders?.personality?.DeclareWar === 5 && without.json.orders?.personality?.Science === 7, JSON.stringify(without.json.orders?.personality));
     const offered = (await get(`/options?civ=Greece`)).json.diplomacy?.with?.flatMap((power: { weCanOffer?: string[] }) => power.weCanOffer ?? []) ?? [];
     const atAudience = (await get(`/options?civ=Greece&audience=1`)).json.diplomacy?.with?.flatMap((power: { weCanOffer?: string[] }) => power.weCanOffer ?? []) ?? [];
     check("W11 no leave: no call to war among what we can offer; at an audience there are", !offered.some((item: string) => /declaration of war/.test(item)) && atAudience.some((item: string) => /declaration of war/.test(item)), `${offered.length} / ${atAudience.length}`);
@@ -317,10 +317,30 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W18 no gold self-check", !selfChecks(aztecs).some((line) => /\tgold\t/.test(line)), selfChecks(aztecs).slice(0, 2).join(" | "));
     await stop(aztecs);
   },
-  async W10() { // "all" barred: no officials' proposal or demand in ten turns; the faith reserve kept
+  async W19() { // one table for the officials' acts: the old orders read into it, the binding acts refused and never done, the routine ones kept, a closed one opened
+    const host = await start("run21-t300-war");
+    const courts = ["Aztecs", "Japan", "Arabia", "Songhai", "Austria", "Denmark"];
+    const table = (await get(`/briefing?civ=Aztecs`)).json.standingOrders?.officials;
+    check("W19 a host.json from before reads into the table: friendship and re-arming at peace closed, the rest open, the binding acts named", table?.mayNot?.includes("Declaration of Friendship") && table?.may?.includes("luxuries") && /calls to war/.test(table?.neverTheirs ?? ""), JSON.stringify(table));
+    const fixed = await orders("Aztecs", { officials: { "calls to war": true } });
+    check("W19 a binding act cannot be opened", fixed.status === 400 && /never the officials'/.test(JSON.stringify(fixed.json)), JSON.stringify(fixed.json).slice(0, 160));
+    const unknown = await orders("Aztecs", { officials: { tea: true } });
+    check("W19 an unknown kind is refused with the list", unknown.status === 400 && /luxuries/.test(JSON.stringify(unknown.json)), JSON.stringify(unknown.json).slice(0, 120));
+    await orders("Japan", { officials: { "Declaration of Friendship": true } });
+    check("W19 a closed kind is opened by order", (await get(`/briefing?civ=Japan`)).json.standingOrders?.officials?.may?.includes("Declaration of Friendship"));
+    await post("/advance", { turns: 6 });
+    const all = (await Promise.all(courts.map((name) => logOf(name, 300)))).flat().filter((line) => line.turn > 300);
+    const binding = all.filter((line) => /^The officials proposed (a deal to \w[^:]*: we give nothing; they give a declaration of war|a Defensive Pact)/.test(line.text));
+    const friendships = (await Promise.all(courts.filter((name) => name !== "Japan").map((name) => logOf(name, 300)))).flat().filter((line) => line.turn > 300 && /^The officials proposed a Declaration of Friendship/.test(line.text));
+    check("W19 in six turns of war no officials' call to war, pact or (unopened) friendship", binding.length === 0 && friendships.length === 0, [...binding, ...friendships].map((line) => line.text.slice(0, 90)).join(" | "));
+    const routine = all.filter((line) => /^The officials (proposed a deal|spent \d+ gold)/.test(line.text));
+    check("W19 the routine acts go on", routine.length > 0, `${routine.length} lines`);
+    await stop(host);
+  },
+  async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
-    for (const name of courts) await orders(name, { neverPropose: ["all"], faithReserve: 10000 });
+    for (const name of courts) await orders(name, { officials: { luxuries: false, "Open Borders": false, Embassy: false, "Research Agreement": false, demands: false }, faithReserve: 10000 });
     await post("/advance", { turns: 10 });
     const all = (await Promise.all(courts.map((name) => logOf(name, 234)))).flat();
     check("W10 no officials' proposal", !all.some((line) => /^The officials proposed/.test(line.text)), all.find((line) => /^The officials proposed/.test(line.text))?.text);

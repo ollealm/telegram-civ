@@ -112,14 +112,13 @@ export type Orders = {
   research?: string[];
   policyBranches?: string[];
   neverBuild?: string[];
-  neverPropose?: string[];
+  /** Standing: the court's word on its officials' acts, by kind - true opens one, false bars it, null restores its default */
+  officials?: Record<string, boolean | null>;
   goldReserve?: number | null;
   /** Standing: faith the officials leave untouched */
   faithReserve?: number | null;
   /** Standing: the great power our vote for world leader is pledged to; null withdraws it (we abstain) */
   worldVote?: string | null;
-  /** Standing: when the officials re-arm units with gold on their own */
-  officialsRearm?: "always" | "war" | "never";
   /** Immediate: re-arm these units now (unit numbers), or "all" */
   rearm?: (number | "all")[];
   queue?: { city: string; items: string[] }[];
@@ -187,7 +186,7 @@ export const host = {
   /** audience: asked at a ruler's audience, where the ruler's own word is the war leave (calls to war are then among what we can offer) */
   options: (civ: string, audience = false) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ) + (audience ? "&audience=1" : "")),
   /** The standing orders as the host holds them */
-  standing: (civ: string) => call<{ neverPropose?: string[] } & Record<string, unknown>>("GET", "/orders" + civQuery(civ)),
+  standing: (civ: string) => call<Record<string, unknown>>("GET", "/orders" + civQuery(civ)),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
   /** Any people's cities with their lie of the land, largest first - a painter's anchor */
