@@ -281,7 +281,7 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W10 ten turns backed up", existsSync(join(host.dir, "backups", "turn-0244")));
     await stop(host);
   },
-  async W11() { // never-build binds the officials' military choices in war: no barred unit queued in six turns of war (41 were, in 16, before the one gate - audit 2026-10-04)
+  async W14() { // never-build binds the officials' military choices in war: no barred unit queued in six turns of war (41 were, in 16, before the one gate - audit 2026-10-04)
     const host = await start("run21-t300-war");
     const courts = ["Aztecs", "Japan", "Arabia", "Songhai", "Austria", "Denmark"];
     for (const name of courts) await orders(name, { neverBuild: ["all military units"] });
@@ -289,11 +289,11 @@ const CASES: Record<string, () => Promise<void>> = {
     const all = (await Promise.all(courts.map((name) => logOf(name, 300)))).flat();
     const queued = all.map((line) => /^The officials queued (.+?) in /.exec(line.text)?.[1]).filter((item): item is string => item !== undefined);
     const barred = queued.filter((item) => MILITARY_UNITS.has(item));
-    check("W11 the officials still queue things", queued.length > 0, `${queued.length} queue lines`);
-    check("W11 no barred military unit is queued by the officials", barred.length === 0, barred.join(", "));
+    check("W14 the officials still queue things", queued.length > 0, `${queued.length} queue lines`);
+    check("W14 no barred military unit is queued by the officials", barred.length === 0, barred.join(", "));
     await stop(host);
   },
-  async W12() { // a nuclear weapon: grounded under defend; launched under attack it is told whole to the attacker and to the struck, and every unit killed has its line
+  async W15() { // a nuclear weapon: grounded under defend; launched under attack it is told whole to the attacker and to the struck, and every unit killed has its line
     // The fixture has none in the air: an Atomic Bomb of the Aztecs' is put in Tenochtitlan, five tiles from Arabia's Baghdad and its soldiers
     const host = await start("run21-t300-war", "", undefined, (game) => {
       const tile = game.tileMap.tileList.find((tile: any) => (tile.position?.x ?? 0) === 2 && (tile.position?.y ?? 0) === -9);
@@ -302,31 +302,31 @@ const CASES: Record<string, () => Promise<void>> = {
     });
     await post("/advance", { turns: 1 }); // the fixture's Aztecs stand on defend
     const units = (await get(`/briefing?civ=Aztecs`)).json.units as string[];
-    check("W12 under defend the bomb stays on the ground", units.some((line) => /Atomic Bomb/.test(line)), units.find((line) => /Atomic Bomb/.test(line)) ?? "gone");
+    check("W15 under defend the bomb stays on the ground", units.some((line) => /Atomic Bomb/.test(line)), units.find((line) => /Atomic Bomb/.test(line)) ?? "gone");
     await orders("Aztecs", { posture: { stance: "attack" } });
     await post("/advance", { turns: 2 });
     const aztecs = await logOf("Aztecs", 301), arabia = await logOf("Arabia", 301);
     const fell = aztecs.find((line) => /^Our Atomic Bomb fell on /.test(line.text));
-    check("W12 under attack the bomb falls, and the Aztecs are told whole", fell !== undefined, fell?.text);
-    check("W12 the struck are told by the attacker's name", arabia.some((line) => /^Aztecs' Atomic Bomb fell on /.test(line.text)), arabia.find((line) => /Atomic Bomb/.test(line.text))?.text);
-    check("W12 each of Arabia's units killed has its line, the weapon the killer", arabia.some((line) => /lost in action .* Atomic Bomb/.test(line.text)), arabia.find((line) => /lost in action/.test(line.text))?.text);
-    check("W12 the bomb's own end is told", aztecs.some((line) => /^Our Atomic Bomb was spent on its strike/.test(line.text)));
+    check("W15 under attack the bomb falls, and the Aztecs are told whole", fell !== undefined, fell?.text);
+    check("W15 the struck are told by the attacker's name", arabia.some((line) => /^Aztecs' Atomic Bomb fell on /.test(line.text)), arabia.find((line) => /Atomic Bomb/.test(line.text))?.text);
+    check("W15 each of Arabia's units killed has its line, the weapon the killer", arabia.some((line) => /lost in action .* Atomic Bomb/.test(line.text)), arabia.find((line) => /lost in action/.test(line.text))?.text);
+    check("W15 the bomb's own end is told", aztecs.some((line) => /^Our Atomic Bomb was spent on its strike/.test(line.text)));
     const everyone = (await Promise.all(["Aztecs", "Japan", "Arabia", "Songhai", "Austria", "Denmark"].map((name) => logOf(name, 300)))).flat();
-    check("W12 no unit is gone from any roll with no reason, in three turns of war", !everyone.some((line) => /gone from our rolls/.test(line.text)), everyone.find((line) => /gone from our rolls/.test(line.text))?.text);
+    check("W15 no unit is gone from any roll with no reason, in three turns of war", !everyone.some((line) => /gone from our rolls/.test(line.text)), everyone.find((line) => /gone from our rolls/.test(line.text))?.text);
     await stop(host);
   },
-  async W13() { // the pantheon within the faith reserve, and the beliefs the officials chose named
+  async W16() { // the pantheon within the faith reserve, and the beliefs the officials chose named
     const host = await start("t100-world");
     await post(`/grant?civ=Japan`, { faith: 500 });
     await orders("Japan", { faithReserve: 10000 });
     await post("/advance", { turns: 1 });
-    check("W13 no pantheon past a 10,000 reserve", !(await logOf("Japan", 100)).some((line) => /pantheon/.test(line.text) && /^The officials/.test(line.text)));
+    check("W16 no pantheon past a 10,000 reserve", !(await logOf("Japan", 100)).some((line) => /pantheon/.test(line.text) && /^The officials/.test(line.text)));
     await orders("Japan", { faithReserve: 0 });
     await post("/advance", { turns: 1 });
     const japan = await logOf("Japan", 101);
-    check("W13 the pantheon is founded once the reserve allows, its belief named", japan.some((line) => /^The officials founded our pantheon with the belief .+: /.test(line.text)), japan.find((line) => /pantheon/.test(line.text))?.text);
-    check("W13 the faith it cost is told", japan.some((line) => /^The officials spent \d+ faith on a pantheon/.test(line.text)));
-    check("W13 no faith self-check", !selfChecks(host).some((line) => /\tfaith\t/.test(line)), selfChecks(host).join(" | "));
+    check("W16 the pantheon is founded once the reserve allows, its belief named", japan.some((line) => /^The officials founded our pantheon with the belief .+: /.test(line.text)), japan.find((line) => /pantheon/.test(line.text))?.text);
+    check("W16 the faith it cost is told", japan.some((line) => /^The officials spent \d+ faith on a pantheon/.test(line.text)));
+    check("W16 no faith self-check", !selfChecks(host).some((line) => /\tfaith\t/.test(line)), selfChecks(host).join(" | "));
     await stop(host);
   },
 };
