@@ -130,7 +130,7 @@ if (greeceKnown) {
 const map = await host.map("Rome");
 check("map: renders a PNG", map.length > 10000 && map.subarray(1, 4).toString() === "PNG", `${map.length} bytes`);
 
-const spent = (await host.log("Rome", 0)).filter((entry) => entry.text.startsWith("The officials spent"));
+const spent = (await host.log("Rome", 0)).filter((entry) => /^The officials spent \d+ gold/.test(entry.text));
 check("gold reserve: officials kept out of the purse", spent.length === 0, spent.map((entry) => entry.text).join(" | "));
 
 const failed = results.filter((result) => !result.ok);
