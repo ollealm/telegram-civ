@@ -5,7 +5,7 @@ import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk"
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { host, type AgeSummary, type PublicEvent, type RoundResult } from "./host.ts";
+import { host, type AgeSummary, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -50,8 +50,6 @@ const attempt = async (action: () => Promise<unknown>) => {
   }
 };
 
-/** A trade item that is a call to war, as the host words it: "declaration of war on <power>" */
-const CALL_TO_WAR = /^(?:an? )?declaration of war on /i;
 const PERSONALITY_VALUES = ["Production", "Food", "Gold", "Science", "Culture", "Happiness", "Faith", "Military", "Aggressive", "DeclareWar", "Commerce", "Diplomacy", "Loyal", "Expansion"] as const;
 const weight = z.number().min(0).max(10);
 const PERSONALITY_HELP =
@@ -90,14 +88,8 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
       "get_options",
       "What we can choose from right now: researchable techs and all future tech names, policy branches, what each city can build and buy (with turns and gold cost), who we could declare war on.",
       {},
-      // A call to war we would give in a deal is a declaration of war by other means: without the leave declareWar needs, it is not among what we can offer
-      () => attempt(async () => {
-        const options = await host.options(seat.civ);
-        if (seat.kind === "agent" || canRecordWill || seat.mayDeclareWar) return options;
-        const diplomacy = options.diplomacy as { with?: { weCanOffer?: string[] }[] } | undefined;
-        for (const power of diplomacy?.with ?? []) power.weCanOffer = power.weCanOffer?.filter((item) => !CALL_TO_WAR.test(item));
-        return options;
-      }),
+      // At an audience the ruler's own word is the war leave: the host then lists calls to war among what we can offer (it holds the standing leave itself)
+      () => attempt(() => host.options(seat.civ, canRecordWill)),
     ),
     tool(
       "look_up",
@@ -175,22 +167,10 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
           const barred = list ? [...(pacts && !list.length ? ["Defensive Pact"] : []), ...(calls && !list.includes("all") && !list.includes("calls to war") ? ["calls to war"] : [])] : [];
           if (list && barred.length) orders = { ...orders, neverPropose: [...list, ...barred] };
         }
-        // A refused demand not to attack them is a declaration of war in the game's rules: it is guarded as declareWar is
-        if (orders.answerDemands?.some((entry) => entry.answer === "refuse") && seat.kind !== "agent" && !canRecordWill && !seat.mayDeclareWar) {
-          const demands = ((await host.briefing(seat.civ).catch(() => ({ demands: [] }))) as { demands?: string[] }).demands ?? [];
-          const warlike = orders.answerDemands.filter((entry) => entry.answer === "refuse" && demands.some((line) => line.startsWith(`${entry.power} demands`) && /promise not to attack/.test(line)));
-          if (warlike.length) return { ...text(`Refused: refusing ${warlike.map((entry) => entry.power).join(" and ")}'s demand not to attack them is a declaration of war, and war is the ruler's alone to declare - they have not given you leave. Nothing in this order was carried out - agree, let it lapse (it lapses as agreed), or bring it to the ruler.`), isError: true };
-        }
-        // A deal in which we give a declaration of war is one by other means: the same leave
-        if (orders.trade?.some((deal) => deal.give?.some((item) => CALL_TO_WAR.test(item.item))) && seat.kind !== "agent" && !canRecordWill && !seat.mayDeclareWar)
-          return { ...text("Refused: a deal in which we give a declaration of war on another power is a declaration of war, and war is the ruler's alone to declare - they have not given you leave. Nothing in this order was carried out - send the rest again without that item (asking THEM for a declaration of war is open to you), and bring the case for war to the ruler."), isError: true };
-        // War is off by default: outside an audience an advisor can only declare it once the ruler has said, in plain words, that they may
-        if (orders.declareWar?.length && seat.kind !== "agent" && !canRecordWill && !seat.mayDeclareWar)
-          return { ...text("Refused: war is the ruler's alone to declare, and they have not given you leave to declare it on your own. Nothing in this order was carried out - send the rest again without declareWar, and bring the case for war to the ruler."), isError: true };
-        // Letting the generals start wars is declaring them by other means: it needs the same leave, standing, since it outlasts the audience
-        if ((orders.personality?.DeclareWar ?? 0) > 0 && seat.kind !== "agent" && !seat.mayDeclareWar)
-          return { ...text("Refused: a DeclareWar weight above 0 lets the generals start wars on their own, and war is the ruler's alone to declare. Nothing in this order was carried out - send it again with DeclareWar at 0, or, if the ruler has said in plain words that you may make war on your own, record that leave first (record_rulers_will with mayDeclareWar)."), isError: true };
-        return attempt(() => host.setOrders(seat.civ, orders));
+        // The war leave travels with every order: the host checks it for every way of declaring war (the order, a deal giving a call to war, a refused
+        // demand not to attack, the generals' DeclareWar weight) and refuses in its own words; at an audience the ruler's word is the leave for this call
+        const sent: Orders = { ...orders, mayDeclareWar: seat.kind === "agent" || !!seat.mayDeclareWar, ...(canRecordWill && { withRulersWord: true }) };
+        return attempt(() => host.setOrders(seat.civ, sent));
       },
     ),
   ];
@@ -227,7 +207,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         const gone = (seat.will ?? "").split("\n").map((line) => line.trim()).filter((line) => line && !will.includes(line));
         if (gone.length) console.log(`[will] ${seat.civ}: dropped ${gone.length} line(s): ${gone.map((line) => line.slice(0, 90)).join(" | ")}`);
         seat.will = will;
-        if (mayDeclareWar !== undefined) seat.mayDeclareWar = mayDeclareWar;
+        if (mayDeclareWar !== undefined) { seat.mayDeclareWar = mayDeclareWar; await host.setOrders(seat.civ, { mayDeclareWar }).catch(() => undefined); }
         persist();
         return text("Recorded.");
       },

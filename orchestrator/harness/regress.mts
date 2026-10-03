@@ -126,7 +126,7 @@ const CASES: Record<string, () => Promise<void>> = {
   // ---- saved worlds: the fixes as they were proven ----
   async W1() { // Greece declares on Inca under attack: the garrison stays, the swept deals named, the allies told, the events two lines
     const host = await start("run22-t234-greece");
-    const reply = await orders("Greece", { declareWar: ["Inca"], posture: { warAim: "Cuzco", stance: "attack", reserve: 3 } });
+    const reply = await orders("Greece", { mayDeclareWar: true, declareWar: ["Inca"], posture: { warAim: "Cuzco", stance: "attack", reserve: 3 } });
     check("W1 the declaration names the agreement paid and lost", (reply.json.done ?? []).some((line: string) => /paid and now lost/.test(line)), JSON.stringify(reply.json.done).slice(0, 200));
     for (const turn of [235, 236]) {
       await post("/advance", { turns: 1 });
@@ -139,7 +139,7 @@ const CASES: Record<string, () => Promise<void>> = {
   },
   async W1b() { // raid with a reserve: no siege, the garrison stays
     const host = await start("run22-t234-greece");
-    await orders("Greece", { declareWar: ["Inca"], posture: { warAim: "Cuzco", stance: "raid", reserve: 3 } });
+    await orders("Greece", { mayDeclareWar: true, declareWar: ["Inca"], posture: { warAim: "Cuzco", stance: "raid", reserve: 3 } });
     await post("/advance", { turns: 3 });
     const units = (await get(`/briefing?civ=Greece`)).json.units as string[];
     check("W1b raid: the garrison #69 is still in Sparta after three turns", units.some((line) => /#69 at \(7,6\), in Sparta/.test(line)));
@@ -147,7 +147,7 @@ const CASES: Record<string, () => Promise<void>> = {
   },
   async W2() { // Persia declares on England: Polynesia drawn in by its pact, told so; the joins folded
     const host = await start("run23-t236-persia");
-    await orders("Persia", { declareWar: ["England"] });
+    await orders("Persia", { mayDeclareWar: true, declareWar: ["England"] });
     const turn = await post("/advance", { turns: 1, wake: true });
     check("W2 drawnIn names Polynesia at England's side", JSON.stringify(turn.json.drawnIn ?? []).includes("Polynesia") && JSON.stringify(turn.json.drawnIn).includes("England"), JSON.stringify(turn.json.drawnIn));
     const events = ((await get("/events")).json as { text: string }[]).map((event) => event.text);
@@ -240,6 +240,19 @@ const CASES: Record<string, () => Promise<void>> = {
       const size = JSON.stringify((await get(`/briefing?civ=${civ(name)}`)).json).length;
       check(`W9b ${name}: late briefing at most 30 KB`, size <= 30000, `${size}`);
     }
+    await stop(host);
+  },
+  async W11() { // the war leave, held by the host: refused without it in every form, taken with the ruler's word at an audience, kept as standing
+    const host = await start("run22-t234-greece");
+    const without = await orders("Greece", { mayDeclareWar: false, declareWar: ["Inca"], personality: { DeclareWar: 5, Science: 7 } });
+    check("W11 no leave: the declaration is refused in the host's words", (without.json.failed ?? []).some((line: string) => /War on Inca was not declared: war is the ruler's alone to declare/.test(line)), JSON.stringify(without.json.failed));
+    check("W11 no leave: DeclareWar above 0 refused, the other weights set", (without.json.failed ?? []).some((line: string) => /DeclareWar above 0/.test(line)) && without.json.orders?.personality?.Science === 7, JSON.stringify(without.json.orders?.personality));
+    const offered = (await get(`/options?civ=Greece`)).json.diplomacy?.with?.flatMap((power: { weCanOffer?: string[] }) => power.weCanOffer ?? []) ?? [];
+    const atAudience = (await get(`/options?civ=Greece&audience=1`)).json.diplomacy?.with?.flatMap((power: { weCanOffer?: string[] }) => power.weCanOffer ?? []) ?? [];
+    check("W11 no leave: no call to war among what we can offer; at an audience there are", !offered.some((item: string) => /declaration of war/.test(item)) && atAudience.some((item: string) => /declaration of war/.test(item)), `${offered.length} / ${atAudience.length}`);
+    const audience = await orders("Greece", { withRulersWord: true, declareWar: ["Inca"] });
+    check("W11 the ruler's word at an audience declares it", (audience.json.done ?? []).some((line: string) => /Declared war on Inca/.test(line)), JSON.stringify(audience.json.failed));
+    check("W11 the audience's word is not kept as standing", JSON.parse(readFileSync(join(host.dir, "host.json"), "utf8")).orders.Greece.mayDeclareWar === false);
     await stop(host);
   },
   async W10() { // "all" barred: no officials' proposal or demand in ten turns; the faith reserve kept

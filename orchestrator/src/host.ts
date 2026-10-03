@@ -104,6 +104,10 @@ export type RoundResult = {
 };
 
 export type Orders = {
+  /** The war leave, held by the host and checked there for every way of declaring war: a sovereign's always, an advisor's by the ruler's plain word */
+  mayDeclareWar?: boolean;
+  /** This call is made at a ruler's audience: the ruler's own word is the leave for it */
+  withRulersWord?: boolean;
   personality?: Record<string, number | undefined>;
   research?: string[];
   policyBranches?: string[];
@@ -180,7 +184,8 @@ export const host = {
   lookup: (civ: string, name: string) => call<Record<string, unknown>>("GET", `/lookup${civQuery(civ)}&name=${encodeURIComponent(name)}`),
   briefing: (civ: string, logSince?: number) =>
     call<Record<string, unknown>>("GET", "/briefing" + civQuery(civ) + (logSince === undefined ? "" : `&since=${logSince}`)).then(omitFromBriefing),
-  options: (civ: string) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ)),
+  /** audience: asked at a ruler's audience, where the ruler's own word is the war leave (calls to war are then among what we can offer) */
+  options: (civ: string, audience = false) => call<Record<string, unknown>>("GET", "/options" + civQuery(civ) + (audience ? "&audience=1" : "")),
   /** The standing orders as the host holds them */
   standing: (civ: string) => call<{ neverPropose?: string[] } & Record<string, unknown>>("GET", "/orders" + civQuery(civ)),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),

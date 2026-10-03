@@ -113,7 +113,7 @@ async function createWorld() {
   // Every advised court starts with the officials barred from proposing Defensive Pacts and from calling other powers into our wars - either binds the realm
   // to a war its advisor did not choose (a sovereign's officials proposed 16 pacts for Rome in Run 20); the advisor, or the sovereign, may lift them
   for (const seat of state.seats) {
-    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact", "calls to war"] }).catch((error) => log(`barring pacts and calls to war for ${seat.civ} failed:`, error.message));
+    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact", "calls to war"], mayDeclareWar: seat.kind === "agent" || !!seat.mayDeclareWar }).catch((error) => log(`barring pacts and calls to war for ${seat.civ} failed:`, error.message));
     seat.pactsBarredOnce = seat.callsToWarBarredOnce = true;
   }
   state.phase = "audience";

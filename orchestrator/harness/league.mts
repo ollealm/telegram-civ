@@ -160,7 +160,7 @@ if (resuming) {
   await host.newGame({ ruled: state.seats.map((seat) => seat.civ), others, noWonders: wonders === "advised" ? others : [], mapSize, mapType: process.env.LEAGUE_MAP_TYPE || undefined, cityStates, ...(victoryTypes?.length && { victoryTypes }) });
   // As createWorld does for every court: the officials propose no Defensive Pact and call no one into our wars until the sovereign lifts it
   for (const seat of state.seats) {
-    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact", "calls to war"] }).catch((error) => say(`barring pacts and calls to war for ${seat.civ} failed:`, error.message));
+    await host.setOrders(seat.civ, { neverPropose: ["Defensive Pact", "calls to war"], mayDeclareWar: true }).catch((error) => say(`barring pacts and calls to war for ${seat.civ} failed:`, error.message));
     seat.pactsBarredOnce = seat.callsToWarBarredOnce = true;
   }
   const made = await host.state();
