@@ -100,6 +100,8 @@ export type Orders = {
   neverBuild?: string[];
   neverPropose?: string[];
   goldReserve?: number | null;
+  /** Standing: faith the officials leave untouched */
+  faithReserve?: number | null;
   /** Standing: the great power our vote for world leader is pledged to; null withdraws it (we abstain) */
   worldVote?: string | null;
   /** Standing: when the officials re-arm units with gold on their own */
@@ -114,6 +116,9 @@ export type Orders = {
   marry?: string[];
   /** Immediate: denounce these great powers, for 30 turns */
   denounce?: string[];
+  /** Immediate: pledge to protect these city-states / withdraw the pledge */
+  protect?: string[];
+  endProtection?: string[];
   units?: { unit: number; action: string; x?: number; y?: number; city?: string }[];
   trade?: { with: string; give?: { item: string; amount?: number }[]; want?: { item: string; amount?: number }[] }[];
   peace?: string[];
