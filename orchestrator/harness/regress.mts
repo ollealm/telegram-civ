@@ -133,6 +133,8 @@ const CASES: Record<string, () => Promise<void>> = {
       const units = (await get(`/briefing?civ=Greece`)).json.units as string[];
       check(`W1 T${turn}: the garrison #69 is still in Sparta`, units.some((line) => /#69 at \(7,6\), in Sparta/.test(line)), units.find((line) => /#69/.test(line)) ?? "gone");
     }
+    const told = await logOf("Greece", 234);
+    check("W1 the engine's 'from Inca has ended' lines are not told beside ours", !told.some((line) => /from Inca has ended/.test(line.text)), told.filter((line) => /has ended/.test(line.text)).map((line) => line.text).join(" | "));
     const events = ((await get("/events")).json as { turn: number; text: string }[]).filter((event) => event.turn === 235);
     check("W1 the world's events: one declaration, one line of joins", events.some((event) => event.text === "Greece declared war on Inca.") && events.filter((event) => /joined the war/.test(event.text)).length === 1, events.map((event) => event.text).join(" | "));
     await stop(host);
