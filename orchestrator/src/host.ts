@@ -110,6 +110,10 @@ export type Orders = {
   build?: { city: string; item: string }[];
   purchase?: { city: string; item: string; with?: "gold" | "faith" }[];
   declareWar?: string[];
+  /** Immediate: marry into these city-states' ruling families (a people with the ability only) */
+  marry?: string[];
+  /** Immediate: denounce these great powers, for 30 turns */
+  denounce?: string[];
   units?: { unit: number; action: string; x?: number; y?: number; city?: string }[];
   trade?: { with: string; give?: { item: string; amount?: number }[]; want?: { item: string; amount?: number }[] }[];
   peace?: string[];
