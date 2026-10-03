@@ -1,9 +1,9 @@
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..ac4cea5
+index 0000000..1b63a36
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,194 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -126,6 +126,22 @@ index 0000000..ac4cea5
 +    @Volatile var hasOrder: ((MapUnit) -> Boolean)? = null
 +    @yairm210.purity.annotations.Readonly
 +    fun isUnderOrders(unit: MapUnit) = unit.civ.civID in ruledCivs && hasOrder?.invoke(unit) == true
++
++    /** A step toward a tile that may not open after all (the path reckoning and the march disagree): taken if it can be, else the unit stands where it is.
++     *  For the moves this fork added to the officials' routines - an unreachable step there once stopped the whole turn (Run 20, T187) */
++    fun tryHeadTowards(unit: MapUnit, tile: Tile): Boolean =
++        try { unit.movement.headTowards(tile); true } catch (_: com.unciv.logic.map.mapunit.movement.UnitMovement.UnreachableDestinationException) { false }
++
++    /** Called with (civ, unit, why) when a ruled civ's unit could not be moved by the officials this turn: the turn goes on without it */
++    @Volatile var unitNotMoved: ((Civilization, MapUnit, String) -> Unit)? = null
++    /** A ruled civ's unit moved by [move]: whatever goes wrong costs that unit its turn, never the turn itself. Other civs keep the engine's habit */
++    fun guarded(unit: MapUnit, move: () -> Unit) {
++        if (unit.civ.civID !in ruledCivs) return move()
++        try { move() } catch (ex: Exception) {
++            System.err.println("The officials could not move ${unit.civ.civName}'s ${unit.name} #${unit.id}: $ex")
++            unitNotMoved?.invoke(unit.civ, unit, if (ex is com.unciv.logic.map.mapunit.movement.UnitMovement.UnreachableDestinationException) "the way the officials chose for it would not open" else "the officials' routine failed on it")
++        }
++    }
 +
 +    /** Called with (civ, unit, why) when a ruled civ's automation disbands a unit for a reason of its own, before it goes */
 +    @Volatile var unitDisbanded: ((com.unciv.logic.civilization.Civilization, MapUnit, String) -> Unit)? = null
@@ -268,7 +284,7 @@ index 5474cfd..ddda57d 100644
          val enemyCivs = civInfo.getCivsAtWarWith().filter { it.isMajorCiv() }
              .sortedByDescending { it.getStatForRanking(RankingType.Force) }
 diff --git a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
-index b997da7..72d34d7 100644
+index b997da7..52fa47a 100644
 --- a/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/civilization/NextTurnAutomation.kt
 @@ -2,6 +2,7 @@ package com.unciv.logic.automation.civilization
@@ -357,9 +373,9 @@ index b997da7..72d34d7 100644
              // settlers need to move before automateSettlerEscorting(),
              // move spaceship parts before that to make sure we're not blocking them
 -            if (unit.hasUnique(UniqueType.SpaceshipPart) || unit.hasUnique(UniqueType.FoundCity)) UnitAutomation.automateUnitMoves(unit)
-+            if (unit.hasUnique(UniqueType.SpaceshipPart) || unit.hasUnique(UniqueType.FoundCity)) {
-+                if (RulerOverrides.unitHandler?.invoke(unit) == true) continue // the ruler gave this unit its own orders
-+                UnitAutomation.automateUnitMoves(unit)
++            if (unit.hasUnique(UniqueType.SpaceshipPart) || unit.hasUnique(UniqueType.FoundCity)) RulerOverrides.guarded(unit) {
++                if (RulerOverrides.unitHandler?.invoke(unit) != true) // the ruler gave this unit its own orders
++                    UnitAutomation.automateUnitMoves(unit)
 +            }
          }
  
@@ -369,9 +385,9 @@ index b997da7..72d34d7 100644
          for (unit in sortedUnits) {
              // spaceship parts and settlers have already moved
 -            if (!unit.hasUnique(UniqueType.SpaceshipPart) && !unit.hasUnique(UniqueType.FoundCity)) UnitAutomation.automateUnitMoves(unit)
-+            if (!unit.hasUnique(UniqueType.SpaceshipPart) && !unit.hasUnique(UniqueType.FoundCity)) {
-+                if (RulerOverrides.unitHandler?.invoke(unit) == true) continue
-+                UnitAutomation.automateUnitMoves(unit)
++            if (!unit.hasUnique(UniqueType.SpaceshipPart) && !unit.hasUnique(UniqueType.FoundCity)) RulerOverrides.guarded(unit) {
++                if (RulerOverrides.unitHandler?.invoke(unit) != true)
++                    UnitAutomation.automateUnitMoves(unit)
 +            }
          }
      }
@@ -628,7 +644,7 @@ index d214e22..aabc6a4 100644
              .filter {
                  val defender = Battle.getMapCombatantOfTile(it.tileToAttack)
 diff --git a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
-index 3fc1b5e..d4aac64 100644
+index 3fc1b5e..3567459 100644
 --- a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 @@ -20,7 +20,7 @@ object HeadTowardsEnemyCityAutomation {
@@ -640,7 +656,7 @@ index 3fc1b5e..d4aac64 100644
  
          return headTowardsEnemyCity(
              unit,
-@@ -30,12 +30,32 @@ object HeadTowardsEnemyCityAutomation {
+@@ -30,12 +30,31 @@ object HeadTowardsEnemyCityAutomation {
          )
      }
  
@@ -657,8 +673,7 @@ index 3fc1b5e..d4aac64 100644
 +            .sortedBy { it.aerialDistanceTo(unit.currentTile) }
 +            .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it) }
 +            ?: return false
-+        unit.movement.headTowards(ringTile)
-+        return true
++        return com.unciv.logic.automation.RulerOverrides.tryHeadTowards(unit, ringTile)
 +    }
 +
      @Readonly
@@ -688,7 +703,7 @@ index 8135bb7..d422d66 100644
              if (diplomacyManager?.hasFlag(DiplomacyFlags.AgreedToNotSpreadReligion) == true){
                  // See NextTurnAutomation - these are the conditions under which AI agrees to religious demands
 diff --git a/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt b/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
-index 9a9354b..fb05d29 100644
+index 9a9354b..dd707e0 100644
 --- a/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
 @@ -67,6 +67,9 @@ object UnitAutomation {
@@ -750,7 +765,7 @@ index 9a9354b..fb05d29 100644
 +        if (unit.isEmbarked() && unit.baseUnit.isLandUnit) {
 +            val ashore = unit.getTile().getTilesInDistance(10).filter { it.isLand && unit.movement.canMoveTo(it) }
 +                .sortedWith(compareBy({ it.getOwner() != unit.civ }, { it.aerialDistanceTo(unit.getTile()) })).take(8).firstOrNull { unit.movement.canReach(it) }
-+            if (ashore != null) { unit.movement.headTowards(ashore); return }
++            if (ashore != null && com.unciv.logic.automation.RulerOverrides.tryHeadTowards(unit, ashore)) return
 +            if (tryHeadHome(unit)) return
 +        }
 +
@@ -797,7 +812,7 @@ index 9a9354b..fb05d29 100644
              // Calvary style tctic, attack and then retreat
              if (unit.health < 50 && tryRetreat(unit)) return true
          }
-@@ -301,6 +355,48 @@ object UnitAutomation {
+@@ -301,6 +355,47 @@ object UnitAutomation {
          return true
      }
  
@@ -828,7 +843,7 @@ index 9a9354b..fb05d29 100644
 +            .filter { !underGuns(it) && unit.getDamageFromTerrain(it) <= 0 && unit.movement.canMoveTo(it) }
 +            .minWithOrNull(compareBy({ it.getOwner() != unit.civ }, { home?.let { h -> it.aerialDistanceTo(h) } ?: 0 }))
 +        if (shelter != null) unit.movement.moveToTile(shelter)
-+        else if (home != null) unit.movement.headTowards(home) // every tile in reach is under the guns: at least walk the way home
++        else if (home != null) com.unciv.logic.automation.RulerOverrides.tryHeadTowards(unit, home) // every tile in reach is under the guns: at least walk the way home, if it opens (France's Cannon, Run 20 T187)
 +        return true
 +    }
 +
@@ -837,8 +852,7 @@ index 9a9354b..fb05d29 100644
 +        for (city in unit.civ.cities.sortedBy { it.getCenterTile().aerialDistanceTo(unit.currentTile) }.take(2)) {
 +            val tile = city.getCenterTile().getTilesInDistance(2).sortedBy { it.aerialDistanceTo(unit.currentTile) }
 +                .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it) } ?: continue
-+            unit.movement.headTowards(tile)
-+            return true
++            if (com.unciv.logic.automation.RulerOverrides.tryHeadTowards(unit, tile)) return true
 +        }
 +        return false
 +    }
@@ -846,7 +860,7 @@ index 9a9354b..fb05d29 100644
      private fun tryRetreat(unit: MapUnit): Boolean {
          // Precondition: This must be a military unit
          if (unit.isCivilian()) return false
-@@ -324,10 +420,12 @@ object UnitAutomation {
+@@ -324,10 +419,12 @@ object UnitAutomation {
          }
  
          val ourDistanceToClosestEnemy = unit.civ.threatManager.getDistanceToClosestEnemyUnit(unit.getTile(),4, false)
@@ -859,7 +873,7 @@ index 9a9354b..fb05d29 100644
  
              val otherUnit = retreatTile.militaryUnit
              if (otherUnit == null) {
-@@ -338,6 +436,7 @@ object UnitAutomation {
+@@ -338,6 +435,7 @@ object UnitAutomation {
              } else if (otherUnit.civ == unit.civ) {
                  // The tile is taken, lets see if we want to swap retreat to it
                  if (otherUnit.health <= 80) continue
@@ -867,7 +881,7 @@ index 9a9354b..fb05d29 100644
                  if (otherUnit.baseUnit.isRanged()) {
                      // Don't swap ranged units closer than they have to be
                      val range = otherUnit.baseUnit.range
-@@ -371,7 +470,9 @@ object UnitAutomation {
+@@ -371,7 +469,9 @@ object UnitAutomation {
          if (unitDistanceToTiles.isEmpty()) return true // can't move, so...
  
          val dangerousTiles = unit.civ.threatManager.getDangerousTiles(unit, 3)
@@ -878,7 +892,7 @@ index 9a9354b..fb05d29 100644
          // If the unit can heal on this tile in two turns, just heal here
          if (unit.currentTile !in dangerousTiles 
              && canUnitHealInTurnsOnCurrentTile(unit,3)) return true
-@@ -462,9 +563,10 @@ object UnitAutomation {
+@@ -462,9 +562,10 @@ object UnitAutomation {
      fun tryPillageImprovement(unit: MapUnit, onlyPillageToHeal: Boolean = false): Boolean {
          if (unit.isCivilian()) return false
          val unitDistanceToTiles = unit.movement.getDistanceToTiles()
@@ -890,7 +904,7 @@ index 9a9354b..fb05d29 100644
                      && (it.canPillageTileImprovement()
                      || (!onlyPillageToHeal && it.canPillageRoad() && it.getRoadOwner() != null && unit.civ.isAtWarWith(it.getRoadOwner()!!))) }
  
-@@ -532,10 +634,11 @@ object UnitAutomation {
+@@ -532,10 +633,11 @@ object UnitAutomation {
              .sortedBy { unit.getTile().aerialDistanceTo(it.getCenterTile()) }
  
          // Move to the closest city with a tile we can enter nearby
@@ -903,7 +917,7 @@ index 9a9354b..fb05d29 100644
              unit.movement.headTowards(tileToMoveTo)
              return true
          }
-@@ -567,11 +670,13 @@ object UnitAutomation {
+@@ -567,11 +669,13 @@ object UnitAutomation {
          if (siegedCities.any { it.getCenterTile().aerialDistanceTo(unit.getTile()) <= 2 })
              return false
  
@@ -3402,10 +3416,10 @@ index 0000000..f1ae69e
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..d8164a9
+index 0000000..c786974
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,2075 @@
+@@ -0,0 +1,2076 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -3529,6 +3543,7 @@ index 0000000..d8164a9
 +            false
 +        } }
 +        RulerOverrides.hasOrder = { unit -> unit.id in units.orders }
++        RulerOverrides.unitNotMoved = { civ, unit, why -> log(civ, "Our ${unit.name} #${unit.id} could not be moved this turn: $why. It stands ${describeWhere(civ, unit.getTile())}, and the officials try again next turn.") }
 +        units.researchRefill = { civ -> applyResearchGoals(civ) }
 +        RulerOverrides.rulersFirst = { civ -> units.rearmDue(civ) }
 +        RulerOverrides.worldVoteOf = { civ -> castWorldVote(civ) }
