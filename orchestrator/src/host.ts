@@ -179,7 +179,8 @@ export const host = {
   /** victoryTypes: the ruleset's victory names (Scientific, Cultural, Domination, Diplomatic, Time); left out, every one but Time */
   newGame: (setup: { ruled: string[]; others: string[]; noWonders?: string[]; mapSize?: string; mapType?: string; cityStates?: number; difficulty?: string; victoryTypes?: string[] }) =>
     call<GameState>("POST", "/new", setup),
-  advance: (turns: number, wake = false) => call<RoundResult>("POST", "/advance", { turns, wake }),
+  /** cadence: the turns of this age and between look-ins - the host's windows (the briefing's log, "a look-in away") follow them */
+  advance: (turns: number, wake = false, cadence?: { ageTurns: number; lookInTurns: number }) => call<RoundResult>("POST", "/advance", { turns, wake, ...cadence }),
   lookup: (civ: string, name: string) => call<Record<string, unknown>>("GET", `/lookup${civQuery(civ)}&name=${encodeURIComponent(name)}`),
   briefing: (civ: string, logSince?: number) =>
     call<Record<string, unknown>>("GET", "/briefing" + civQuery(civ) + (logSince === undefined ? "" : `&since=${logSince}`)).then(omitFromBriefing),

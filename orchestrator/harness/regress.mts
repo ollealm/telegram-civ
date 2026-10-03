@@ -367,6 +367,19 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W20 left unanswered eight turns, it lapses as refused and leaves the desk", lapsed.length === 1 && lapsed[0].turn === entered + 8 && !still.some((line) => /^Greece: .*Gold x20/.test(line)), `${lapsed.map((line) => `T${line.turn} ${line.text.slice(0, 80)}`).join(" | ")}; entered T${entered}; still ${still.length}`);
     await stop(peace);
   },
+  async W21() { // the cadence told over the API, and a refusal that says the wait the engine set
+    const host = await start("run22-t234-greece");
+    await post("/advance", { turns: 2, ageTurns: 6, lookInTurns: 2 });
+    const turn = (await get("/state")).json.turn as number;
+    const log = (await get(`/briefing?civ=Greece`)).json.log as string[];
+    const earliest = Math.min(...log.map((line) => Number(/^T(\d+):/.exec(line)?.[1] ?? turn)));
+    check("W21 the briefing's log reaches back one age as told (6 turns), not the old 12", earliest >= turn - 6 && earliest <= turn - 4, `T${earliest} at T${turn}`);
+    check("W21 the cadence is kept in host.json", JSON.stringify(JSON.parse(readFileSync(join(host.dir, "host.json"), "utf8")).cadence) === JSON.stringify({ ageTurns: 6, lookInTurns: 2 }));
+    await orders("Greece", { trade: [{ with: "Inca", give: [{ item: "Gold", amount: 20 }] }] });
+    const refused = await orders("Inca", { answerOffers: [{ power: "Greece", answer: "refuse", terms: "we give nothing; they give Gold x20" }] });
+    check("W21 a refusal of terms the engine holds no wait on says so, and claims no turns", (refused.json.done ?? []).some((line: string) => /Refused Greece's offer: .*Their officials may offer them again when they choose/.test(line)), JSON.stringify(Object.fromEntries(Object.entries(refused.json).filter(([key]) => key !== "orders"))).slice(0, 500));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];

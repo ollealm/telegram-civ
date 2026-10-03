@@ -9,14 +9,12 @@ const TURNS_PER_ROUND = Number(process.env.TURNS_PER_ROUND ?? 12);
 const EARLY_ROUND_TURNS = Number(process.env.EARLY_ROUND_TURNS ?? 24);
 const EARLY_GAME_UNTIL_TURN = Number(process.env.EARLY_GAME_UNTIL_TURN ?? 24);
 export const GOVERN_EVERY = Number(process.env.GOVERN_EVERY_TURNS ?? 4);
-/** The turns of chancery log a briefing carries when no since is asked (the host's default): what a letter and an audience read */
-const BRIEFING_LOG_TURNS = 12;
-
 /** A ruler's court read the log at the turn its letter was written, and its audience reads the same: the next look-in starts from there - unless
- *  the last look-in lies further back than that briefing's window, when it starts from the look-in, so nothing between is skipped */
-const audienceRead = (seats: Seat[], turn: number) => {
+ *  the last look-in lies further back than that briefing's window (an age: the host's default, from the cadence it is told), when it starts from
+ *  the look-in, so nothing between is skipped */
+const audienceRead = (seats: Seat[], turn: number, ageTurns: number) => {
   for (const seat of seats.filter((each) => each.kind !== "agent"))
-    if (seat.lookedAt === undefined || seat.lookedAt >= turn - BRIEFING_LOG_TURNS) seat.lookedAt = Math.max(seat.lookedAt ?? turn, turn);
+    if (seat.lookedAt === undefined || seat.lookedAt >= turn - ageTurns) seat.lookedAt = Math.max(seat.lookedAt ?? turn, turn);
 };
 
 /** Turns in the round that starts at this turn - longer while the early game is slow */
@@ -117,7 +115,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         ),
       );
       const untilNextLookIn = GOVERN_EVERY - (played % GOVERN_EVERY);
-      const chunk = await host.advance(Math.min(untilNextLookIn, length - played), true);
+      const chunk = await host.advance(Math.min(untilNextLookIn, length - played), true, { ageTurns: length, lookInTurns: GOVERN_EVERY });
       played = chunk.turn - fromTurn;
       round = { ...chunk, fromTurn, fromYear: progress.fromYear, publicEvents: [...(round?.publicEvents ?? carried), ...chunk.publicEvents] };
       carried = [];
@@ -133,7 +131,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       if (chunk.stoppedEarly || chunk.turn === now) break;
     }
     // Every turn of it was played before a restart: nothing to advance, only the letters to write
-    if (!round) round = { ...(await host.advance(0, true)), fromTurn, fromYear: progress.fromYear, publicEvents: carried };
+    if (!round) round = { ...(await host.advance(0, true, { ageTurns: length, lookInTurns: GOVERN_EVERY })), fromTurn, fromYear: progress.fromYear, publicEvents: carried };
     const finished = round;
 
     // Urgent news (not a victory): summon only the rulers it concerns, keep the rest of the round for afterwards
@@ -142,7 +140,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     if (news && !/has won/.test(news) && remaining > 0) {
       // Every ruler is called to the emergency council - the one it concerns to answer, the others to see whether they will join in, stand aside or change course
       const rulers = seats.filter((seat) => seat.kind !== "agent");
-      audienceRead(rulers, finished.turn);
+      audienceRead(rulers, finished.turn, length);
       progress.urgent = true;
       persist();
       // No chapter for a broken age: the Chronicler writes when the age is whole, and this news is carried into it
@@ -176,7 +174,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     }
 
     // Every turn of the age is played: from here on a restart finds letters to deliver, not an age to resume
-    audienceRead(seats, finished.turn);
+    audienceRead(seats, finished.turn, length);
     state.pendingRound = undefined;
     persist();
 
