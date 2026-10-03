@@ -26,7 +26,8 @@ type Host = { dir: string; proc: ChildProcess; exited: Promise<number | null>; l
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const response = await fetch(BASE + path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  // A request that never answers fails its case in five minutes instead of holding the whole run (once a full run waited on an idle host, 2026-10-04)
+  const response = await fetch(BASE + path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(300_000) });
   const text = await response.text();
   let json: any; try { json = JSON.parse(text); } catch { json = text; }
   return { status: response.status, json };
@@ -336,6 +337,35 @@ const CASES: Record<string, () => Promise<void>> = {
     const routine = all.filter((line) => /^The officials (proposed a deal|spent \d+ gold)/.test(line.text));
     check("W19 the routine acts go on", routine.length > 0, `${routine.length} lines`);
     await stop(host);
+  },
+  async W20() { // one desk clock and declared memories: a warning that woke an advisor wakes no one again after a restart; offers lapse on the one clock
+    const host = await start("run21-t300-war");
+    const courts = ["Aztecs", "Japan", "Arabia", "Songhai", "Austria", "Denmark"];
+    const first = ((await post("/advance", { turns: 1 })).json.wake ?? {}) as Record<string, string[]>;
+    const saved = JSON.parse(readFileSync(join(host.dir, "host.json"), "utf8"));
+    check("W20 warningsWoken and shipRaids are kept in host.json", "warningsWoken" in saved && "shipRaids" in saved && Object.keys(saved.warningsWoken).length > 0, Object.keys(saved).join(","));
+    await stop(host);
+    const again = await start("run21-t300-war", "", host.dir);
+    const second = ((await post("/advance", { turns: 1 })).json.wake ?? {}) as Record<string, string[]>;
+    const warning = /no defender|unhappy|treasury|no military/i;
+    const repeated = Object.entries(second).flatMap(([civ, reasons]) => reasons.filter((reason) => warning.test(reason) && (first[civ] ?? []).includes(reason)).map((reason) => `${civ}: ${reason}`));
+    const kept = JSON.parse(readFileSync(join(host.dir, "host.json"), "utf8")).warningsWoken as Record<string, string[]>;
+    const lost = Object.entries(saved.warningsWoken as Record<string, string[]>).flatMap(([civ, keys]) => keys.filter((key) => !(kept[civ] ?? []).includes(key)));
+    check("W20 after a restart the warnings that woke an advisor are remembered, and wake no one again", lost.length === 0 && repeated.length === 0, [...lost, ...repeated].slice(0, 3).join(" | "));
+    await stop(again);
+    // An offer planted on a court's desk and left unanswered (run 21's war ends at T305, so a world at peace): Greece offers the Inca 20 gold for nothing
+    const peace = await start("run22-t234-greece");
+    const proposed = await orders("Greece", { trade: [{ with: "Inca", give: [{ item: "Gold", amount: 20 }] }] });
+    await post("/advance", { turns: 1 });
+    const waiting = ((await get(`/briefing?civ=Inca`)).json.tradeOffers ?? []) as string[];
+    check("W20 an offer on the desk says its turns in the one wording", waiting.some((line) => /^Greece: .*Gold x20.*\((waits \d+ more turns?|lapses at the next turn); answerOffers accept or refuse\)/.test(line)), `${JSON.stringify(proposed.json.done)}; ${waiting.join(" | ")}`);
+    // An advance stops early when a court is woken: played on to eight turns after the offer was entered
+    const entered = (await get("/state")).json.turn as number;
+    for (let i = 0; i < 20 && (await get("/state")).json.turn < entered + 8; i++) await post("/advance", { turns: entered + 8 - (await get("/state")).json.turn });
+    const lapsed = (await logOf("Inca", 234)).filter((line) => /^Greece's offer .*Gold x20.* went unanswered and lapsed as refused/.test(line.text));
+    const still = ((await get(`/briefing?civ=Inca`)).json.tradeOffers ?? []) as string[];
+    check("W20 left unanswered eight turns, it lapses as refused and leaves the desk", lapsed.length === 1 && lapsed[0].turn === entered + 8 && !still.some((line) => /^Greece: .*Gold x20/.test(line)), `${lapsed.map((line) => `T${line.turn} ${line.text.slice(0, 80)}`).join(" | ")}; entered T${entered}; still ${still.length}`);
+    await stop(peace);
   },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
