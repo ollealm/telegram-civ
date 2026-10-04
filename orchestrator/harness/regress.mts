@@ -439,6 +439,15 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W25 the city-states' peaces are one line per power", events.filter((event) => /^Inca and /.test(event.text) && !/Greece/.test(event.text)).length <= 1, events.map((event) => event.text).join(" | "));
     await stop(host);
   },
+  async W26() { // the race view: every road in play, every known power's standing on it, ours first, the shut branches said; no turns to a victory
+    const host = await start("run22-t234-greece");
+    const race = (await get(`/briefing?civ=Greece`)).json.victory?.race;
+    check("W26 every road in play has a line per known power, ours first", ["Scientific", "Cultural", "Domination"].every((road) => race?.[road]?.[0]?.startsWith("us: ") || race?.[road]?.some((line: string) => line.startsWith("us: "))) && race?.Scientific?.length === 6, JSON.stringify(race).slice(0, 200));
+    check("W26 the branches shut to us for good are said", race?.Cultural?.some((line: string) => /shut to us for good: .*Piety/.test(line)), JSON.stringify(race?.Cultural));
+    check("W26 the original capitals by holder", race?.Domination?.some((line: string) => /^us: 1 of the 6 original capitals - Athens/.test(line)), JSON.stringify(race?.Domination));
+    check("W26 no estimate of turns to a victory", !/turns? (to|until|left)/.test(JSON.stringify(race)));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];

@@ -87,7 +87,7 @@ const OFFICIALS_GLOSS: Record<string, string> = {
   "Research Agreement": "",
   gifts: "gold to city-states, from what lies above the reserve",
   demands: "that another power stop settling near us, spreading its faith to us, and the like",
-  "re-arming": "soldiers re-armed with gold above the reserve while we are at war with a great power",
+  "re-arming in war": "soldiers re-armed with gold above the reserve while we are at war with a great power",
   "Declaration of Friendship": "the realm's sworn word for thirty turns",
   "re-arming at peace": "",
 };
