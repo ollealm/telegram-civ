@@ -9,6 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { host, type AgeSummary, type HostSchema, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
+import { endLookIn, noteRefusals, refusalsForPrompt } from "./refusals.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 const CLERK_MODEL = process.env.CLERK_MODEL ?? "claude-sonnet-5";
@@ -237,7 +238,11 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         // The war leave travels with every order: the host checks it for every way of declaring war (the order, a deal giving a call to war, a refused
         // demand not to attack, the generals' DeclareWar weight) and refuses in its own words; at an audience the ruler's word is the leave for this call
         const sent: Orders = { ...orders, mayDeclareWar: seat.kind === "agent" || !!seat.mayDeclareWar, ...(canRecordWill && { withRulersWord: true }) };
-        return attempt(() => host.setOrders(seat.civ, sent));
+        return attempt(async () => {
+          const reply = await host.setOrders(seat.civ, sent);
+          noteRefusals(seat, reply.failed);
+          return reply;
+        });
       },
     ),
   ];
@@ -552,19 +557,27 @@ Then ${turnsPerRound} turns pass - ${yearsOf(turnsPerRound, briefing)} - while y
 };
 
 /** The advisor governing between audiences: a short pass every few turns, with the fresh briefing already in hand */
-export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number, wokenBy: string[] = [], newAge = false) =>
-  run(
-    "govern",
-    seat.model ?? GOVERN_MODEL,
-    `${persona(seat)}
+export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number, wokenBy: string[] = [], newAge = false) => {
+  const refused = refusalsForPrompt(seat);
+  try {
+    return await run(
+      "govern",
+      seat.model ?? GOVERN_MODEL,
+      `${persona(seat)}
 
 ${seat.kind === "agent" ? "You are looking in on your realm, as you do every few years; you govern by your own standing intent." : "The ruler is away; you govern by their standing will."} ${wokenBy.length ? `You were sent for ahead of your usual look-in because: ${wokenBy.map((reason) => reason.replace(/\.+$/, "")).join("; ")}.\n` : ""}Below is the briefing as of now, with the log of what happened since turn ${sinceTurn}: lines that begin "By your order" were yours and "The officials..." theirs; the rest is what befell the realm. Put things right for the next ${turnsAhead} turns: read the warnings and the log against the will, put right what the will, your standing orders or plain sense demand, answer what waits for an answer (offers and demands alike), and leave the rest to the officials - a look-in that changes nothing is a good look-in when the orders are still right. A warning you have seen at three look-ins running and left standing has become a decision of yours: decide it this look-in, whatever you decide - act, or let it stand for a reason you can name and acknowledge it${seat.kind === "agent" ? "" : ", or keep it for the ruler as a matter at the closing"}. Keep your operating plan current when your intentions change. Be quick: call get_options only if you need names or prices, and set all orders in one set_orders call where you can. ${warRule(seat)}
 ${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be. Then read your operating plan against the realm as it now is, and rewrite it if it has gone stale.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".${seat.kind === "agent" ? `
 A sovereign is heard of in the world's history by what they let fall: once an age at most, when the age has moved you to it, proclaim says one sentence aloud in your own voice for the heralds to carry. Never a plan, the treasury, research or a weakness.` : `
 If you met a decision in this look-in that you truly wished you could have put to the ruler before acting - one their record does not answer and that could not wait for the next audience - set it down with wish_i_could_ask. You cannot send for them; this is kept to learn whether advisors should ever be able to. Most look-ins have no such wish.`}`,
-    `${memory(seat)}\n\nBriefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
-    { seat, canRecordWill: newAge, sideTools: seat.kind === "agent" ? ["proclaim"] : ["wish_i_could_ask"] },
-  );
+      `${memory(seat)}\n\n${refused}Briefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
+      { seat, canRecordWill: newAge, sideTools: seat.kind === "agent" ? ["proclaim"] : ["wish_i_could_ask"] },
+    );
+  } finally {
+    // The look-in is over, finished or not: only what was refused since the last one ended is kept for the next one
+    endLookIn(seat);
+    persist();
+  }
+};
 
 /** Where the realm stands among the powers it knows - computed from the briefing, so it cannot drift with the advisor's mood */
 export const standingOf = (briefing: any, rankings: RoundResult["rankings"] = []): string => {
