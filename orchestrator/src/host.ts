@@ -113,7 +113,7 @@ export type Orders = {
   policyBranches?: string[];
   neverBuild?: string[];
   /** Standing: the court's word on its officials' acts, by kind - true opens one, false bars it, null restores its default */
-  officials?: Record<string, boolean | null>;
+  officials?: Record<string, boolean | null | undefined>;
   goldReserve?: number | null;
   /** Standing: faith the officials leave untouched */
   faithReserve?: number | null;
