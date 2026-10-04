@@ -160,7 +160,7 @@ export function schemaProblems(loaded: HostSchema): string[] {
 /** Game tools, scoped to one civ - an agent can never see or touch another realm. Only the tools of this moment are served at all. */
 function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTools = [] }: Moment, schema: HostSchema) {
   const tools = [
-    tool("get_briefing", "Current state of our realm: treasury, warnings, research, cities and their queues, units and where they are, threats in sight, known civs, the last 12 turns of the chancery log, standing orders.", {}, () =>
+    tool("get_briefing", "Current state of our realm: treasury, warnings, research, cities and their queues, units and where they are, threats in sight, known civs, the chancery log of this age (get_log reaches further), standing orders, and where every power stands in the race to win.", {}, () =>
       attempt(() => host.briefing(seat.civ)),
     ),
     tool(
