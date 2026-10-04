@@ -22,23 +22,27 @@ check("prompt block lists both in the host's words", first.includes("- Unknown b
 // Look-in 2: Hotel again, a purchase refused with figures; Theory of Gravity not tried
 noteRefusals(seat, ["Unknown building or unit: Hotel", "Cannot buy Musketman in York: it costs 340 gold, we have 120"]);
 endLookIn(seat);
-check("a repeated refusal stays and counts look-ins running", seat.refused?.find((each) => each.text.includes("Hotel"))?.seen === 2);
-check("a refusal not repeated is dropped", !seat.refused?.some((each) => each.text.includes("Gravity")));
+check("a repeated refusal stays and counts the look-ins", seat.refused?.find((each) => each.text.includes("Hotel"))?.seen === 2);
+check("a refusal not repeated once stays (one quiet look-in)", seat.refused?.find((each) => each.text.includes("Gravity"))?.quiet === 1, JSON.stringify(seat.refused));
+check("it still shows in the next prompt", refusalsForPrompt(seat).includes("- Unknown technology: Theory of Gravity\n"));
 
-// An audience between look-ins, then look-in 3: the purchase again with other figures
+// An audience between look-ins, then look-in 3: the purchase again with other figures; Gravity and the Hotel not tried
 noteRefusals(seat, ["Cannot buy Musketman in York: it costs 355 gold, we have 90.5"]);
-check("an audience's refusal shows at the next look-in", refusalsForPrompt(seat).includes("- Cannot buy Musketman in York: it costs 355 gold, we have 90.5\n"));
+check("an audience's refusal shows at the next look-in", refusalsForPrompt(seat).includes("- Cannot buy Musketman in York: it costs 355 gold, we have 90.5"));
 noteRefusals(seat, ["Cannot buy Musketman in York: it costs 355 gold, we have 90.5"]);
 endLookIn(seat);
-check("figures do not make a new refusal; the latest wording is kept", JSON.stringify(seat.refused) === JSON.stringify([{ text: "Cannot buy Musketman in York: it costs 355 gold, we have 90.5", seen: 2 }]), JSON.stringify(seat.refused));
-check("the Hotel, not tried at look-in 3, is dropped", !refusalsForPrompt(seat).includes("Hotel"));
+check("figures do not make a new refusal; the latest wording is kept", seat.refused?.filter((each) => each.text.startsWith("Cannot buy Musketman")).map((each) => each.text).join() === "Cannot buy Musketman in York: it costs 355 gold, we have 90.5", JSON.stringify(seat.refused));
+check("unrepeated at two look-ins running, a refusal is dropped (Gravity)", !seat.refused?.some((each) => each.text.includes("Gravity")), JSON.stringify(seat.refused));
+check("the Hotel, quiet once, stays", seat.refused?.find((each) => each.text.includes("Hotel"))?.quiet === 1, JSON.stringify(seat.refused));
 const third = refusalsForPrompt(seat);
 console.log(`--- prompt block after look-in 3 ---\n${third}---`);
-check("a count shows from two look-ins running", third.includes("(2 look-ins running)"));
+check("a count shows from the second look-in", third.includes("(at 2 look-ins)"));
 
-// Look-in 4: nothing refused
+// Look-ins 4 and 5: nothing refused - the Hotel goes at 4, the purchase at 5
 endLookIn(seat);
-check("a look-in with no refusals leaves nothing", seat.refused === undefined && seat.refusing === undefined && refusalsForPrompt(seat) === "");
+check("the Hotel goes at its second quiet look-in", !seat.refused?.some((each) => each.text.includes("Hotel")) && seat.refused?.length === 1, JSON.stringify(seat.refused));
+endLookIn(seat);
+check("two quiet look-ins later nothing is left", seat.refused === undefined && seat.refusing === undefined && refusalsForPrompt(seat) === "");
 
 console.log(failures ? `FAIL: ${failures} check(s)` : "PASS: all checks");
 process.exit(failures ? 1 : 0);

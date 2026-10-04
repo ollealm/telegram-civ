@@ -412,9 +412,12 @@ const CASES: Record<string, () => Promise<void>> = {
     const kyoto = async () => ((await get(`/briefing?civ=Japan`)).json.cities as any[]).find((city) => city.name === "Kyoto");
     const queued = await orders("Japan", { queue: [{ city: "Kyoto", items: ["Shrine", "Temple", "Musketman"] }] });
     const said = JSON.stringify(queued.json.done ?? []) + JSON.stringify(queued.json.failed ?? []);
-    check("W24 a Temple behind its Shrine is accepted, waiting, with no engine text", /waiting to start once they can: Temple/.test(said) && !/Requires a/.test(said), said.slice(0, 240));
+    check("W24 a Temple behind its Shrine is accepted, waiting, with no engine text", /waiting, each to go to the front of the queue once it can be built - ahead of whatever is building then: Temple/.test(said) && !/Requires a/.test(said), said.slice(0, 240));
     check("W24 an item before its technology waits, the technology named", /Musketman \(it needs Gunpowder first\)/.test(said));
     check("W24 the half-built item the new queue leaves out is named, its work kept", /The half-built Market is left out of it; its work is kept/.test(said));
+    // A condition that means never in this world (espionage is off) refuses the item; it does not wait for ever
+    const never = await orders("Japan", { build: [{ city: "Osaka", item: "Constabulary" }] });
+    check("W24 an item this world never allows is refused, not left waiting", (never.json.failed ?? []).some((line: string) => /cannot build Constabulary/.test(line)) && !JSON.stringify(never.json.done ?? []).includes("waits"), JSON.stringify(never.json.failed ?? never.json.done));
     await post(`/grant?civ=Japan`, { gold: 500 });
     await orders("Japan", { purchase: [{ city: "Kyoto", item: "Shrine" }] });
     await post("/advance", { turns: 1 });
