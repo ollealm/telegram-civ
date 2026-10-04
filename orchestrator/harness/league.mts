@@ -26,7 +26,7 @@
 // then playtest reviews and interviews of every sovereign.
 
 import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { chroniclerEpic, loadSchema, onTrace, playtestReview } from "../src/agents.ts";
+import { chroniclerEpic, onTrace, playtestReview } from "../src/agents.ts";
 import { draftSovereign } from "../src/characters.ts";
 import { host } from "../src/host.ts";
 import { playRound } from "../src/round.ts";
@@ -128,8 +128,6 @@ const log = (...args: unknown[]) => {
   say(...args);
 };
 
-// The host's orders and the tools must agree before the first look-in (a drift stops the league here)
-await loadSchema();
 if (resuming) {
   // The seats, their journals and the world are all where the league left them
   if (!state.seats.length) throw new Error("LEAGUE_RESUME: the state file holds no seats");

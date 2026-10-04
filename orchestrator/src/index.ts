@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, loadSchema, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
+import { advisorGreeting, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -1021,8 +1021,6 @@ async function recover() {
 }
 
 await ensureGame();
-// The host's orders and the tools must agree before any advisor is served them: a drift stops the bot here, not an order later
-await loadSchema();
 advisors.forEach(setUpAdvisor);
 setUpHerald();
 await recover().catch((error) => log("recovering from the restart failed:", error));

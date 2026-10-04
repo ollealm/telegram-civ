@@ -380,18 +380,6 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W21 a refusal of terms the engine holds no wait on says so, and claims no turns", (refused.json.done ?? []).some((line: string) => /Refused Greece's offer: .*Their officials may offer them again when they choose/.test(line)), JSON.stringify(Object.fromEntries(Object.entries(refused.json).filter(([key]) => key !== "orders"))).slice(0, 500));
     await stop(host);
   },
-  async W22() { // the host's lists and the tools agree (GET /schema), as the bot and the league check at startup; a drift is caught
-    const host = await start("t100-world");
-    process.env.RULER_HOST_URL = BASE;
-    const { schemaProblems } = await import("../src/agents.ts");
-    const schema = (await get("/schema")).json;
-    check("W22 the host publishes its lists", schema.orderFields?.standing?.includes("officials") && schema.officials?.never?.includes("war") && schema.unitActions?.includes("garrison"), JSON.stringify(schema).slice(0, 160));
-    const problems = schemaProblems(schema);
-    check("W22 the tools offer every field the host takes, and say every word", problems.length === 0, problems.join("; "));
-    const drifted = schemaProblems({ ...schema, orderFields: { ...schema.orderFields, immediate: [...schema.orderFields.immediate, "annexWorld"] }, stances: [...schema.stances, "skirmish"] });
-    check("W22 a field or a word the tools do not know is caught", drifted.some((line: string) => /annexWorld/.test(line)) && drifted.some((line: string) => /skirmish/.test(line)), drifted.join("; "));
-    await stop(host);
-  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];

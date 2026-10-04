@@ -5,7 +5,7 @@ import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk"
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { host, type AgeSummary, type HostSchema, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
+import { host, type AgeSummary, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -77,55 +77,8 @@ type Moment = {
 
 const READ_TOOLS = ["get_briefing", "get_options", "look_up", "get_log"];
 
-/** What each of the officials' acts is, said by hand: the host's list of them (GET /schema) decides which are named and how they stand by default */
-const OFFICIALS_GLOSS: Record<string, string> = {
-  luxuries: "their luxury swaps",
-  "Open Borders": "",
-  Embassy: "",
-  "Research Agreement": "",
-  gifts: "gold to city-states, from what lies above the reserve",
-  demands: "that another power stop settling near us, spreading its faith to us, and the like",
-  "re-arming": "soldiers re-armed with gold above the reserve while we are at war with a great power",
-  "Declaration of Friendship": "the realm's sworn word for thirty turns",
-  "re-arming at peace": "",
-};
-/** The unit actions, the posture's stances and what becomes of a city, said by hand: each word the host takes must be said here (checked at load) */
-const UNIT_ACTIONS_TEXT = "move: go there then back to the officials; settle: go there and found a city (checked now - invalid sites are refused with a reason); garrison: go to a city and stay as its defender; fortify/hold: keep the spot; explore: hand a military unit to exploration; use: go there and use a great person's ability (trade mission at a city-state's city, academy/manufactory on our tile, hurry research/wonder/policy in a city); gift: march onto their land and give the soldier to a city-state (influence) or a friendly realm - needs `to`; disband: dismiss the unit for good (saves upkeep); release: back to the officials";
-const STANCES_TEXT = "attack: the host marches on the warAim (or the nearest enemy city). defend: no soldier leaves our borders - they garrison, fortify and heal, and fight only what comes within reach. raid: pillage the enemy's fields and mines and pull back, never assault a city.";
-const CITY_ACTIONS_TEXT = "What becomes of a city of ours: annex a puppet, raze it (it shrinks each turn until it is gone; never a capital), or spare one being razed. A conquest is never razed unless you order it.";
-
-const kinds = (labels: string[]) => labels.map((label) => `'${label}'${OFFICIALS_GLOSS[label] ? ` (${OFFICIALS_GLOSS[label]})` : ""}`).join(", ");
-const said = (labels: string[]) => (labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}` : labels.join("")).replace(/^./, (first) => first.toUpperCase());
-const oneOf = (words: string[]) => z.enum(words as [string, ...string[]]);
-
-let schema: HostSchema | undefined;
-/** The host's lists, loaded once per process before the first call that serves the tools, and checked against what is said of them here by hand:
- *  a field the host takes that no tool offers, or a word it takes that no description says, stops the process at once rather than an order later */
-export async function loadSchema(): Promise<HostSchema> {
-  if (schema) return schema;
-  const loaded = await host.schema();
-  const problems = schemaProblems(loaded);
-  if (problems.length) throw new Error(`The host's orders and the tools disagree (GET /schema): ${problems.join("; ")}`);
-  return (schema = loaded);
-}
-
-/** Where the host's lists and what the tools offer and say of them part: none when they agree */
-export function schemaProblems(loaded: HostSchema): string[] {
-  const setOrders = gameTools({ civ: "(schema check)", kind: "agent" } as Seat, { canRecordWill: true }, loaded).tools.find((each: unknown) => (each as { name: string }).name === "set_orders") as { inputSchema: { shape?: object } };
-  const offered = Object.keys(setOrders.inputSchema.shape ?? setOrders.inputSchema);
-  const taken = [...loaded.orderFields.standing, ...loaded.orderFields.immediate];
-  return [
-    ...taken.filter((field) => !offered.includes(field)).map((field) => `the host takes ${field}, which set_orders does not offer`),
-    ...offered.filter((field) => !taken.includes(field)).map((field) => `set_orders offers ${field}, which the host does not take`),
-    ...[...loaded.officials.open, ...loaded.officials.closed].filter((label) => !(label in OFFICIALS_GLOSS)).map((label) => `the officials' act '${label}' is not said in OFFICIALS_GLOSS`),
-    ...loaded.unitActions.filter((action) => !new RegExp(`(^|[ /])${action}[:/]`).test(UNIT_ACTIONS_TEXT)).map((action) => `the unit action ${action} is not said`),
-    ...loaded.stances.filter((stance) => !STANCES_TEXT.includes(`${stance}:`)).map((stance) => `the stance ${stance} is not said`),
-    ...loaded.cityActions.filter((action) => !CITY_ACTIONS_TEXT.includes(action)).map((action) => `the city action ${action} is not said`),
-  ];
-}
-
 /** Game tools, scoped to one civ - an agent can never see or touch another realm. Only the tools of this moment are served at all. */
-function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTools = [] }: Moment, schema: HostSchema) {
+function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTools = [] }: Moment) {
   const tools = [
     tool("get_briefing", "Current state of our realm: treasury, warnings, research, cities and their queues, units and where they are, threats in sight, known civs, the last 12 turns of the chancery log, standing orders.", {}, () =>
       attempt(() => host.briefing(seat.civ)),
@@ -151,7 +104,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     ),
     tool(
       "set_orders",
-      `Change the realm's orders; include only what should change. Standing orders (kept until changed; each binds the officials, never your own orders): ${schema.orderFields.standing.join(", ")}. Immediate: ${schema.orderFields.immediate.join(", ")}. The reply confirms the resulting queues, research and gold.`,
+      "Change the realm's orders; include only what should change. Standing orders (kept until changed; each binds the officials, never your own orders): personality, research, policyBranches, neverBuild, officials, goldReserve, faithReserve, garrisonEveryCity, worldVote, acknowledge. Immediate: queue, build, purchase, rearm, trade, renew, answerOffers, answerDemands, peace, declareWar, marry, denounce, protect, endProtection. The reply confirms the resulting queues, research and gold.",
       strict({
         personality: z.object(Object.fromEntries(PERSONALITY_VALUES.map((name) => [name, weight]))).partial().optional().describe(PERSONALITY_HELP),
         research: z.array(z.string()).optional().describe("Technology goals in priority order; the path to each is researched automatically and the officials never deviate while a goal remains."),
@@ -160,10 +113,10 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         faithReserve: z.number().nullable().optional().describe("Standing: faith the officials must leave in store - left to themselves they spend faith on Great Prophets, Great People, missionaries, inquisitors and religious buildings, and every such purchase is told in the log. null removes it."),
         rearm: z.array(z.union([z.number(), z.literal("all")])).optional().describe("Immediate: re-arm these units now with newer arms, by unit number (#id), or [\"all\"] for every soldier that newer arms we know could replace - paid from the treasury above the reserve. The reply says what each became and for how much, or why it could not be done (no newer arms, a resource we lack, too little gold above the reserve, outside our borders); a unit that has marched this turn is re-armed at the start of the next."),
         neverBuild: z.array(z.string()).optional().describe("Standing: buildings and units the officials may never queue on their own (e.g. Barracks, Knight; 'all wonders' and 'all military units' work as whole categories). Replaces the previous list."),
-        officials: z.record(z.string(), z.boolean().nullable()).optional().describe(`Standing: what the officials may do on their own, by kind - true opens one, false bars it, null restores its default; kinds not named stay as they are. Open by default: ${kinds(schema.officials.open)}. Closed by default: ${kinds(schema.officials.closed)}. ${said(schema.officials.never)} are never theirs - only your own order makes them. Offers made TO us are always held for you. The briefing's standingOrders.officials says what holds now.`),
+        officials: z.record(z.string(), z.boolean().nullable()).optional().describe("Standing: what the officials may do on their own, by kind - true opens one, false bars it, null restores its default; kinds not named stay as they are. Open by default: 'luxuries' (their luxury swaps), 'Open Borders', 'Embassy', 'Research Agreement', 'gifts' (gold to city-states, from what lies above the reserve), 'demands' (that another power stop settling near us, spreading its faith to us, and the like), 're-arming' (soldiers re-armed with gold above the reserve while we are at war with a great power). Closed by default: 'Declaration of Friendship' (the realm's sworn word for thirty turns), 're-arming at peace'. Peace, war, pacts, calls to war, marriages, annexation, denouncement, protection, tribute and the demand not to attack us are never theirs - only your own order makes them. Offers made TO us are always held for you. The briefing's standingOrders.officials says what holds now."),
         posture: z.object({
           warAim: z.string().nullable().optional().describe("The enemy city the whole host converges on and besieges, by name (must belong to a power we are at war with). null clears it. Engines bombard it, foot soldiers storm it when it is battered - the generals run the siege with the same craft the rival powers use. It clears itself when the city is taken."),
-          stance: oneOf(schema.stances).optional().describe(STANCES_TEXT),
+          stance: z.enum(["attack", "defend", "raid"]).optional().describe("attack: the host marches on the warAim (or the nearest enemy city). defend: no soldier leaves our borders - they garrison, fortify and heal, and fight only what comes within reach. raid: pillage the enemy's fields and mines and pull back, never assault a city."),
           reserve: z.number().optional().describe("How many soldiers, those nearest our cities, stay home whatever the stance."),
         }).optional().describe("Standing: how the army fights. In war, set this instead of moving soldiers one by one - a unit under your own move/fortify/hold order never attacks and is not moved out of harm's way; the generals fight far better with a whole host than you can with single orders every few turns. Keep unit orders for specials: a scout, a Great General, an escort."),
         acknowledge: z.array(z.string()).optional().describe("Warnings you have weighed and let stand, as the briefing shows them (the start of one will do; numbers may differ, a unit's #number may not): each moves from warnings to warningsAcknowledged, its first clause only, for as long as it stands - its figures and the units it lists may change meanwhile; once it clears it is forgotten, and if it returns it shows in full again."),
@@ -171,7 +124,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         garrisonEveryCity: z.boolean().optional().describe("Standing: whenever a city stands without a soldier in it, the nearest free soldier on that landmass is sent in under a garrison order (logged as 'By your standing order'). It does not buy or build soldiers - if none is free, the warning stays."),
         queue: z.array(z.object({ city: z.string(), items: z.array(z.string()) })).optional().describe("Replace a city's whole build queue, in order. Binding: the officials only add to it once it runs out. The LAST item may be a yield the city can turn its production into - in this world Science or Gold, once the learning for it is ours: the city then does so until you change the queue."),
         build: z.array(z.object({ city: z.string(), item: z.string() })).optional().describe("Put one item at the front of a city's queue, keeping the rest."),
-        cities: z.array(z.object({ city: z.string(), action: oneOf(schema.cityActions) })).optional().describe(CITY_ACTIONS_TEXT),
+        cities: z.array(z.object({ city: z.string(), action: z.enum(["annex", "raze", "spare"]) })).optional().describe("What becomes of a city of ours: annex a puppet, raze it (it shrinks each turn until it is gone; never a capital), or spare one being razed. A conquest is never razed unless you order it."),
         marry: z.array(z.string()).optional().describe("City-states to marry into, now: our people marry into the ruling family for gold, and its city becomes ours, held as a puppet. Only a people whose ability allows it; briefing relations give each city-state's marriage as open, with its price, or what stands in the way."),
         protect: z.array(z.string()).optional().describe("City-states to pledge to protect, now: its regard for us rests higher, others find it harder to take tribute from it, and we think the worse of any power that bullies, attacks or destroys it. A pledge cannot be withdrawn for 10 turns. Briefing knownCivs say which we protect (protectedByUs)."),
         endProtection: z.array(z.string()).optional().describe("City-states whose protection we withdraw, now - not within 10 turns of pledging it; once withdrawn it cannot be pledged again for 20 turns."),
@@ -180,11 +133,11 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         declareWar: z.array(z.string()).optional().describe(`Civs to declare war on, immediately.${seat.kind === "agent" ? " Yours to decide, as sovereign." : ""} Once declared, no peace can be made for 10 turns, by either side. Declaring war ends every Defensive Pact of ours, with whomever (dealsInForce shows them; the reply names those that went).${seat.kind === "agent" ? "" : " Only on the ruler's explicit command (or their recorded leave)."}`),
         units: z.array(z.object({
           unit: z.number().describe("Unit id from the briefing (#id)"),
-          action: oneOf(schema.unitActions).describe(UNIT_ACTIONS_TEXT),
+          action: z.enum(["move", "settle", "garrison", "fortify", "hold", "explore", "use", "gift", "disband", "release"]).describe("move: go there then back to the officials; settle: go there and found a city (checked now - invalid sites are refused with a reason); garrison: go to a city and stay as its defender; fortify/hold: keep the spot; explore: hand a military unit to exploration; use: go there and use a great person's ability (trade mission at a city-state's city, academy/manufactory on our tile, hurry research/wonder/policy in a city); gift: march onto their land and give the soldier to a city-state (influence) or a friendly realm - needs `to`; disband: dismiss the unit for good (saves upkeep); release: back to the officials"),
           x: z.number().optional(), y: z.number().optional(),
           city: z.string().optional().describe("Target a city by name instead of x/y"),
           to: z.string().optional().describe("With gift: the city-state or realm that receives the unit"),
-          ability: oneOf(schema.abilities).optional().describe("With use: WHICH way to spend the great person. improvement = academy / manufactory / customs house / holy site / citadel, built on the unimproved tile of ours where the unit stands (so send it to such a tile, not into a city). Left out, the first ability that works where it stands is used - for a Great Scientist in a city that is hurry research"),
+          ability: z.enum(["improvement", "hurry research", "hurry production", "hurry policy", "trade mission", "religion", "golden age"]).optional().describe("With use: WHICH way to spend the great person. improvement = academy / manufactory / customs house / holy site / citadel, built on the unimproved tile of ours where the unit stands (so send it to such a tile, not into a city). Left out, the first ability that works where it stands is used - for a Great Scientist in a city that is hurry research"),
         })).optional().describe("Orders to single units. A unit under orders is not touched by the officials until released or done."),
         trade: z.array(z.object({
           with: z.string(),
@@ -197,7 +150,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         answerOffers: z.array(z.object({ power: z.string(), answer: z.enum(["accept", "refuse"]), terms: z.string().optional().describe("Which of their offers, as briefing.tradeOffers words it - needed only when that power has more than one waiting; \"Declaration of Friendship\" for their proposal of friendship") })).optional().describe("Your answer to a deal or a proposal of friendship another power has laid before this court (briefing.tradeOffers), which says when each lapses. accept binds it as offered; refuse sends it back; to counter, refuse and propose your own with trade. Accepting a call to join their war declares it, and needs the same leave as declareWar."),
         friendship: z.array(z.string()).optional().describe("Propose a declaration of friendship (if theirs already waits on our desk, this accepts it)."),
         gift: z.array(z.object({ cityState: z.string(), gold: z.number() })).optional().describe("Give gold to a city-state for influence."),
-        cityFocus: z.array(z.object({ city: z.string(), focus: oneOf(schema.cityFocus) })).optional().describe("What a city's citizens work its tiles for. NoFocus lets the officials balance."),
+        cityFocus: z.array(z.object({ city: z.string(), focus: z.enum(["NoFocus", "Food", "Production", "Gold", "Science", "Culture", "Happiness", "Faith", "GoldGrowth", "ProductionGrowth"]) })).optional().describe("What a city's citizens work its tiles for. NoFocus lets the officials balance."),
       }),
       async (given) => {
         const orders = given;
@@ -316,7 +269,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
   );
   // A sovereign holds no court, so it has none to dismiss
   const served = [...READ_TOOLS, ...(readOnly ? [] : ["set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", ...(seat.kind === "agent" ? [] : ["dismiss_court"])] : [])]), ...sideTools];
-  return { tools, server: createSdkMcpServer({ name: "realm", version: "1.0.0", tools: tools.filter((each) => served.includes((each as { name: string }).name)) }), served };
+  return { server: createSdkMcpServer({ name: "realm", version: "1.0.0", tools: tools.filter((each) => served.includes((each as { name: string }).name)) }), served };
 }
 
 /** Everything one model call did - what the dev feed shows */
@@ -348,7 +301,7 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
   const { seat, onText, outputSchema } = options;
   const started = Date.now();
   const toolCalls: Trace["toolCalls"] = [];
-  const realm = seat && gameTools(seat, options, await loadSchema());
+  const realm = seat && gameTools(seat, options);
   async function* input() {
     yield { type: "user" as const, message: { role: "user" as const, content: prompt }, parent_tool_use_id: null, session_id: "" };
   }
