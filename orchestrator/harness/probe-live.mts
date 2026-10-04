@@ -55,15 +55,25 @@ try {
   const schema = await loadSchema().then(() => "", (error: Error) => error.message);
   check("the host's orders and the tools agree, and the realm server lists every tool", schema === "", schema);
 
-  const briefing = await client.briefing(seat.civ).catch((error: Error) => ({ error: error.message }));
-  check("the briefing parses", typeof briefing === "object" && (briefing as { civ?: string }).civ === seat.civ, JSON.stringify(briefing).slice(0, 200));
-
-  // What a reviewer reads: the policies the court ordered against those the briefing still shows as wished (an opened branch once vanished, Run 30)
+  // The checks with no model, for every ruled seat: a defect may show for one court alone (Run 30's struck branch was Carthage's here, not Korea's)
   const hostJson = JSON.parse(await (await import("node:fs/promises")).readFile(join(data, "host.json"), "utf8"));
-  console.log(`policyBranches ordered: ${JSON.stringify(hostJson.orders?.[seat.civ]?.policyBranches ?? [])}`);
-  console.log(`policyBranches shown:   ${JSON.stringify((briefing as { standingOrders?: { policyBranches?: string[] } }).standingOrders?.policyBranches ?? [])}`);
+  for (const civ of game.ruled) {
+    const briefing = await client.briefing(civ).catch((error: Error) => ({ error: error.message }));
+    check(`${civ}: the briefing parses`, typeof briefing === "object" && (briefing as { civ?: string }).civ === civ, JSON.stringify(briefing).slice(0, 200));
+    // What a reviewer reads: the policies the court ordered against those the briefing still shows as wished
+    const shown = (briefing as { standingOrders?: { policyBranches?: string[] } }).standingOrders?.policyBranches ?? [];
+    const ordered = (hostJson.orders?.[civ]?.policyBranches ?? []) as string[];
+    console.log(`${civ}: policyBranches ordered ${JSON.stringify(ordered)}, shown ${JSON.stringify(shown)}`);
+    // Every branch the court ordered that is not complete is still wished for: a branch opened is no branch finished (Run 30 struck Babylon's Rationalism)
+    const branches = (((await client.options(civ)) as { policyBranches?: { branch: string; complete: boolean }[] }).policyBranches ?? []);
+    const struck = ordered.filter((wish) => branches.some((b) => b.branch === wish && !b.complete) && !shown.includes(wish));
+    check(`${civ}: every ordered branch not yet complete is still shown`, struck.length === 0, struck.join(", "));
+    // set_orders answers, whatever the model would choose: an order that changes nothing, through the client every tool uses
+    const answer = await client.setOrders(civ, { acknowledge: [] }).then((reply) => JSON.stringify(reply), (error: Error) => `exception: ${error.message}`);
+    check(`${civ}: set_orders answers without an exception`, !answer.startsWith("exception") && answer.includes("\"orders\""), answer.slice(0, 200));
+  }
   const refused = refusalsForPrompt(seat);
-  console.log(refused ? `refusals shown to the look-in:\n${refused}` : "refusals shown to the look-in: none");
+  console.log(refused ? `refusals shown to ${seat.civ}'s look-in:\n${refused}` : `refusals shown to ${seat.civ}'s look-in: none`);
 
   // One real look-in: the session refuses to run without its tools (call() checks the init), so its finishing is the proof
   let trace: { toolCalls: { name: string; input: unknown; result?: string }[]; costUsd: number } | undefined;
@@ -73,9 +83,6 @@ try {
   for (const call of trace?.toolCalls.filter((each) => each.name.endsWith("set_orders")) ?? [])
     console.log(`the look-in's set_orders: ${JSON.stringify(call.input).slice(0, 300)}\n  answered: ${(call.result ?? "").slice(0, 400)}`);
 
-  // set_orders answered on the copy whatever the model chose: an order that changes nothing, through the client every tool uses
-  const answer = await client.setOrders(seat.civ, { acknowledge: [] }).then((reply) => JSON.stringify(reply), (error: Error) => `exception: ${error.message}`);
-  check("set_orders answers without an exception", !answer.startsWith("exception") && answer.includes("\"orders\""), answer.slice(0, 200));
 } catch (error) {
   check("the probe ran to the end", false, (error as Error).message);
 } finally {
