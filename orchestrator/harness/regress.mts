@@ -427,6 +427,18 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W24 Gunpowder learned, the Musketman starts and is told", afterTech.buildQueue.includes("Musketman") && !afterTech.waiting && (await logOf("Japan", 100)).some((line) => /Musketman, which waited in Kyoto's queue, can now be built/.test(line.text)), JSON.stringify([afterTech.buildQueue, afterTech.waiting]));
     await stop(host);
   },
+  async W25() { // a peace made by order between two courts is told to the world, and the city-states' peaces that follow are one line
+    const host = await start("run22-t234-greece");
+    await orders("Greece", { mayDeclareWar: true, declareWar: ["Inca"] });
+    for (let i = 0; i < 15 && (await get("/state")).json.turn < 245; i++) await post("/advance", { turns: 245 - (await get("/state")).json.turn });
+    await orders("Inca", { peace: ["Greece"] });
+    const made = await orders("Greece", { peace: ["Inca"] });
+    await post("/advance", { turns: 1 });
+    const events = ((await get("/events")).json as { turn: number; text: string }[]).filter((event) => event.turn >= 245 && /made peace/.test(event.text));
+    check("W25 the peace made by order is a public event", (made.json.done ?? []).some((line: string) => /Peace made with Inca/.test(line)) && events.some((event) => event.text === "Greece and Inca have made peace."), events.map((event) => event.text).join(" | "));
+    check("W25 the city-states' peaces are one line per power", events.filter((event) => /^Inca and /.test(event.text) && !/Greece/.test(event.text)).length <= 1, events.map((event) => event.text).join(" | "));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
