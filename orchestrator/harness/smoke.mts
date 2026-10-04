@@ -41,7 +41,7 @@ check("queue: replaced exactly", JSON.stringify(rome.cities[0].buildQueue) === J
 // per-item failure does not block the rest
 r = await order("Rome", { queue: [{ city: "Nowhere", items: ["Monument"] }], cityFocus: [{ city: "Rome", focus: "Production" }] });
 rome = await briefing("Rome");
-check("orders: bad item fails alone", r.failed.length === 1 && rome.cities[0].focus === "ProductionFocus", r.failed.join("; "));
+check("orders: bad item fails alone", r.failed.length === 1 && rome.cities[0].focus === "Production", r.failed.join("; "));
 
 // units: hold keeps a unit in place against the automation; settle on a bad site is refused with a reason
 const warrior = rome.units.find((line: string) => line.startsWith("Warrior"));
