@@ -10,6 +10,8 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// The orchestrator's modules the cases import keep their state in a scratch file, never the live game's (store.ts defaults to it)
+process.env.RULER_STATE_FILE ??= join(mkdtempSync(join(tmpdir(), "regress-state-")), "orchestrator.json");
 const PORT = Number(process.env.REGRESS_PORT ?? 8772);
 if (PORT === 8765 || PORT === 8790) throw new Error("REGRESS_PORT must not be a live or league host's port");
 const FIXTURES = resolve(process.env.FIXTURES_DIR ?? "../data/fixtures");
@@ -383,13 +385,26 @@ const CASES: Record<string, () => Promise<void>> = {
   async W22() { // the host's lists and the tools agree (GET /schema), as the bot and the league check at startup; a drift is caught
     const host = await start("t100-world");
     process.env.RULER_HOST_URL = BASE;
-    const { schemaProblems } = await import("../src/agents.ts");
+    const { schemaProblems, listingProblems } = await import("../src/agents.ts");
     const schema = (await get("/schema")).json;
     check("W22 the host publishes its lists", schema.orderFields?.standing?.includes("officials") && schema.officials?.never?.includes("war") && schema.unitActions?.includes("garrison"), JSON.stringify(schema).slice(0, 160));
     const problems = schemaProblems(schema);
     check("W22 the tools offer every field the host takes, and say every word", problems.length === 0, problems.join("; "));
     const drifted = schemaProblems({ ...schema, orderFields: { ...schema.orderFields, immediate: [...schema.orderFields.immediate, "annexWorld"] }, stances: [...schema.stances, "skirmish"] });
+    const listing = await listingProblems(schema);
+    check("W22 the realm server lists every tool it serves (tools/list, in memory, no model)", listing.length === 0, listing.join("; "));
+    check("W22 an empty list from the host is caught before any tool is built", schemaProblems({ ...schema, stances: [] }).some((line: string) => /stances is empty/.test(line)));
     check("W22 a field or a word the tools do not know is caught", drifted.some((line: string) => /annexWorld/.test(line)) && drifted.some((line: string) => /skirmish/.test(line)), drifted.join("; "));
+    await stop(host);
+  },
+  async W23() { // one real session, one cheap call: it starts with the realm tools (a record-shaped field once emptied every session's tools, 2026-10-04)
+    const host = await start("t100-world");
+    process.env.RULER_HOST_URL = BASE;
+    const { runStructured } = await import("../src/agents.ts");
+    const { z } = await import("zod");
+    const reply = await runStructured("regress", process.env.REGRESS_MODEL ?? "claude-haiku-4-5-20251001", "Answer at once.", "Reply with ok true.", z.object({ ok: z.boolean() }), { seat: { civ: "Greece", kind: "agent" } as never })
+      .then((out: unknown) => JSON.stringify(out), (error: Error) => `failed: ${error.message}`);
+    check("W23 a session for a realm starts with its tools (the call refuses one without get_briefing)", !reply.startsWith("failed"), reply);
     await stop(host);
   },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept

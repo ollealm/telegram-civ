@@ -4,6 +4,8 @@
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { host, type AgeSummary, type HostSchema, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
@@ -105,12 +107,42 @@ export async function loadSchema(): Promise<HostSchema> {
   if (schema) return schema;
   const loaded = await host.schema();
   const problems = schemaProblems(loaded);
+  if (!problems.length) problems.push(...(await listingProblems(loaded)));
   if (problems.length) throw new Error(`The host's orders and the tools disagree (GET /schema): ${problems.join("; ")}`);
   return (schema = loaded);
 }
 
+const ALL_SIDE_TOOLS: SideTool[] = ["paint_decision", "proclaim", "note_for_council", "wish_i_could_ask", "smaller_matters"];
+
+/** The tools as the session's CLI lists them - the realm server's own tools/list, here over a transport in memory and with no model: a tool whose
+ *  input the server cannot describe is not dropped alone, the whole list is (a record-shaped field emptied every session, 2026-10-04) */
+export async function listingProblems(loaded: HostSchema): Promise<string[]> {
+  const problems: string[] = [];
+  for (const moment of [{ canRecordWill: true, sideTools: ALL_SIDE_TOOLS }, { readOnly: true }] as Moment[]) {
+    const realm = gameTools({ civ: "(schema check)", kind: "agent" } as Seat, moment, loaded);
+    const [atServer, atClient] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "schema-check", version: "1.0.0" });
+    try {
+      await (realm.server as unknown as { instance: { connect(transport: unknown): Promise<void> } }).instance.connect(atServer);
+      await client.connect(atClient);
+      const listed = (await client.listTools()).tools.map((each) => each.name);
+      problems.push(...realm.served.filter((name) => !listed.includes(name)).map((name) => `the realm server does not list ${name}`));
+    } catch (error) {
+      problems.push(`the realm server cannot list its tools: ${(error as Error).message}`);
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
+  return problems;
+}
+
 /** Where the host's lists and what the tools offer and say of them part: none when they agree */
 export function schemaProblems(loaded: HostSchema): string[] {
+  // An empty list would build an enum no tool can be described with: said here, before the tools are built at all
+  const lists = { standing: loaded.orderFields?.standing, immediate: loaded.orderFields?.immediate, "the officials' open acts": loaded.officials?.open,
+    unitActions: loaded.unitActions, abilities: loaded.abilities, stances: loaded.stances, cityActions: loaded.cityActions, cityFocus: loaded.cityFocus };
+  const empty = Object.entries(lists).filter(([, list]) => !Array.isArray(list) || list.length === 0).map(([name]) => `the host's list of ${name} is empty`);
+  if (empty.length) return empty;
   const setOrders = gameTools({ civ: "(schema check)", kind: "agent" } as Seat, { canRecordWill: true }, loaded).tools.find((each: unknown) => (each as { name: string }).name === "set_orders") as { inputSchema: { shape?: object } };
   const offered = Object.keys(setOrders.inputSchema.shape ?? setOrders.inputSchema);
   const taken = [...loaded.orderFields.standing, ...loaded.orderFields.immediate];
@@ -160,7 +192,8 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
         faithReserve: z.number().nullable().optional().describe("Standing: faith the officials must leave in store - left to themselves they spend faith on Great Prophets, Great People, missionaries, inquisitors and religious buildings, and every such purchase is told in the log. null removes it."),
         rearm: z.array(z.union([z.number(), z.literal("all")])).optional().describe("Immediate: re-arm these units now with newer arms, by unit number (#id), or [\"all\"] for every soldier that newer arms we know could replace - paid from the treasury above the reserve. The reply says what each became and for how much, or why it could not be done (no newer arms, a resource we lack, too little gold above the reserve, outside our borders); a unit that has marched this turn is re-armed at the start of the next."),
         neverBuild: z.array(z.string()).optional().describe("Standing: buildings and units the officials may never queue on their own (e.g. Barracks, Knight; 'all wonders' and 'all military units' work as whole categories). Replaces the previous list."),
-        officials: z.record(z.string(), z.boolean().nullable()).optional().describe(`Standing: what the officials may do on their own, by kind - true opens one, false bars it, null restores its default; kinds not named stay as they are. Open by default: ${kinds(schema.officials.open)}. Closed by default: ${kinds(schema.officials.closed)}. ${said(schema.officials.never)} are never theirs - only your own order makes them. Offers made TO us are always held for you. The briefing's standingOrders.officials says what holds now.`),
+        // An object of the kinds, never a record: the SDK's MCP server cannot list a record-shaped field, and drops every realm tool with it (2026-10-04)
+        officials: z.object(Object.fromEntries([...schema.officials.open, ...schema.officials.closed].map((kind) => [kind, z.boolean().nullable().optional()]))).optional().describe(`Standing: what the officials may do on their own, by kind - true opens one, false bars it, null restores its default; kinds not named stay as they are. Open by default: ${kinds(schema.officials.open)}. Closed by default: ${kinds(schema.officials.closed)}. ${said(schema.officials.never)} are never theirs - only your own order makes them. Offers made TO us are always held for you. The briefing's standingOrders.officials says what holds now.`),
         posture: z.object({
           warAim: z.string().nullable().optional().describe("The enemy city the whole host converges on and besieges, by name (must belong to a power we are at war with). null clears it. Engines bombard it, foot soldiers storm it when it is battered - the generals run the siege with the same craft the rival powers use. It clears itself when the city is taken."),
           stance: oneOf(schema.stances).optional().describe(STANCES_TEXT),
