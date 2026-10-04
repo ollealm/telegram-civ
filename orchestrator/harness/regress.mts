@@ -407,6 +407,26 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W23 a session for a realm starts with its tools (the call refuses one without get_briefing)", !reply.startsWith("failed"), reply);
     await stop(host);
   },
+  async W24() { // a queue holds what is not yet unlocked: a Temple behind its Shrine and a Musketman before Gunpowder wait and start when they can; the half-built item left out is named
+    const host = await start("t100-world");
+    const kyoto = async () => ((await get(`/briefing?civ=Japan`)).json.cities as any[]).find((city) => city.name === "Kyoto");
+    const queued = await orders("Japan", { queue: [{ city: "Kyoto", items: ["Shrine", "Temple", "Musketman"] }] });
+    const said = JSON.stringify(queued.json.done ?? []) + JSON.stringify(queued.json.failed ?? []);
+    check("W24 a Temple behind its Shrine is accepted, waiting, with no engine text", /waiting to start once they can: Temple/.test(said) && !/Requires a/.test(said), said.slice(0, 240));
+    check("W24 an item before its technology waits, the technology named", /Musketman \(it needs Gunpowder first\)/.test(said));
+    check("W24 the half-built item the new queue leaves out is named, its work kept", /The half-built Market is left out of it; its work is kept/.test(said));
+    await post(`/grant?civ=Japan`, { gold: 500 });
+    await orders("Japan", { purchase: [{ city: "Kyoto", item: "Shrine" }] });
+    await post("/advance", { turns: 1 });
+    const afterShrine = await kyoto();
+    check("W24 the Shrine bought, the Temple starts", afterShrine.buildQueue[0] === "Temple" && (afterShrine.waiting ?? []).every((line: string) => !/^Temple/.test(line)), JSON.stringify([afterShrine.buildQueue, afterShrine.waiting]));
+    await orders("Japan", { research: ["Gunpowder"] });
+    await post(`/grant?civ=Japan`, { freeTechs: 6 });
+    await post("/advance", { turns: 1 });
+    const afterTech = await kyoto();
+    check("W24 Gunpowder learned, the Musketman starts and is told", afterTech.buildQueue.includes("Musketman") && !afterTech.waiting && (await logOf("Japan", 100)).some((line) => /Musketman, which waited in Kyoto's queue, can now be built/.test(line.text)), JSON.stringify([afterTech.buildQueue, afterTech.waiting]));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
