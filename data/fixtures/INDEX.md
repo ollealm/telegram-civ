@@ -17,3 +17,4 @@ Each is save.unciv + host.json (chancery trimmed to its last 12 turns). Run one 
 | t100-world | 100 | A fresh 6-realm Medium Pangaea world at T100, played by the officials: briefing size and the one-line sections |
 | run20-t216 | 216 | Run 20 at the start of an age, with the league's state.json: the chronicle samples (harness/chronicle-samples.mts) |
 | run32-t117-munich | 117 | England at war on Germany with posture attack and war aim Munich across the strait: every seaborne land unit died embarked under Munich's guns, T118-124 |
+| run32-t168-siam | 168 | Run 32 at T168: Siam at war on Germany, posture attack on Hamburg across the sea, its host strung out at sea off Lampang since T156; the landings recursed to a StackOverflowError at T169 |

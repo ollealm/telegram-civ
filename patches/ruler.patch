@@ -45,10 +45,10 @@ index 0a2fd63..ba25f43 100644
              }
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..817d346
+index 0000000..0518266
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,411 @@
+@@ -0,0 +1,428 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -193,6 +193,16 @@ index 0000000..817d346
 +            .filter { it.getCenterTile().aerialDistanceTo(unit.getTile()) <= 12 }
 +        return cities.flatMap { city -> city.getCenterTile().getTilesInDistance(city.getBombardRange()) }.toHashSet() + enemyReach(unit)
 +    }
++
++    /** Where a ruled civ's host at sea is bound this turn: each unit's landing (null: no shore out of reach, it holds out of reach) and the city it goes
++     *  against. Written by the landing routine, read and cleared by the host's bookkeeping */
++    class Landing(val landing: Tile?, val city: Tile)
++    val landings = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<Int, Landing>>()
++    fun noteLanding(unit: MapUnit, landing: Tile?, city: Tile) {
++        landings.getOrPut(unit.civ.civID) { java.util.concurrent.ConcurrentHashMap() }[unit.id] = Landing(landing, city)
++    }
++    /** The landing each unit at sea was last bound for, by unit id: kept while it stands, so the host does not turn about as the enemy moves */
++    val headingFor = java.util.concurrent.ConcurrentHashMap<Int, com.unciv.logic.map.HexCoord>()
 +
 +    /** Does this ruled civ's land unit go by sea to the city - at sea now, or with water on its way? Then it lands out of reach and walks (headForLanding) */
 +    @yairm210.purity.annotations.Readonly
@@ -360,7 +370,11 @@ index 0000000..817d346
 +
 +    fun guarded(unit: MapUnit, move: () -> Unit) {
 +        if (unit.civ.civID !in ruledCivs) return move()
-+        try { fault?.invoke("move", unit.civ); move() } catch (ex: Exception) {
++        // A routine that recurses without end is caught too: it costs the unit its turn, not the game (Run 32 stopped at T169 on one)
++        try { fault?.invoke("move", unit.civ); move() } catch (ex: StackOverflowError) {
++            System.err.println("The officials could not move ${unit.civ.civName}'s ${unit.name} #${unit.id}: $ex")
++            unitNotMoved?.invoke(unit.civ, unit, "the officials' routine failed on it")
++        } catch (ex: Exception) {
 +            System.err.println("The officials could not move ${unit.civ.civName}'s ${unit.name} #${unit.id}: $ex")
 +            unitNotMoved?.invoke(unit.civ, unit, if (ex is com.unciv.logic.map.mapunit.movement.UnitMovement.UnreachableDestinationException) "the way the officials chose for it would not open" else "the officials' routine failed on it")
 +        }
@@ -371,7 +385,10 @@ index 0000000..817d346
 +    /** A block of the officials' work for a ruled civ ([what]: "escorting our settlers"): whatever goes wrong skips that block for the turn, never the turn itself */
 +    fun guardedBlock(civ: Civilization, what: String, block: () -> Unit) {
 +        if (civ.civID !in ruledCivs) return block()
-+        try { block() } catch (ex: Exception) {
++        try { block() } catch (ex: StackOverflowError) {
++            System.err.println("The officials could not finish $what for ${civ.civName}: $ex")
++            blockFailed?.invoke(civ, what, "their routine failed")
++        } catch (ex: Exception) {
 +            System.err.println("The officials could not finish $what for ${civ.civName}: $ex")
 +            blockFailed?.invoke(civ, what, if (ex is com.unciv.logic.map.mapunit.movement.UnitMovement.UnreachableDestinationException) "a way they chose would not open" else "their routine failed")
 +        }
@@ -1186,7 +1203,7 @@ index c6f0076..9277b9f 100644
              // Priotirize capture threat over ranged attack
              .sortedByDescending { unit.civ.threatManager.getEnemyUnitsOnTiles(listOf(it)).isNotEmpty() }
 diff --git a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
-index 3fc1b5e..7395822 100644
+index 3fc1b5e..c017de1 100644
 --- a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 @@ -20,7 +20,7 @@ object HeadTowardsEnemyCityAutomation {
@@ -1231,7 +1248,7 @@ index 3fc1b5e..7395822 100644
              .mapNotNull { NextTurnAutomation.getForeignCityNearCapital(unit.civ.getCapital(), it) }
              .minByOrNull { it.aerialDistance }?.city
              ?: return emptySequence() // no attackable cities found
-@@ -62,6 +81,15 @@ object HeadTowardsEnemyCityAutomation {
+@@ -62,6 +81,24 @@ object HeadTowardsEnemyCityAutomation {
          closestReachableEnemyCity: Tile,
          shortestPath: List<Tile>
      ): Boolean {
@@ -1239,15 +1256,24 @@ index 3fc1b5e..7395822 100644
 +        // reach and walks. Unruled civs go as upstream has them
 +        if (com.unciv.logic.automation.RulerOverrides.goesBySea(unit, shortestPath)) {
 +            // Ashore with a way there by land, it walks it: the pathfinder's hop along the coast would embark it, and the landing bring it back -
-+            // landed, at sea, landed, or held at its landing for good (review of the landings, 2026-10-05). Without one, it goes by sea to a landing that has
-+            if (!unit.isEmbarked()) keptAshore(unit) { unit.movement.getShortestPath(closestReachableEnemyCity).takeIf { it.isNotEmpty() }?.let { headTowardsEnemyCity(unit, closestReachableEnemyCity, it) } }
-+                ?.let { return it }
++            // landed, at sea, landed, or held at its landing for good (review of the landings, 2026-10-05). Without one, it goes by sea to a landing that has.
++            // A way planned with no embarking can still cross water (that bars ending a move at sea, not passing through): such a way is none. The walk is
++            // its own routine, never this one again - calling this one recursed without end and stopped Run 32 at T169
++            if (!unit.isEmbarked()) keptAshore(unit) {
++                unit.movement.getShortestPath(closestReachableEnemyCity).takeIf { way -> way.isNotEmpty() && way.none { it.isWater } }
++                    ?.let { way -> walkTowardsEnemyCity(unit, closestReachableEnemyCity, way) }
++            }?.let { return it }
 +            return headForLanding(unit, closestReachableEnemyCity)
 +        }
++        return walkTowardsEnemyCity(unit, closestReachableEnemyCity, shortestPath)
++    }
++
++    /** Upstream's march on an enemy city along [shortestPath]: straight on when far, to the landing grounds round it while it cannot be taken soon */
++    private fun walkTowardsEnemyCity(unit: MapUnit, closestReachableEnemyCity: Tile, shortestPath: List<Tile>): Boolean {
          val unitDistanceToTiles = unit.movement.getDistanceToTiles()
  
          val unitRange = unit.getRange()
-@@ -96,6 +124,61 @@ object HeadTowardsEnemyCityAutomation {
+@@ -96,6 +133,73 @@ object HeadTowardsEnemyCityAutomation {
          return true
      }
  
@@ -1276,8 +1302,8 @@ index 3fc1b5e..7395822 100644
 +                if (next !in reached && next.isLand && !next.isImpassible() && next.aerialDistanceTo(cityTile) <= 10 && (next.getOwner() == null || next.canCivPassThrough(unit.civ)))
 +                    { reached += next; queue += next }
 +        }
-+        fun landing(tile: Tile) = tile.isLand && tile.getContinent() == landmass && tile in byLand && (tile !in peril || tile == start) && tile.aerialDistanceTo(cityTile) in minDistanceFromCityToConsiderForLandingArea..10 &&
-+            unit.getDamageFromTerrain(tile) <= 0 && (tile == start || unit.movement.canMoveTo(tile))
++        fun landing(tile: Tile) = tile.isLand && tile.getContinent() == landmass && tile in byLand && (tile !in peril || tile == start) &&
++            tile.aerialDistanceTo(cityTile) in minDistanceFromCityToConsiderForLandingArea..10 && unit.getDamageFromTerrain(tile) <= 0 && (tile == start || unit.movement.canMoveTo(tile))
 +        // The ways by sea out of reach: water not within reach, and our own side's land to walk along to the shore; a landing ends a way
 +        val came = HashMap<Tile, Tile>().apply { put(start, start) }
 +        val depth = HashMap<Tile, Int>().apply { put(start, 0) }
@@ -1294,14 +1320,26 @@ index 3fc1b5e..7395822 100644
 +                came[next] = tile; depth[next] = depth[tile]!! + 1; queue.addLast(next)
 +            }
 +        }
-+        val target = landings.minWithOrNull(compareBy({ it.aerialDistanceTo(cityTile) }, { depth[it] }))
++        // The landing it was bound for last turn, while it still stands: a host whose landings flicker as the enemy moves turns about at sea for good
++        val heading = com.unciv.logic.automation.RulerOverrides.headingFor[unit.id]?.let { unit.civ.gameInfo.tileMap.getIfTileExistsOrNull(it.x, it.y) }
++        val target = heading?.takeIf { it in landings } ?: landings.minWithOrNull(compareBy({ it.aerialDistanceTo(cityTile) }, { depth[it] }))
 +        val open = unit.movement.getDistanceToTiles().keys.filter { (it == start || unit.movement.canMoveTo(it)) && !(it.isWater && it in peril) }.toHashSet()
 +        val step = if (target == null) {
++            // No shore out of reach: it keeps out of reach, and the court sees it hold (the posture's hostAtSea, and the log once)
 +            if (start in peril) open.minByOrNull { tile -> unit.civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: 0 } else null
 +        } else {
-+            // The farthest tile along the way that this turn's movement reaches
-+            generateSequence(target) { tile -> came[tile]?.takeIf { it != tile } }.firstOrNull { it in open }
++            // The reachable tile nearest the landing by the way's own waters: a host strung out along a narrow channel stood each on the next one's
++            // way and none moved (Siam, Run 32); round a tile taken by one of our own it goes alongside
++            val toLanding = HashMap<Tile, Int>().apply { put(target, 0) }
++            val back = ArrayDeque(listOf(target))
++            while (back.isNotEmpty()) {
++                val tile = back.removeFirst()
++                for (next in tile.neighbors) if (next !in toLanding && next in depth) { toLanding[next] = toLanding[tile]!! + 1; back.addLast(next) }
++            }
++            open.filter { it in toLanding }.minByOrNull { toLanding[it]!! }?.takeIf { toLanding[it]!! < (toLanding[start] ?: Int.MAX_VALUE) }
 +        }
++        if (target != null) com.unciv.logic.automation.RulerOverrides.headingFor[unit.id] = target.position else com.unciv.logic.automation.RulerOverrides.headingFor.remove(unit.id)
++        if (target != start && unit.isEmbarked()) com.unciv.logic.automation.RulerOverrides.noteLanding(unit, target, cityTile)
 +        if (step != null && step != start) unit.movement.moveToTile(step)
 +        return true
 +    }
@@ -1805,6 +1843,20 @@ index 2fb9f1b..96b5088 100644
              Battle.postBattleNotifications(attacker, defender, defender.getTile())
              Battle.destroyIfDefeated(defender.getCivInfo(), attacker.getCivInfo())
          }
+diff --git a/core/src/com/unciv/logic/battle/TargetHelper.kt b/core/src/com/unciv/logic/battle/TargetHelper.kt
+index 26ebbc1..988290b 100644
+--- a/core/src/com/unciv/logic/battle/TargetHelper.kt
++++ b/core/src/com/unciv/logic/battle/TargetHelper.kt
+@@ -29,6 +29,9 @@ object TargetHelper {
+         val tilesWithEnemies: HashSet<Tile> = HashSet()
+         val tilesWithoutEnemies: HashSet<Tile> = HashSet()
+         for ((reachableTile, movementLeft) in tilesToAttackFrom) {  // tiles we'll still have energy after we reach there
++            // A ruled civ's soldier does not put to sea to strike: it would end its turn embarked under the city it struck, where Siam's host died in
++            // the harbours of Hamburg and Quebec City, moved there by the assault routine (Run 32). Ships and soldiers already at sea are as they were
++            if (reachableTile.isWater && reachableTile != unit.currentTile && unit.baseUnit.isLandUnit && unit.civ.civID in com.unciv.logic.automation.RulerOverrides.ruledCivs) continue
+             // If we are a melee unit that is escorting, we only want to be able to attack from this
+             // tile if the escorted unit can also move into the tile we are attacking if we kill the enemy unit.
+             if (unit.baseUnit.isMelee() && unit.isEscorting()) {
 diff --git a/core/src/com/unciv/logic/city/City.kt b/core/src/com/unciv/logic/city/City.kt
 index 0c8b389..2717af6 100644
 --- a/core/src/com/unciv/logic/city/City.kt
@@ -4503,10 +4555,10 @@ index 0000000..c620d0e
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..535ac6f
+index 0000000..b574a82
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,2956 @@
+@@ -0,0 +1,2986 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -4726,8 +4778,10 @@ index 0000000..535ac6f
 +    private val faults = (System.getenv("RULER_FAULT") ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
 +    private fun fault(site: String, civ: String? = null) {
 +        if (faults.isEmpty()) return
-+        val hit = faults.firstOrNull { it == site || (civ != null && it == "$site:$civ") } ?: return
++        // "overflow:<site>" plants a routine that recursed without end (the landings at Run 32's T169) in place of an ordinary failure
++        val hit = faults.firstOrNull { it.removePrefix("overflow:").let { planted -> planted == site || (civ != null && planted == "$site:$civ") } } ?: return
 +        faults.remove(hit)
++        if (hit.startsWith("overflow:")) throw StackOverflowError("RULER_FAULT $hit")
 +        throw IllegalStateException("RULER_FAULT $hit")
 +    }
 +
@@ -5002,6 +5056,7 @@ index 0000000..535ac6f
 +        Memory("warsDeclared", true, { warsDeclared.clear() }, { warsDeclared.map { it.toString() } }, { json -> json?.asStringArray()?.forEach { warsDeclared += WarRecord.parse(it) } }),
 +        Memory("trail", true, { trail.clear() }, { trail.toMap() }, { json -> trail.load(json) }),
 +        Memory("ages", true, { ages.clear() }, { ages.toMap() }, { json -> ages.load(json) }),
++        Memory("hostAtSea", false, { hostAtSea.clear(); holdingTold.clear(); RulerOverrides.landings.clear(); RulerOverrides.headingFor.clear() }),
 +        Memory("atomicSeen", true, { atomicSeen = false }, { atomicSeen }, { json -> atomicSeen = json?.asBoolean() ?: false }),
 +        Memory("lockedCities", true, { RulerOverrides.lockedCities.clear() }, { RulerOverrides.lockedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.lockedCities += it } }),
 +        Memory("focusedCities", true, { RulerOverrides.focusedCities.clear() }, { RulerOverrides.focusedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.focusedCities += it } }),
@@ -5868,6 +5923,7 @@ index 0000000..535ac6f
 +        val turn = civ.gameInfo.turns
 +        val enemies = RulerCampaigns.enemiesOf(civ)
 +        units.noteStanding(civ)
++        noteHostAtSea(civ)
 +        // The game's own notifications first - they cover research, buildings, combat, diplomacy. The turn's entry in the log holds what was
 +        // on the desk when our turn ended; what later powers did on their turns is still in the live list. Both are read now, in one window,
 +        // less what the last bookkeeping already read (the same objects, since moved into the log)
@@ -6370,6 +6426,28 @@ index 0000000..535ac6f
 +        }
 +    }
 +
++    /** Where each ruled realm's host at sea is bound, as the last bookkeeping found it: one line per landing, shown with the posture */
++    private val hostAtSea = HashMap<String, List<String>>()
++    /** The cities each realm's host found no shore out of reach near last turn: a host holding at sea is told once, when it begins to */
++    private val holdingTold = HashMap<String, Set<String>>()
++    private fun noteHostAtSea(civ: Civilization) {
++        val plans = RulerOverrides.landings.remove(civ.civID).orEmpty().mapNotNull { (id, plan) -> civ.units.getUnitById(id)?.takeIf { it.isEmbarked() }?.let { it to plan } }
++        val cityOf = { plan: RulerOverrides.Landing -> plan.city.getCity()?.name ?: "the enemy" }
++        hostAtSea[civ.civName] = plans.groupBy { (_, plan) -> plan.landing to cityOf(plan) }.map { (key, group) ->
++            val (landing, city) = key
++            val longest = group.maxOf { units.turnsAtSea(it.first) }
++            RulerCampaigns.company(group.map { it.first.name }).replaceFirstChar { it.uppercase() } +
++                (if (landing == null) " holding at sea out of reach: no shore near $city lies out of reach of the enemy's guns"
++                    else " crossing to ${if (group.size == 1) "its" else "their"} landing at ${RulerCampaigns.placeOf(civ, landing)}, against $city") +
++                " (${RulerCampaigns.count(longest)} turn${Prose.plural(longest)} at sea)"
++        }
++        // A host with no shore out of reach holds at sea: said once, when it begins - the court may choose another aim, or wait
++        val holding = plans.filter { it.second.landing == null }.map { cityOf(it.second) }.toSet()
++        for (city in holding - (holdingTold[civ.civName] ?: emptySet()))
++            log(civ, "Our host holds at sea out of reach: no shore near $city lies out of reach of the enemy's guns, and it will not land under them.")
++        holdingTold[civ.civName] = holding
++    }
++
 +    /** GameInfo.turns only moves once every player has played, so whatever is logged during a turn - or by an order between turns - belongs to the turn about to be counted */
 +    private fun stamp() = if (settling) game().turns else game().turns + 1
 +
@@ -6757,7 +6835,11 @@ index 0000000..535ac6f
 +            "tradeOffers" to diplomacy.tradeOffers(civ) + diplomacy.friendshipOffers(civ),
 +            "demands" to diplomacy.demands(civ),
 +            "dealsLedger" to diplomacy.ledger(civ, lookInTurns + 1),
-+            "standingOrders" to orders[civ.civName]?.toMap(civ)
++            // The posture with where its host at sea is bound: the generals' own craft, told, no decision asked
++            "standingOrders" to orders[civ.civName]?.toMap(civ)?.let { standing ->
++                val posture = standing["posture"]
++                if (posture is Map<*, *> && !hostAtSea[civ.civName].isNullOrEmpty()) standing + ("posture" to posture + ("hostAtSea" to hostAtSea[civ.civName])) else standing
++            }
 +        )
 +    }
 +
@@ -7582,10 +7664,10 @@ index 0000000..6dccfc1
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..4f5c57a
+index 0000000..7f5d034
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,803 @@
+@@ -0,0 +1,805 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -7725,6 +7807,8 @@ index 0000000..4f5c57a
 +        }
 +        stillSince.keys.retainAll(civ.gameInfo.civilizations.flatMap { c -> c.units.getCivUnits().map { it.id } }.toSet())
 +    }
++    /** How many turns, this one counted, a land unit of ours has been at sea */
++    fun turnsAtSea(unit: MapUnit) = embarkedSince[unit.id]?.let { unit.civ.gameInfo.turns - it + 1 } ?: 0
 +    fun turnsStill(unit: MapUnit) = stillSince[unit.id]?.let { unit.civ.gameInfo.turns - it.second } ?: 0
 +
 +    fun handle(unit: MapUnit): Boolean {

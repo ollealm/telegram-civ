@@ -118,6 +118,14 @@ const CASES: Record<string, () => Promise<void>> = {
     check("F5 one unit 'could not be moved this turn'", told.some((line) => /could not be moved this turn/.test(line.text)));
     await stop(host);
   },
+  async F5b() { // a routine that recurses without end on a unit: that unit's turn, never the turn (Run 32 stopped at T169 on one)
+    const host = await start("run22-t234-greece", "overflow:move");
+    const a = await post("/advance", { turns: 1 });
+    const told = (await Promise.all(["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"].map((name) => logOf(name, 234)))).flat();
+    check("F5b the turn plays", a.status === 200, JSON.stringify(a.json).slice(0, 200));
+    check("F5b one unit 'could not be moved this turn'", told.some((line) => /could not be moved this turn/.test(line.text)));
+    await stop(host);
+  },
   async F6() { // the trail, the world's events and the vote steps fail: each skipped, the save still reached
     const host = await start("run22-t234-greece", "trail,events,vote");
     const a = await post("/advance", { turns: 1 });
@@ -488,6 +496,19 @@ const CASES: Record<string, () => Promise<void>> = {
     const strikes = (await logOf("England", 117)).filter((line) => /struck Munich/.test(line.text));
     // At T119-120 only the Triremes reached Munich: their blows are the ships', not a landed host's
     check("W27 ships' strikes are said as the ships'", strikes.some((line) => /^Our ships struck Munich/.test(line.text)) && !strikes.some((line) => line.turn <= 120 && /^Our host struck Munich/.test(line.text)), strikes.map((line) => `T${line.turn} ${line.text.slice(0, 50)}`).join(" | "));
+    await stop(host);
+  },
+  async W28() { // the landings recursed without end and stopped Run 32 at T169; the posture says where the host at sea is bound, and a host holding at sea is said once
+    const host = await start("run32-t168-siam");
+    const turns: unknown[] = [];
+    for (let i = 0; i < 4; i++) turns.push((await post("/advance", { turns: 1 })).json);
+    check("W28 four turns from T168 play without a failed turn", turns.every((turn: any) => !turn?.error) && (await get("/state")).json.turn === 172, JSON.stringify(turns.find((turn: any) => turn?.error) ?? {}).slice(0, 200));
+    const siam = await logOf("Siam", 168);
+    check("W28 no turn failed in Siam's log", !siam.some((line) => /could not be played/.test(line.text)));
+    const posture = (await get(`/briefing?civ=Siam`)).json.standingOrders?.posture;
+    check("W28 the posture says where the host at sea is bound", Array.isArray(posture?.hostAtSea) && posture.hostAtSea.some((line: string) => /(crossing to (its|their) landing at .*|holding at sea out of reach: no shore near Hamburg .*), against Hamburg \(.* turns? at sea\)|holding at sea out of reach: no shore near Hamburg .* \(.* turns? at sea\)/.test(line)), JSON.stringify(posture?.hostAtSea ?? posture).slice(0, 300));
+    const holding = siam.filter((line) => /^Our host holds at sea out of reach: no shore near Hamburg/.test(line.text)).map((line) => line.turn);
+    check("W28 a host holding at sea is said when it begins, not every turn", holding.every((turn, index) => index === 0 || turn - holding[index - 1] > 1), holding.join(", "));
     await stop(host);
   },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
