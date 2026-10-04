@@ -485,7 +485,7 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W14 no barred military unit is queued by the officials", barred.length === 0, barred.join(", "));
     await stop(host);
   },
-  async W15() { // a nuclear weapon: grounded under defend; launched under attack it is told whole to the attacker and to the struck, and every unit killed has its line
+  async W15() { // a nuclear weapon: grounded under defend; launched under attack it is told whole, with its weight, to the attacker, the struck, every other court and the world
     // The fixture has none in the air: an Atomic Bomb of the Aztecs' is put in Tenochtitlan, five tiles from Arabia's Baghdad and its soldiers
     const host = await start("run21-t300-war", "", undefined, (game) => {
       const tile = game.tileMap.tileList.find((tile: any) => (tile.position?.x ?? 0) === 2 && (tile.position?.y ?? 0) === -9);
@@ -501,9 +501,20 @@ const CASES: Record<string, () => Promise<void>> = {
     const fell = aztecs.find((line) => /^Our Atomic Bomb fell on /.test(line.text));
     check("W15 under attack the bomb falls, and the Aztecs are told whole", fell !== undefined, fell?.text);
     check("W15 the struck are told by the attacker's name", arabia.some((line) => /^Aztecs' Atomic Bomb fell on /.test(line.text)), arabia.find((line) => /Atomic Bomb/.test(line.text))?.text);
-    check("W15 each of Arabia's units killed has its line, the weapon the killer", arabia.some((line) => /lost in action .* Atomic Bomb/.test(line.text)), arabia.find((line) => /lost in action/.test(line.text))?.text);
-    check("W15 the bomb's own end is told", aztecs.some((line) => /^Our Atomic Bomb was spent on its strike/.test(line.text)));
+    // The blow's weight: the people a city lost in words, the dead by whose they were, the first ever, the fallout - and no tile counted
+    check("W15 the blow is told with its weight", !!fell && /lost (a few|a fifth|a quarter|a third|half|two thirds|three quarters|nearly all) of its people|was razed/.test(fell.text) && /the first atomic weapon the world has seen/.test(fell.text) && /poisoned for a generation/.test(fell.text) && !/tiles?\b/.test(fell.text), fell?.text);
+    // Its dead are in the blow's line: only a unit under the ruler's own order keeps a loss line of its own; the spent bomb is the blow itself
+    check("W15 the struck have no loss line for the blow's dead outside the ruler's orders", !arabia.some((line) => /lost in action .* Atomic Bomb/.test(line.text) && !/ under your /.test(line.text)), arabia.find((line) => /lost in action .* Atomic Bomb/.test(line.text) && !/ under your /.test(line.text))?.text);
+    check("W15 the spent bomb has no line of its own", !aztecs.some((line) => /^Our Atomic Bomb was spent on its strike/.test(line.text)));
     const everyone = (await Promise.all(["Aztecs", "Japan", "Arabia", "Songhai", "Austria", "Denmark"].map((name) => logOf(name, 300)))).flat();
+    // Every court hears of it in the world's words, and the world once per blow; the engine's own "A(n) ... has been detonated" notice is struck
+    const japan = await logOf("Japan", 301);
+    check("W15 a court the blow did not touch hears of it", japan.some((line) => /^Aztecs launched an Atomic Bomb /.test(line.text)), japan.find((line) => /Atomic Bomb/.test(line.text))?.text);
+    check("W15 no engine A(n) in any court's log", !everyone.some((line) => /\bA\(n\)/.test(line.text)), everyone.find((line) => /\bA\(n\)/.test(line.text))?.text);
+    const events = ((await get("/events?since=300")).json as { text: string }[]).filter((event) => /launched an Atomic Bomb/.test(event.text));
+    check("W15 one public event per blow, the first named once", events.length >= 1 && events.length === aztecs.filter((line) => /^Our Atomic Bomb fell on /.test(line.text)).length && events.filter((event) => /first atomic weapon/.test(event.text)).length === 1, events.map((event) => event.text.slice(0, 80)).join(" | "));
+    const age = (await get("/age?civ=Japan&from=300")).json.lines as string[];
+    check("W15 the age's seen lines hold the blow", age.some((line) => /launched an Atomic Bomb/.test(line)));
     check("W15 no unit is gone from any roll with no reason, in three turns of war", !everyone.some((line) => /gone from our rolls/.test(line.text)), everyone.find((line) => /gone from our rolls/.test(line.text))?.text);
     await stop(host);
   },

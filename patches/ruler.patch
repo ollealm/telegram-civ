@@ -45,10 +45,10 @@ index 0a2fd63..ba25f43 100644
              }
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..960e2ba
+index 0000000..817d346
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,394 @@
+@@ -0,0 +1,411 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -184,6 +184,20 @@ index 0000000..960e2ba
 +        return threat.getEnemyUnitsOnTiles(threat.getTilesWithEnemyUnitsInDistance(unit.getTile(), 8))
 +            .flatMap { it.getTile().getTilesInDistance(it.getMaxMovement() - 1 + it.getRange()) }.toHashSet()
 +    }
++
++    /** Where a ruled civ's land unit at sea would be struck before it can land: within an enemy city's bombard reach, or within what the enemy soldiers
++     *  and ships near it could strike next turn (enemyReach). Every seaborne host died embarked under Munich's guns, a unit or two a turn (Run 32) */
++    fun perilAtSea(unit: MapUnit): Set<Tile> {
++        if (unit.civ.civID !in ruledCivs) return emptySet()
++        val cities = unit.civ.getKnownCivs().filter { unit.civ.isAtWarWith(it) }.flatMap { it.cities }
++            .filter { it.getCenterTile().aerialDistanceTo(unit.getTile()) <= 12 }
++        return cities.flatMap { city -> city.getCenterTile().getTilesInDistance(city.getBombardRange()) }.toHashSet() + enemyReach(unit)
++    }
++
++    /** Does this ruled civ's land unit go by sea to the city - at sea now, or with water on its way? Then it lands out of reach and walks (headForLanding) */
++    @yairm210.purity.annotations.Readonly
++    fun goesBySea(unit: MapUnit, path: List<Tile>): Boolean =
++        unit.civ.civID in ruledCivs && unit.baseUnit.isLandUnit && (unit.isEmbarked() || path.any { it.isWater })
 +
 +    /** Where a ruled civ's civilian with enemy soldiers in reach of it keeps to: of the tiles it can step to that lie beyond their reach, the one nearest a city
 +     *  of ours - never the open field the engine's "furthest from danger" may choose. Null when none is open to it or none of the enemy can reach it */
@@ -433,14 +447,17 @@ index 0000000..960e2ba
 +     *  where, the cities in its blast with the walls' health after or razed, and every unit it killed by owner. Each unit killed is also a loss by noteLoss,
 +     *  the weapon named as the killer, so the roll-call and the trail have it as any death in battle */
 +    class NukeFall(val attacker: Civilization, val weapon: String, val target: Tile) {
-+        class CityHit(val city: com.unciv.logic.city.City, val razed: Boolean)
++        /** [people] before the blast and [lost] in it (all of them when [razed]) */
++        class CityHit(val city: com.unciv.logic.city.City, val razed: Boolean, val people: Int, val lost: Int)
 +        val cities = ArrayList<CityHit>()
 +        val killed = ArrayList<MapUnit>()
++        /** Fallout fell on land the blast reached that had none */
++        var poisoned = false
 +    }
 +    @Volatile var nuked: ((NukeFall) -> Unit)? = null
-+    /** Told when the attacker or any power struck is a ruled civ */
++    /** Told of every detonation: the world hears of each, the courts it touched in full */
 +    fun noteNuke(fall: NukeFall) {
-+        if (fall.attacker.civID in ruledCivs || fall.cities.any { it.city.civ.civID in ruledCivs } || fall.killed.any { it.civ.civID in ruledCivs }) nuked?.invoke(fall)
++        nuked?.invoke(fall)
 +    }
 +}
 diff --git a/core/src/com/unciv/logic/automation/city/ConstructionAutomation.kt b/core/src/com/unciv/logic/automation/city/ConstructionAutomation.kt
@@ -1169,7 +1186,7 @@ index c6f0076..9277b9f 100644
              // Priotirize capture threat over ranged attack
              .sortedByDescending { unit.civ.threatManager.getEnemyUnitsOnTiles(listOf(it)).isNotEmpty() }
 diff --git a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
-index 3fc1b5e..3567459 100644
+index 3fc1b5e..93e3024 100644
 --- a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 @@ -20,7 +20,7 @@ object HeadTowardsEnemyCityAutomation {
@@ -1214,6 +1231,61 @@ index 3fc1b5e..3567459 100644
              .mapNotNull { NextTurnAutomation.getForeignCityNearCapital(unit.civ.getCapital(), it) }
              .minByOrNull { it.aerialDistance }?.city
              ?: return emptySequence() // no attackable cities found
+@@ -62,6 +81,9 @@ object HeadTowardsEnemyCityAutomation {
+         closestReachableEnemyCity: Tile,
+         shortestPath: List<Tile>
+     ): Boolean {
++        // A ruled civ's land unit going by sea never holds, nor ends a turn, at sea within reach of the city or of the enemy near it: it lands out of
++        // reach and walks. Unruled civs go as upstream has them
++        if (com.unciv.logic.automation.RulerOverrides.goesBySea(unit, shortestPath)) return headForLanding(unit, closestReachableEnemyCity)
+         val unitDistanceToTiles = unit.movement.getDistanceToTiles()
+ 
+         val unitRange = unit.getRange()
+@@ -96,6 +118,44 @@ object HeadTowardsEnemyCityAutomation {
+         return true
+     }
+ 
++    /** A ruled civ's land unit going by sea: the landing is a land tile on the city's landmass, at least three from it and out of every reach
++     *  (RulerOverrides.perilAtSea), that can be come to by water out of reach - the one nearest the city, further along the coast when the near shore is
++     *  under the guns (Munich's whole western shore was, across the strait from London, Run 32). Each turn the unit goes as far along that way as it can,
++     *  never ending a turn at sea within reach, and lands; on its landing it walks as any soldier does. With no such landing, it keeps out of reach */
++    private fun headForLanding(unit: MapUnit, cityTile: Tile): Boolean {
++        val peril = com.unciv.logic.automation.RulerOverrides.perilAtSea(unit)
++        val landmass = cityTile.getContinent()
++        val start = unit.currentTile
++        fun landing(tile: Tile) = tile.isLand && tile.getContinent() == landmass && tile !in peril && tile.aerialDistanceTo(cityTile) in minDistanceFromCityToConsiderForLandingArea..10 &&
++            unit.getDamageFromTerrain(tile) <= 0 && (tile == start || unit.movement.canMoveTo(tile))
++        // The ways by sea out of reach: water not within reach, and our own side's land to walk along to the shore; a landing ends a way
++        val came = HashMap<Tile, Tile>().apply { put(start, start) }
++        val depth = HashMap<Tile, Int>().apply { put(start, 0) }
++        val queue = ArrayDeque(listOf(start))
++        val landings = ArrayList<Tile>()
++        while (queue.isNotEmpty()) {
++            val tile = queue.removeFirst()
++            if (landing(tile)) { landings += tile; continue }
++            if (tile != start && tile.isLand && tile.getContinent() == landmass) continue
++            for (next in tile.neighbors) {
++                if (next in came || next.aerialDistanceTo(start) > 30 || next.isImpassible()) continue
++                if (next.isWater && next in peril) continue
++                if (next.isLand && next.getContinent() == landmass && !landing(next)) continue
++                came[next] = tile; depth[next] = depth[tile]!! + 1; queue.addLast(next)
++            }
++        }
++        val target = landings.minWithOrNull(compareBy({ it.aerialDistanceTo(cityTile) }, { depth[it] }))
++        val open = unit.movement.getDistanceToTiles().keys.filter { (it == start || unit.movement.canMoveTo(it)) && !(it.isWater && it in peril) }.toHashSet()
++        val step = if (target == null) {
++            if (start in peril) open.minByOrNull { tile -> unit.civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: 0 } else null
++        } else {
++            // The farthest tile along the way that this turn's movement reaches
++            generateSequence(target) { tile -> came[tile]?.takeIf { it != tile } }.firstOrNull { it in open }
++        }
++        if (step != null && step != start) unit.movement.moveToTile(step)
++        return true
++    }
++
+     /** Cannot take within 5 turns */
+     @Readonly
+     private fun cannotTakeCitySoon(
 diff --git a/core/src/com/unciv/logic/automation/unit/ReligiousUnitAutomation.kt b/core/src/com/unciv/logic/automation/unit/ReligiousUnitAutomation.kt
 index 8135bb7..df08169 100644
 --- a/core/src/com/unciv/logic/automation/unit/ReligiousUnitAutomation.kt
@@ -1654,7 +1726,7 @@ index 5775ae2..c52a476 100644
              defenderCiv.addNotification(
                  "An enemy [${attacker.getName()}] has captured our [${defender.getName()}]",
 diff --git a/core/src/com/unciv/logic/battle/Nuke.kt b/core/src/com/unciv/logic/battle/Nuke.kt
-index 2fb9f1b..bc5ff8c 100644
+index 2fb9f1b..96b5088 100644
 --- a/core/src/com/unciv/logic/battle/Nuke.kt
 +++ b/core/src/com/unciv/logic/battle/Nuke.kt
 @@ -1,5 +1,6 @@
@@ -1664,22 +1736,24 @@ index 2fb9f1b..bc5ff8c 100644
  import com.unciv.logic.city.City
  import com.unciv.logic.civilization.*
  import com.unciv.logic.civilization.diplomacy.DiplomaticModifiers
-@@ -76,10 +77,13 @@ object Nuke {
+@@ -76,10 +77,15 @@ object Nuke {
  
          attacker.unit.attacksSinceTurnStart.add(targetTile.position)
  
 +        // The blow told whole to a ruled civ's host, attacker's or victim's: the engine's own notices tell each victim of its tile and the attacker of nothing
 +        val fall = RulerOverrides.NukeFall(attackingCiv, attacker.getName(), targetTile)
++        val falloutBefore = hitTiles.count { it.terrainFeatures.contains("Fallout") }
          for (tile in hitTiles) {
              // Handle complicated effects
 -            doNukeExplosionForTile(attacker, tile, nukeStrength, targetTile == tile)
 +            doNukeExplosionForTile(attacker, tile, nukeStrength, targetTile == tile, fall)
          }
++        fall.poisoned = hitTiles.count { it.terrainFeatures.contains("Fallout") } > falloutBefore
 +        RulerOverrides.noteNuke(fall)
  
  
          // Instead of postBattleAction() just destroy the unit, all other functions are not relevant
-@@ -196,7 +200,8 @@ object Nuke {
+@@ -196,7 +202,8 @@ object Nuke {
          attacker: MapUnitCombatant,
          tile: Tile,
          nukeStrength: Int,
@@ -1689,15 +1763,18 @@ index 2fb9f1b..bc5ff8c 100644
      ) {
          // https://forums.civfanatics.com/resources/unit-guide-modern-future-units-g-k.25628/
          // https://www.carlsguides.com/strategy/civilization5/units/aircraft-nukes.ph
-@@ -220,6 +225,7 @@ object Nuke {
+@@ -219,7 +226,10 @@ object Nuke {
+         if (city != null && tile.position.toHexCoord() == city.location.toHexCoord()) {
              val attackContext = GameContext(attacker.getCivInfo(), ourCombatant = attacker, theirCombatant = CityCombatant(city), tile = tile)
              buildingModifier = city.getAggregateModifier(UniqueType.GarrisonDamageFromNukes)
++            val people = city.population.population
              doNukeExplosionDamageToCity(city, nukeStrength, damageModifierFromMissingResource, attackContext)
-+            fall.cities += RulerOverrides.NukeFall.CityHit(city, razed = city !in city.civ.cities)
++            val razed = city !in city.civ.cities
++            fall.cities += RulerOverrides.NukeFall.CityHit(city, razed, people, if (razed) people else people - city.population.population)
              Battle.postBattleNotifications(attacker, CityCombatant(city), city.getCenterTile())
              Battle.destroyIfDefeated(city.civ, attacker.getCivInfo(), city.location.toHexCoord())
          }
-@@ -241,6 +247,7 @@ object Nuke {
+@@ -241,6 +251,7 @@ object Nuke {
              } else {
                  defender.takeDamage(damage)
              }
@@ -2739,10 +2816,10 @@ index 0000000..a37477c
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/Prose.kt b/desktop/src/com/unciv/app/desktop/ruler/Prose.kt
 new file mode 100644
-index 0000000..3df08a4
+index 0000000..4ef6c08
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/Prose.kt
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,34 @@
 +package com.unciv.app.desktop.ruler
 +
 +/** The small idioms of the chancery's prose, one copy each, so a line reads the same whichever part of the host wrote it */
@@ -2768,15 +2845,21 @@ index 0000000..3df08a4
 +    /** How far one figure leads another, in the words every comparison uses: by a wide margin (3 times or more), clearly (1.5), by some way (1.15), narrowly */
 +    fun lead(ratio: Double): String = when { ratio >= 3 -> "by a wide margin"; ratio >= 1.5 -> "clearly"; ratio >= 1.15 -> "by some way"; else -> "narrowly" }
 +    fun ordinal(place: Int): String = listOf("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth").getOrNull(place - 1) ?: "${place}th"
++    /** A part of a whole in words, never a figure: "a third", "half", "nearly all" */
++    fun share(part: Int, whole: Int): String {
++        val r = if (whole <= 0) 0.0 else part.toDouble() / whole
++        return when { r >= 0.9 -> "nearly all"; r >= 0.7 -> "three quarters"; r >= 0.58 -> "two thirds"; r >= 0.42 -> "half"; r >= 0.3 -> "a third"
++            r >= 0.22 -> "a quarter"; r >= 0.15 -> "a fifth"; else -> "a few" }
++    }
 +    /** "a Pikeman", "an Archer": the article by the sound of the name's first letter */
 +    fun article(name: String): String = if (name.firstOrNull()?.lowercaseChar()?.let { it in "aeiou" } == true) "an $name" else "a $name"
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerAges.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerAges.kt
 new file mode 100644
-index 0000000..03dc363
+index 0000000..869d574
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerAges.kt
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,198 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -2820,10 +2903,16 @@ index 0000000..03dc363
 +        trail.stands.firstEntry()?.key?.let { oldest -> outclassed.removeAll { it.turn < oldest } }
 +    }
 +
-+    fun clear() = outclassed.clear()
-+    fun toMap() = mapOf("outclassed" to outclassed.map { listOf(it.turn, it.loser, it.unit, it.era, it.victor, it.by, it.byEra, it.place) })
++    /** Every detonation in the world's words, by the turn it belongs to: what every realm saw in its age */
++    private val nukes = ArrayList<Pair<Int, String>>()
++    fun noteNuke(turn: Int, text: String) { nukes += turn to text }
++
++    fun clear() { outclassed.clear(); nukes.clear() }
++    fun toMap() = mapOf("outclassed" to outclassed.map { listOf(it.turn, it.loser, it.unit, it.era, it.victor, it.by, it.byEra, it.place) },
++        "nukes" to nukes.map { listOf(it.first, it.second) })
 +    fun load(json: JsonValue?) {
-+        outclassed.clear()
++        outclassed.clear(); nukes.clear()
++        json?.get("nukes")?.forEach { nukes += it.getInt(0) to it.getString(1) }
 +        json?.get("outclassed")?.forEach { outclassed += Outclassed(it.getInt(0), it.getString(1), it.getString(2), it.getString(3), it.getString(4), it.getString(5), it.getString(6), it.getString(7)) }
 +    }
 +
@@ -2960,6 +3049,7 @@ index 0000000..03dc363
 +            (exploration["citiesFoundTold"] as String).takeIf { it.isNotEmpty() }?.let { " Cities first seen: $it." }.orEmpty()
 +        for (e in explorers) lines += "Our ${e["what"]} ranged as far as ${e["reached"]}."
 +        if (met.isNotEmpty()) lines += "We met ${met.joinToString { RulerCampaigns.people(it) }}."
++        for ((turn, text) in nukes) if (turn in from..to) lines += text
 +        if (lines.isEmpty()) lines += "No company marched beyond its home fields, nothing new was seen, and no one new was met."
 +
 +        return mapOf("from" to from, "to" to to, "fromYear" to yearText(from), "toYear" to yearText(to),
@@ -4390,10 +4480,10 @@ index 0000000..c620d0e
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..25b052e
+index 0000000..535ac6f
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,2919 @@
+@@ -0,0 +1,2956 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -4549,14 +4639,37 @@ index 0000000..25b052e
 +        RulerOverrides.unitDestroyed = { civ, unit, where -> destroyed.getOrPut(civ.civName) { HashMap() }[unit.id] = where }
 +        RulerOverrides.buildingSold = { civ, city, building, gold, why -> log(civ, "The officials sold the $building in ${city.name} for $gold gold, $why.") }
 +        RulerOverrides.beliefsChosen = { civ, what, beliefs -> log(civ, "The officials $what with the belief${if (beliefs.size == 1) "" else "s"} ${beliefs.joinToString("; ") { beliefInWords(it) }}.") }
-+        // A nuclear blow, to every court it touched: the attacker's as its own, each struck power's by the attacker's name - the cities in the blast and the units killed
++        // A nuclear blow, told with its weight: to every court it touched in full (the attacker's as its own, each struck power's by the attacker's name),
++        // to the world as one public event, and to every other ruled court in the world's words. The engine's own notices of it are struck (noise)
 +        RulerOverrides.nuked = { fall ->
-+            val courts = (listOf(fall.attacker) + fall.cities.map { it.city.civ } + fall.killed.map { it.civ }).distinct().filter { it.civID in RulerOverrides.ruledCivs }
-+            for (civ in courts) {
++            val first = !atomicSeen && game().civilizations.none { c -> c.diplomacy.values.any { it.hasModifier(com.unciv.logic.civilization.diplomacy.DiplomaticModifiers.UsedNuclearWeapons) } }
++            atomicSeen = true
++            val firstNote = if (first) ", the first atomic weapon the world has seen" else ""
++            val poison = if (fall.poisoned) " The land around it is poisoned for a generation." else ""
++            fun fate(hit: RulerOverrides.NukeFall.CityHit, name: String, health: Boolean) = when {
++                hit.razed -> "$name was razed"
++                hit.lost > 0 -> "$name lost ${Prose.share(hit.lost, hit.people)} of its people"
++                else -> "$name stood"
++            } + (if (health && !hit.razed) ", its walls at ${hit.city.health} of ${com.unciv.logic.battle.CityCombatant(hit.city).getMaxHealth()}" else "")
++            // The world's words: whose cities by their people's names, the units killed by whose they were
++            val worldCities = fall.cities.map { hit -> fate(hit, if (hit.city.civ.civName == hit.city.name) hit.city.name else "${RulerCampaigns.possessive(hit.city.civ.civName)} ${hit.city.name}", false) }
++            val worldKilled = fall.killed.groupBy { it.civ }.map { (owner, units) -> "${RulerCampaigns.people(owner.civName).replaceFirstChar { it.uppercase() }} lost ${RulerCampaigns.company(units.map { it.name })}" }
++            val aim = fall.cities.firstOrNull { it.city.getCenterTile() == fall.target }?.city
++            val near = aim ?: game().getCities().minByOrNull { it.getCenterTile().aerialDistanceTo(fall.target) }
++            val at = when { near == null -> "far from any city"; aim != null -> "at"; else -> "near" }.let { word ->
++                if (near == null) word else "$word ${if (near.civ.civName == near.name) near.name else "${RulerCampaigns.possessive(near.civ.civName)} ${near.name}"}" }
++            val worldText = "${RulerCampaigns.people(fall.attacker.civName).replaceFirstChar { it.uppercase() }} launched ${Prose.article(fall.weapon)} $at$firstNote: " +
++                (worldCities + worldKilled).joinToString("; ").ifEmpty { "nothing of anyone's stood in the blast" } + "." + poison
++            addPublicEvent(worldText)
++            ages.noteNuke(stamp(), worldText)
++            val touched = (listOf(fall.attacker) + fall.cities.map { it.city.civ } + fall.killed.map { it.civ }).distinct()
++            for (civ in game().civilizations.filter { it.civID in RulerOverrides.ruledCivs && it.isAlive() }) {
++                if (civ !in touched) { log(civ, worldText); continue }
 +                val whose = { owner: Civilization -> if (owner == civ) "our" else RulerCampaigns.possessive(owner.civName) }
-+                val cities = fall.cities.map { hit -> "${whose(hit.city.civ)} ${hit.city.name} " + (if (hit.razed) "razed" else "at ${hit.city.health} of ${com.unciv.logic.battle.CityCombatant(hit.city).getMaxHealth()} health") }
-+                val killed = fall.killed.groupBy { it.civ }.map { (owner, units) -> "${whose(owner)} ${units.joinToString(", ") { it.name }} killed" }
-+                log(civ, "${whose(fall.attacker).replaceFirstChar { it.uppercase() }} ${fall.weapon} fell on ${RulerCampaigns.placeOf(civ, fall.target)}: " + (cities + killed).joinToString("; ").ifEmpty { "nothing of anyone's stood in the blast" } + ".")
++                val cities = fall.cities.map { hit -> fate(hit, if (hit.city.civ == civ || hit.city.civ.civName == hit.city.name) hit.city.name else "${whose(hit.city.civ)} ${hit.city.name}", true) }
++                val killed = fall.killed.groupBy { it.civ }.map { (owner, units) -> "${if (owner == civ) "we" else RulerCampaigns.people(owner.civName).replaceFirstChar { it.uppercase() }} lost ${RulerCampaigns.company(units.map { it.name })}" }
++                log(civ, "${whose(fall.attacker).replaceFirstChar { it.uppercase() }} ${fall.weapon} fell on ${RulerCampaigns.placeOf(civ, fall.target)}$firstNote: " +
++                    (cities + killed).joinToString("; ").ifEmpty { "nothing of anyone's stood in the blast" } + "." + poison)
 +            }
 +        }
 +        RulerOverrides.struck = { strike ->
@@ -4629,6 +4742,7 @@ index 0000000..25b052e
 +            when {
 +                Regex("[\\[\\]{}]").containsMatchIn(text) -> selfCheck("words", civ.civName, "brackets or braces: $text")
 +                Regex("\\(-?\\d+,\\s?-?\\d+\\)").containsMatchIn(text) -> selfCheck("words", civ.civName, "coordinates: $text")
++                Regex("\\b[Aa]\\(n\\)").containsMatchIn(text) -> selfCheck("words", civ.civName, "the engine's A(n): $text")
 +                Regex("#\\d+").containsMatchIn(text) && !asksForOrders.containsMatchIn(text) -> selfCheck("words", civ.civName, "a unit's number in prose: $text")
 +            }
 +        }
@@ -4865,6 +4979,7 @@ index 0000000..25b052e
 +        Memory("warsDeclared", true, { warsDeclared.clear() }, { warsDeclared.map { it.toString() } }, { json -> json?.asStringArray()?.forEach { warsDeclared += WarRecord.parse(it) } }),
 +        Memory("trail", true, { trail.clear() }, { trail.toMap() }, { json -> trail.load(json) }),
 +        Memory("ages", true, { ages.clear() }, { ages.toMap() }, { json -> ages.load(json) }),
++        Memory("atomicSeen", true, { atomicSeen = false }, { atomicSeen }, { json -> atomicSeen = json?.asBoolean() ?: false }),
 +        Memory("lockedCities", true, { RulerOverrides.lockedCities.clear() }, { RulerOverrides.lockedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.lockedCities += it } }),
 +        Memory("focusedCities", true, { RulerOverrides.focusedCities.clear() }, { RulerOverrides.focusedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.focusedCities += it } }),
 +        Memory("cadence", true, { ageTurns = 12; lookInTurns = 4 }, { mapOf("ageTurns" to ageTurns, "lookInTurns" to lookInTurns) },
@@ -5650,6 +5765,8 @@ index 0000000..25b052e
 +    /** A ship that attacked one of our cities or units, as the attack's notice placed it: kept a few turns for the threats list */
 +    private class ShipRaid(val turn: Int, val owner: String, val target: String, val from: String)
 +    private val shipRaids = HashMap<String, HashMap<Int, ShipRaid>>()
++    /** An atomic weapon has fallen in this game: the next is not the world's first */
++    private var atomicSeen = false
 +
 +    /** The notifications each civ's last bookkeeping read: the same objects move from the live list into the log at the turn's end, and are not read twice */
 +    private val notificationsSeen = HashMap<String, MutableSet<com.unciv.logic.civilization.Notification>>()
@@ -5674,6 +5791,8 @@ index 0000000..25b052e
 +        "has accepted your trade request", "has denied your trade request",
 +        // a city-state's end: the host's own line (recordPublicEvents) says who took its city, to every court that knew it
 +        "The City-State of [",
++        // a detonation: the host's own line (the nuked hook) tells it with its weight, to every ruled court
++        "has been detonated by [", "has exploded in our territory",
 +        // a unit disbanded for want of gold: the roll-call's own line says which, where it stood and why (RulerOverrides.noteDisbanded)
 +        "Cannot provide unit upkeep for")
 +    /** The engine's notice of a blow on us ("An enemy [Pikeman] ([-40] HP) has attacked [Onondaga] ([-26] HP)"): the turn's blows are folded into one line per attacker and place instead */
@@ -5838,6 +5957,11 @@ index 0000000..25b052e
 +            val byWhom = if (units.usedByOrder.remove(id)) "by your order" else "by the officials once it was left to them"
 +            val went = expended[civ.civName]?.remove(id)
 +            val gone = destroyed[civ.civName]?.remove(id)
++            // A nuclear blow's dead and its spent weapon are told in the blow's own line (the nuked hook): eleven loss lines followed one bomb on Medina.
++            // A unit under the ruler's own order is still told by name
++            val nuclear = { name: String? -> civ.gameInfo.ruleset.units[name]?.hasUnique(com.unciv.models.ruleset.unique.UniqueType.NuclearWeapon) == true }
++            if (fell != null && !fell.captured && nuclear(fell.enemyUnit) && units.orders[id] == null) continue
++            if (fell == null && disbandedWhy == null && went == null && !civ.isDefeated() && nuclear(unit.first)) continue
 +            // No unit number: a unit gone from the rolls is nothing the advisor can order, and the line may reach the ruler's letter
 +            log(civ, if (disbandedWhy != null && !civ.isDefeated()) "Our ${unit.first} ${RulerCampaigns.atPlaceOf(civ, unit.second)} was disbanded by the officials${if (disbandedWhy.isEmpty()) "" else " $disbandedWhy"}."
 +                else if (fell != null) "Our ${unit.first}${units.orders[id]?.let { " under your ${it.action} order" } ?: ""} was ${if (fell.captured) "captured" else "lost in action"} ${RulerCampaigns.atPlaceOf(civ, fell.where)}" +
@@ -5863,8 +5987,11 @@ index 0000000..25b052e
 +            val theirs = whose + if (whose.endsWith("s")) "'" else "'s" // the Aztecs' soldiers, Japan's
 +            val times = when (blows.size) { 1 -> "once"; 2 -> "twice"; else -> "${blows.size} times" }
 +            val city = blows.first().targetCity
-+            log(civ, if (city != null) "Our host struck $city ($whose) $times: " + (if (blows.any { it.fell }) "the walls were stormed and the city is taken." else "the walls at ${blows.last().health} of ${blows.last().maxHealth} health.")
-+                else "Our host struck " + (if (blows.first().targetTile?.isWater == true) {
++            // Ships are named as ships: Triremes bombarding Munich read as a landed siege while every soldier stood at home (Run 32)
++            val atSea = blows.map { blow -> blow.attackerUnit?.let { civ.gameInfo.ruleset.units[it]?.isWaterUnit } ?: false }
++            val ours = when { atSea.all { it } -> "Our ships"; atSea.any { it } -> "Our host and ships"; else -> "Our host" }
++            log(civ, if (city != null) "$ours struck $city ($whose) $times: " + (if (blows.any { it.fell }) "the walls were stormed and the city is taken." else "the walls at ${blows.last().health} of ${blows.last().maxHealth} health.")
++                else "$ours struck " + (if (blows.first().targetTile?.isWater == true) {
 +                    // On the water, ships and embarked soldiers alike: in one harbour, said by name, or else at sea
 +                    val harbour = blows.mapNotNull { it.targetTile }.map { RulerCampaigns.placeOf(civ, it, emptySet()) }.distinct().singleOrNull()?.takeIf { it.startsWith("the harbour of") }
 +                    "$whose ${harbour?.let { "in $it" } ?: "at sea"}"

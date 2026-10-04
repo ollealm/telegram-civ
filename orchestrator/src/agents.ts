@@ -379,83 +379,99 @@ type RunOptions = Moment & {
   seat?: Seat;
   /** Called with the reply as it grows, so a chat can show it while it is still being written */
   onText?: (soFar: string) => void;
+  /** The call is abandoned after this long and fails "timed out", as an image is: a model call that never returns must not hold up what waits on it */
+  timeoutMs?: number;
 };
 
 /** One model call; the answer is prose, or data in the shape of outputSchema when one is given */
 async function call(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }, attempt = 1): Promise<{ text: string; data?: unknown }> {
-  const { seat, onText, outputSchema } = options;
+  const { seat, onText, outputSchema, timeoutMs } = options;
   const started = Date.now();
-  const toolCalls: Trace["toolCalls"] = [];
-  const realm = seat && gameTools(seat, options, await loadSchema());
-  async function* input() {
-    yield { type: "user" as const, message: { role: "user" as const, content: prompt }, parent_tool_use_id: null, session_id: "" };
+  const abortController = new AbortController();
+  const timer = timeoutMs ? setTimeout(() => abortController.abort(), timeoutMs) : undefined;
+  try {
+    return await listen();
+  } catch (error) {
+    if (abortController.signal.aborted) throw new Error(`${role} agent timed out after ${Math.round(timeoutMs! / 1000)} s`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  const stream = query({
-    prompt: input() as never,
-    options: {
-      model,
-      systemPrompt,
-      tools: [],
-      settingSources: [],
-      strictMcpConfig: true,
-      includePartialMessages: !!onText,
-      ...((seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) && { effort: (seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) as "low" | "medium" | "high" | "xhigh" | "max" }),
-      ...(outputSchema && { outputFormat: { type: "json_schema" as const, schema: outputSchema } }),
-      // Use the CLI's own login even when launched from inside another Claude session
-      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC)/.test(key))),
-      maxTurns: 15,
-      ...(realm && { mcpServers: { realm: realm.server }, allowedTools: realm.served.map((name) => `mcp__realm__${name}`) }),
-    },
-  });
-  let streamed = "";
-  // Every text the model wrote, in order: message.result holds only what came after the last tool call, and a reply written before a
-  // closing tool call (smaller_matters, paint_decision) would otherwise be lost
-  const spoken: string[] = [];
-  for await (const message of stream) {
-    if (onText && message.type === "stream_event") {
-      const event = message.event as { type: string; delta?: { type?: string; text?: string } };
-      if (event.type === "content_block_start" && streamed) streamed += "\n\n";
-      if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) { streamed += event.delta.text; onText(streamed); }
-      continue;
+  /** The session itself, abandoned with the abort */
+  async function listen(): Promise<{ text: string; data?: unknown }> {
+    const toolCalls: Trace["toolCalls"] = [];
+    const realm = seat && gameTools(seat, options, await loadSchema());
+    async function* input() {
+      yield { type: "user" as const, message: { role: "user" as const, content: prompt }, parent_tool_use_id: null, session_id: "" };
     }
-    if (process.env.RULER_DEBUG) console.log(`[${role}]`, JSON.stringify(message).slice(0, 600));
-    // League agents have reported "the order tools were unavailable": a session that starts before its tools are up is started again
-    if (seat && message.type === "system" && message.subtype === "init" && !(message.tools ?? []).includes("mcp__realm__get_briefing")) {
-      console.warn(`[${role}] ${seat.civ}: session started without the realm tools (attempt ${attempt})`);
-      await stream.return?.(undefined as never);
-      if (attempt < 3) return call(role, model, systemPrompt, prompt, options, attempt + 1);
-      throw new Error(`${role} agent never got its tools`);
-    }
-    if (message.type === "assistant")
-      for (const block of message.message.content as { type: string; name?: string; input?: unknown; text?: string }[]) {
-        if (block.type === "tool_use") toolCalls.push({ name: String(block.name).replace("mcp__realm__", ""), input: block.input });
-        if (block.type === "text" && block.text?.trim()) spoken.push(block.text.trim());
+    const stream = query({
+      prompt: input() as never,
+      options: {
+        model,
+        systemPrompt,
+        tools: [],
+        settingSources: [],
+        strictMcpConfig: true,
+        includePartialMessages: !!onText,
+        ...((seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) && { effort: (seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) as "low" | "medium" | "high" | "xhigh" | "max" }),
+        ...(outputSchema && { outputFormat: { type: "json_schema" as const, schema: outputSchema } }),
+        // Use the CLI's own login even when launched from inside another Claude session
+        env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC)/.test(key))),
+        maxTurns: 15,
+        abortController,
+        ...(realm && { mcpServers: { realm: realm.server }, allowedTools: realm.served.map((name) => `mcp__realm__${name}`) }),
+      },
+    });
+    let streamed = "";
+    // Every text the model wrote, in order: message.result holds only what came after the last tool call, and a reply written before a
+    // closing tool call (smaller_matters, paint_decision) would otherwise be lost
+    const spoken: string[] = [];
+    for await (const message of stream) {
+      if (onText && message.type === "stream_event") {
+        const event = message.event as { type: string; delta?: { type?: string; text?: string } };
+        if (event.type === "content_block_start" && streamed) streamed += "\n\n";
+        if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) { streamed += event.delta.text; onText(streamed); }
+        continue;
       }
-    if (message.type === "user" && Array.isArray(message.message.content))
-      for (const block of message.message.content as { type: string; content?: unknown }[])
-        if (block.type === "tool_result") {
-          const open = toolCalls.find((call) => call.result === undefined);
-          // The order tool's reply whole - its failed list is what the leagues' bug hunt reads; the rest cut to keep the traces small
-          if (open) open.result = open.name === "set_orders" ? JSON.stringify(block.content) : JSON.stringify(block.content).slice(0, 1500);
+      if (process.env.RULER_DEBUG) console.log(`[${role}]`, JSON.stringify(message).slice(0, 600));
+      // League agents have reported "the order tools were unavailable": a session that starts before its tools are up is started again
+      if (seat && message.type === "system" && message.subtype === "init" && !(message.tools ?? []).includes("mcp__realm__get_briefing")) {
+        console.warn(`[${role}] ${seat.civ}: session started without the realm tools (attempt ${attempt})`);
+        await stream.return?.(undefined as never);
+        if (attempt < 3) return call(role, model, systemPrompt, prompt, options, attempt + 1);
+        throw new Error(`${role} agent never got its tools`);
+      }
+      if (message.type === "assistant")
+        for (const block of message.message.content as { type: string; name?: string; input?: unknown; text?: string }[]) {
+          if (block.type === "tool_use") toolCalls.push({ name: String(block.name).replace("mcp__realm__", ""), input: block.input });
+          if (block.type === "text" && block.text?.trim()) spoken.push(block.text.trim());
         }
-    if (message.type !== "result") continue;
-    const usage = message.usage;
-    const spent = {
-      inputTokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
-      outputTokens: usage.output_tokens ?? 0,
-      costUsd: message.total_cost_usd ?? 0,
-    };
-    addUsage(role, spent);
-    const data = message.subtype === "success" ? message.structured_output : undefined;
-    // The whole reply as written, not only the tail after the last tool call; the result is used when nothing was collected (a structured answer, or an SDK that did not stream the blocks)
-    const whole = (role === "govern" ? spoken.at(-1) ?? "" : spoken.join("\n\n")).trim() || (message.subtype === "success" ? message.result.trim() : "");
-    const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : whole;
-    traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
-    if (message.subtype !== "success") throw new Error(`${role} agent failed: ${message.subtype}`);
-    if (outputSchema && data === undefined) throw new Error(`${role} agent gave no structured answer`);
-    return { text: whole, data };
+      if (message.type === "user" && Array.isArray(message.message.content))
+        for (const block of message.message.content as { type: string; content?: unknown }[])
+          if (block.type === "tool_result") {
+            const open = toolCalls.find((call) => call.result === undefined);
+            // The order tool's reply whole - its failed list is what the leagues' bug hunt reads; the rest cut to keep the traces small
+            if (open) open.result = open.name === "set_orders" ? JSON.stringify(block.content) : JSON.stringify(block.content).slice(0, 1500);
+          }
+      if (message.type !== "result") continue;
+      const usage = message.usage;
+      const spent = {
+        inputTokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+        outputTokens: usage.output_tokens ?? 0,
+        costUsd: message.total_cost_usd ?? 0,
+      };
+      addUsage(role, spent);
+      const data = message.subtype === "success" ? message.structured_output : undefined;
+      // The whole reply as written, not only the tail after the last tool call; the result is used when nothing was collected (a structured answer, or an SDK that did not stream the blocks)
+      const whole = (role === "govern" ? spoken.at(-1) ?? "" : spoken.join("\n\n")).trim() || (message.subtype === "success" ? message.result.trim() : "");
+      const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : whole;
+      traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
+      if (message.subtype !== "success") throw new Error(`${role} agent failed: ${message.subtype}`);
+      if (outputSchema && data === undefined) throw new Error(`${role} agent gave no structured answer`);
+      return { text: whole, data };
+    }
+    throw new Error(`${role} agent returned nothing`);
   }
-  throw new Error(`${role} agent returned nothing`);
 }
 
 /** A call whose answer is prose */
@@ -831,6 +847,9 @@ export const chooseWonder = (civ: string, wonders: string[], year: string) =>
     z.object({ wonder: z.string().describe("Exactly one of the names given") }),
   ).then(({ wonder }) => wonders.find((name) => name.toLowerCase() === wonder.trim().toLowerCase()) ?? wonders[0]);
 
+/** How long a saga or the epic may take before it is given up: Olle's Korea game lost its ending to a call that never returned */
+const CLOSING_TIMEOUT_MS = Number(process.env.CLOSING_TIMEOUT_MS ?? 10 * 60_000);
+
 /** A saga or an epic: the telling, and one cycle of plates in one medium */
 const Saga = z.object({
   text: z.string(),
@@ -849,6 +868,7 @@ ${SAGA_LICENCE}
 With the text go three plates. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in medium, so that the three read as one work; no lettering anywhere. Each caption is a title only, as on the label beside a museum piece - three or four words, no sentence after it.`,
     `Your own chapters, as you published them:\n${chapters.map((chapter) => `[${chapter.years}]\n${chapter.text}`).join("\n\n") || "(none were kept)"}\n\nEverything the world has witnessed, in order:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe world as it stands:\n${standings}`,
     Saga,
+    { timeoutMs: CLOSING_TIMEOUT_MS },
   );
 
 /** The saga of one ruler's realm, told when it falls or when it wins: theirs to keep */
@@ -865,6 +885,7 @@ ${SAGA_LICENCE}
 With the text go three plates. These are not pictures of single events (those were painted along the way) and not a collage of everything at once. They are one cycle of three plates, as a later age would have made to remember this story, in a single medium that belongs to the people concerned - a woven hanging, a carved stone relief, a painted codex, a mosaic floor, an illuminated page, a woodcut, a lacquer screen. Each plate holds one movement as memory holds things: simplified and symbolic, a few figures and emblems standing for a whole age. Name the medium, its palette and its border once, in medium, so that the three read as one work; no lettering anywhere. Each caption is a title only, as on the label beside a museum piece - three or four words, no sentence after it.`,
     `The reign as it was lived, age by age - the advisor's telling, the fork put to the ruler, what the ruler said (typed in haste; never quote it), and what was settled:\n${(seat.annals ?? []).map((annal) => `[${annal.years}${annal.urgent ? ", an urgent council" : ""}]\n${annal.story}${annal.course ? `\nWhere it was heading: ${annal.course}` : ""}${annal.question ? `\nPut to the ruler: ${annal.question}` : ""}${annal.rulerSaid?.length ? `\nThe ruler said: ${annal.rulerSaid.join(" / ")}` : ""}${annal.settled ? `\nSettled: ${annal.settled}` : ""}`).join("\n\n") || "(no such record was kept for this reign - work from what follows)"}\n\nWhat the advisor came to understand of the ruler:\n${seat.will || "(nothing recorded)"}\n\nWhat the world witnessed of ${seat.civ}:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n")}\n\nThe advisor's journal, age by age (bookkeeping, mostly - take hopes, fears and turning points from it, never its figures):\n${seat.journal.join("\n")}`,
     Saga,
+    { timeoutMs: CLOSING_TIMEOUT_MS },
   );
 };
 

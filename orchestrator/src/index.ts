@@ -7,7 +7,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
-import { host, type PublicEvent, type RoundResult } from "./host.ts";
+import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
 import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
 
@@ -43,8 +43,10 @@ const advisorTokens = Object.keys(process.env)
   .map((key) => process.env[key]!);
 if (!process.env.HERALD_BOT_TOKEN || advisorTokens.length === 0) throw new Error("Bot tokens missing - see .env");
 
-const herald = new Bot(process.env.HERALD_BOT_TOKEN);
-const advisors = advisorTokens.map((token) => new Bot(token));
+// A harness points the bots at a stand-in for Telegram (harness/probe-ending.mts), so the orchestrator can run whole on a copy of a game
+const telegram = process.env.TELEGRAM_API_ROOT ? { client: { apiRoot: process.env.TELEGRAM_API_ROOT } } : undefined;
+const herald = new Bot(process.env.HERALD_BOT_TOKEN, telegram);
+const advisors = advisorTokens.map((token) => new Bot(token, telegram));
 
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args);
 // A failure nobody caught is logged, not fatal: one lost reply must not take every court down with it
@@ -259,11 +261,65 @@ async function sendEpic(occasion: string) {
   const standings = game.majorCivs.map((civ) => `${civ.civ}: ${civ.alive ? "stands" : "has fallen"}`).join("\n");
   const spoken = (state.proclaimed ?? []).map((entry) => ({ turn: entry.turn, year: entry.year, text: `Proclaimed: ${entry.text}` }));
   const history = [...events, ...spoken].sort((a, b) => a.turn - b.turn);
+  log(`the epic, told for: ${occasion}`);
   const { text, medium, plates } = await chroniclerEpic(history, standings, occasion, state.chapters ?? []);
   await broadcastHerald(`THE EPIC OF THE WORLD\nas the Chronicler tells it\n\n${text}`);
   await sendPlates(medium, plates, async (png, caption) => {
     for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png, "plate.png"), { caption }).catch(() => {});
   });
+}
+
+/** Over: someone has won, or every ruler who sat at the table has fallen */
+function gameOver(game: GameState, standingSeats: Seat[]) {
+  const rulers = state.seats.filter((seat) => seat.kind !== "agent");
+  return !!game.winner || (rulers.some((seat) => seat.fallen) && standingSeats.every((seat) => seat.kind === "agent"));
+}
+
+/** What the ending was, for the epic: the occasion it is told on */
+const endingOf = (game: GameState) => game.winner ? `${game.winner} has won a ${game.victoryType} victory, and the story is complete.` : "The last ruler's realm has fallen, and with it the story the rulers were telling ends; the world goes on without them.";
+
+let tellingTheEnding: Promise<void> | undefined;
+/** The game's closing words: the closing broadcast, the saga of every realm still standing, the epic of the world. Each step logs its start and its end,
+ *  is remembered once done (endingDone) and does not stop the next if it fails; the game counts as told (epicTold) only once the epic is out. Olle's Korea game
+ *  set the flag first and stalled after it at T257: no saga, no epic, and a restart made it final. Taken up again at startup if it never finished */
+function tellTheEnding(game: GameState) {
+  tellingTheEnding ??= (async () => {
+    state.pendingRound = undefined;
+    persist();
+    const done = (state.endingDone ??= []);
+    const step = async (name: string, work: () => Promise<unknown>) => {
+      if (done.includes(name)) return true;
+      const started = Date.now();
+      log(`ending: ${name} begins`);
+      try {
+        await work();
+        done.push(name);
+        persist();
+        log(`ending: ${name} done in ${Math.round((Date.now() - started) / 1000)} s`);
+        return true;
+      } catch (error) {
+        log(`ending: ${name} failed:`, (error as Error).message);
+        return false;
+      }
+    };
+    await step("the last pictures", imagesIdle); // the last age's pictures land before the closing words
+    const rulersLeft = (await standing()).filter((seat) => seat.kind !== "agent");
+    const closing = game.winner ? `The game is over: ${game.winner} has won a ${game.victoryType} victory.` : "The game is over: the last ruler's realm has fallen.";
+    await step("closing broadcast", async () => {
+      await broadcastHerald(closing);
+      for (const seat of state.seats) if (!rulersLeft.includes(seat)) await tell(seat, closing);
+    });
+    // Every realm still standing gets its saga: a ruler's from its own advisor, a sovereign's from the Chronicler
+    const sovereignsLeft = state.seats.filter((seat) => seat.kind === "agent" && game.majorCivs.find((civ) => civ.civ === seat.civ)?.alive);
+    for (const seat of [...rulersLeft, ...sovereignsLeft])
+      await step(`saga of ${seat.civ}`, () => sendSaga(seat, game.winner === seat.civ ? `${seat.civ} has won the world - a ${game.victoryType} victory.` : game.winner ? `The world has been won by ${game.winner}; ${seat.civ} still stands, but not first.` : `The last ruler's realm has fallen; ${seat.civ} still stands.`));
+    if (await step("epic", () => sendEpic(endingOf(game)))) {
+      state.epicTold = true;
+      persist();
+      log("ending: told - the game's closing words are all out");
+    } else log("ending: not yet told - what failed is taken up again at the next start");
+  })().finally(() => { tellingTheEnding = undefined; });
+  return tellingTheEnding;
 }
 
 async function playRound() {
@@ -381,21 +437,7 @@ async function playRound() {
     persist();
     await flushDevFeed(herald, `Round to ${game.year} (turn ${game.turn})${state.pendingRound ? " - interrupted by urgent news" : ""}`);
     // The game is over when someone has won, or when no ruler is left at the table. Only then, after the last chapter, comes the epic of the whole world.
-    const rulersLeft = (await standing()).filter((seat) => seat.kind !== "agent");
-    const over = !!game.winner || rulersLeft.length === 0;
-    if (over && !state.epicTold) {
-      state.epicTold = true;
-      state.pendingRound = undefined;
-      persist();
-      await imagesIdle(); // the last age's pictures land before the closing words
-      const closing = game.winner ? `The game is over: ${game.winner} has won a ${game.victoryType} victory.` : "The game is over: the last ruler's realm has fallen.";
-      await broadcastHerald(closing);
-      for (const seat of state.seats) if (!rulersLeft.includes(seat)) await tell(seat, closing);
-      // Every realm still standing gets its saga: a ruler's from its own advisor, a sovereign's from the Chronicler
-      const sovereignsLeft = state.seats.filter((seat) => seat.kind === "agent" && game.majorCivs.find((civ) => civ.civ === seat.civ)?.alive);
-      for (const seat of [...rulersLeft, ...sovereignsLeft]) await sendSaga(seat, game.winner === seat.civ ? `${seat.civ} has won the world - a ${game.victoryType} victory.` : game.winner ? `The world has been won by ${game.winner}; ${seat.civ} still stands, but not first.` : `The last ruler's realm has fallen; ${seat.civ} still stands.`).catch((error) => log("saga failed:", error.message));
-      await sendEpic(game.winner ? `${game.winner} has won a ${game.victoryType} victory, and the story is complete.` : "The last ruler's realm has fallen, and with it the story the rulers were telling ends; the world goes on without them.").catch((error) => log("epic failed:", error.message));
-    }
+    if (gameOver(game, await standing()) && !state.epicTold) await tellTheEnding(game);
   } catch (error) {
     log("Round failed:", error);
     state.phase = "audience"; // whatever failed, the rulers must be able to speak again
@@ -891,6 +933,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       state.workshop = false; // a new game is a real one: no out-of-character talk unless /workshop opens the door
       state.proclaimed = [];
       state.epicTold = false;
+      state.endingDone = [];
       state.chapters = [];
       state.pictures = []; // the last world's paintings must not steer this one's
       state.pendingRound = undefined;
@@ -971,7 +1014,9 @@ function setUpHerald() {
   herald.command("epic", async (ctx) => {
     await subscribe(ctx, false);
     await ctx.replyWithChatAction("typing").catch(() => {});
-    await sendEpic("A reader has asked for the story so far.").catch((error) => log("epic failed:", error.message));
+    // A finished game's epic is told for its ending, as it was when the game closed; a game still running is a story so far
+    const game = await host.state();
+    await sendEpic(gameOver(game, await standing()) ? endingOf(game) : "A reader has asked for the story so far.").catch((error) => log("epic failed:", error.message));
   });
   // Added to a group (or unblocked in a private chat) the Chronicler subscribes and says so; removed (or blocked), it stops writing there
   herald.on("my_chat_member", async (ctx) => {
@@ -1027,6 +1072,12 @@ await loadSchema();
 advisors.forEach(setUpAdvisor);
 setUpHerald();
 await recover().catch((error) => log("recovering from the restart failed:", error));
+// A game that ended with its closing words untold (a stall, a restart, a failed epic) has them told now, once, for its real ending
+void host.state().then(async (game) => {
+  if (state.epicTold || !gameOver(game, await standing())) return;
+  log("The game is over and its ending was never told: telling it now");
+  await tellTheEnding(game);
+}).catch((error) => log("telling the ending at startup failed:", error.message));
 // Dev feed, start of session: the settings everything below runs with
 const devChat = Number(process.env.DEV_CHAT_ID) || state.heraldChats.find((id) => id > 0); // a private chat, never the players' group
 if (devChat && devFeedInChat())

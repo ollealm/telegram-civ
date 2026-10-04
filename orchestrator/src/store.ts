@@ -110,8 +110,10 @@ export type State = {
   heraldName?: string;
   /** The name each advisor bot currently shows, by bot - it belongs to the bot, which keeps it between games */
   botNames?: Record<number, string>;
-  /** The closing epic has been told: the game is over */
+  /** The closing epic has been told: the game is over. Set only once the epic is out, so a stall or a restart before it leaves the ending to be told */
   epicTold?: boolean;
+  /** The steps of the closing words already done ("broadcast", "saga of Korea"): an ending taken up again after a restart does only what is left */
+  endingDone?: string[];
   /** Pictures painted lately, so that nobody is shown the same scene twice */
   pictures?: Picture[];
   /** The age being played, kept on disk as it goes: after urgent news (urgent) the rest of it is played once the councils have risen; after a restart, the rest of it is played on.
