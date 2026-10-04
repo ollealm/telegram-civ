@@ -451,9 +451,38 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W26 no estimate of turns to a victory", !/turns? (to|until|left)/.test(JSON.stringify(race)));
     await stop(host);
   },
-  async W27() { // a host going by sea lands out of reach: England's crossing to Munich lost no land unit at sea in seven turns (every one died embarked, Run 32)
+  async W27() { // a host going by sea lands out of reach: England's crossing to Munich lost no land unit at sea (every one died embarked, Run 32); once
+    // ashore on Munich's landmass a unit walks on - it neither puts to sea again (the pathfinder's hop along the coast) nor holds at its landing for good
+    // Munich's landmass, from the fixture's own map: land tiles joined to the city by land (the engine's hex neighbours)
+    const map = JSON.parse(gunzipSync(Buffer.from(readFileSync(join(FIXTURES, "run32-t117-munich", "save.unciv"), "utf8"), "base64")).toString("utf8")).tileMap.tileList as any[];
+    const land = new Set(map.filter((tile) => !["Ocean", "Coast", "Lakes"].includes(tile.baseTerrain)).map((tile) => `${tile.position?.x ?? 0},${tile.position?.y ?? 0}`));
+    const landmass = new Set(["-1,3"]);
+    for (const queue = ["-1,3"]; queue.length; ) {
+      const [x, y] = queue.pop()!.split(",").map(Number);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]]) { const key = `${x + dx},${y + dy}`; if (land.has(key) && !landmass.has(key)) { landmass.add(key); queue.push(key); } }
+    }
     const host = await start("run32-t117-munich");
-    for (let i = 0; i < 15 && (await get("/state")).json.turn < 124; i++) await post("/advance", { turns: 124 - (await get("/state")).json.turn });
+    // Each land unit's place, turn by turn: where it stood and whether at sea
+    const seen = new Map<string, { turn: number; at: string; sea: boolean }[]>();
+    for (let i = 0; i < 20 && (await get("/state")).json.turn < 131; i++) {
+      for (const line of (await get(`/briefing?civ=England`)).json.units as string[]) {
+        const unit = /^(Pikeman|Trebuchet|Longbowman|Catapult|Swordsman|Spearman|Knight|Crossbowman|Longswordsman) (#\d+) at \((-?\d+),(-?\d+)\)/.exec(line);
+        if (unit) seen.set(unit[2], [...(seen.get(unit[2]) ?? []), { turn: (await get("/state")).json.turn, at: `${unit[3]},${unit[4]}`, sea: / at sea/.test(line) }]);
+      }
+      await post("/advance", { turns: 1 });
+    }
+    // Whose land a tile was on a turn, from that turn's backup: a third realm's borders closing expel a unit to the nearest water - the engine's doing
+    // (Japan's open borders with England ended at T125 and put two landed units back to sea), not the landing's
+    const ownerOn = (turn: number, at: string) => {
+      const game = JSON.parse(gunzipSync(Buffer.from(readFileSync(join(host.dir, "backups", `turn-${String(turn).padStart(4, "0")}`, "save.unciv"), "utf8"), "base64")).toString("utf8"));
+      const [x, y] = at.split(",").map(Number);
+      return (game.civilizations as any[]).find((civ) => (civ.cities ?? []).some((city: any) => (city.tiles ?? []).some((tile: any) => (tile.x ?? 0) === x && (tile.y ?? 0) === y)))?.civName as string | undefined;
+    };
+    const backToSea = [...seen.entries()].flatMap(([id, places]) => places.filter((place, index) => index > 0 && place.sea && !places[index - 1].sea && landmass.has(places[index - 1].at))
+      .filter((place) => [undefined, "Germany"].includes(ownerOn(place.turn - 1, places[places.indexOf(place) - 1].at))).map((place) => `${id} T${place.turn}`));
+    check("W27 a unit ashore on Munich's landmass does not put to sea again", backToSea.length === 0, backToSea.join(", "));
+    const walkedOn = [...seen.entries()].filter(([, places]) => places.some((place, index) => index > 0 && !place.sea && landmass.has(place.at) && !places[index - 1].sea && landmass.has(places[index - 1].at) && place.at !== places[index - 1].at));
+    check("W27 a unit landed on Munich's landmass walks on from its landing", walkedOn.length > 0, `${walkedOn.length} walked on`);
     const lost = (await logOf("England", 117)).filter((line) => /^Our (Pikeman|Trebuchet|Longbowman|Catapult|Swordsman|Spearman|Knight)[^.]* was lost in action (at the harbour of|in the waters)/.test(line.text));
     check("W27 no land unit of England's host lost at sea", lost.length === 0, lost.map((line) => `T${line.turn} ${line.text.slice(0, 90)}`).join(" | "));
     const strikes = (await logOf("England", 117)).filter((line) => /struck Munich/.test(line.text));
