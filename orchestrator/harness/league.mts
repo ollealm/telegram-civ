@@ -192,6 +192,7 @@ const REFLECT_EFFORT = reflectEffort === "own" ? undefined : (reflectEffort as S
 const csv = `../data/harness/league-${stamp}.csv`;
 if (!resuming) appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd\n");
 
+const told = new Set<string>();
 for (;;) {
   const round = await playRound(state.seats, {
     working: (_, work) => work,
@@ -203,7 +204,8 @@ for (;;) {
   const spent = Object.values(state.usage).reduce((sum, usage) => sum + usage.costUsd, 0);
   round.rankings.forEach((row, index) => appendFileSync(csv, [round.turn, round.year, row.civ, labelOf(row.civ), row.score, row.cities, index + 1, spent.toFixed(2)].join(",") + "\n"));
   // Peace, captures and the fall of a power are in the round's public events, not in the turn lines - a war shows there, its end did not
-  for (const event of round.publicEvents) if (/made peace|captured|is no more|has been destroyed/.test(event.text)) say(`T${event.turn} ${event.text}`);
+  // A round broken by urgent news resumes with its earlier events carried along: each is told once
+  for (const event of round.publicEvents) if (/made peace|captured|is no more|has been destroyed/.test(event.text) && !told.has(`${event.turn} ${event.text}`)) { told.add(`${event.turn} ${event.text}`); say(`T${event.turn} ${event.text}`); }
   say(`standings at ${round.year}: ${round.rankings.map((row) => `${row.civ} (${labelOf(row.civ)}) ${row.score}`).join(", ")}; spent $${spent.toFixed(2)}`);
   const game = await host.state();
   if (game.winner || round.turn >= maxTurns || game.majorCivs.filter((civ) => civ.alive).length < 2) {
