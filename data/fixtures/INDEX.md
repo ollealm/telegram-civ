@@ -16,3 +16,4 @@ Each is save.unciv + host.json (chancery trimmed to its last 12 turns). Run one 
 | run20-t279-barbarians | 279 | Run 20 late game: barbarian ships and strikes at sea, Lhasa's alliance lost at T282, the vote at T283 |
 | t100-world | 100 | A fresh 6-realm Medium Pangaea world at T100, played by the officials: briefing size and the one-line sections |
 | run20-t216 | 216 | Run 20 at the start of an age, with the league's state.json: the chronicle samples (harness/chronicle-samples.mts) |
+| run32-t117-munich | 117 | England at war on Germany with posture attack and war aim Munich across the strait: every seaborne land unit died embarked under Munich's guns, T118-124 |

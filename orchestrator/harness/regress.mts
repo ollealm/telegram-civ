@@ -451,6 +451,16 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W26 no estimate of turns to a victory", !/turns? (to|until|left)/.test(JSON.stringify(race)));
     await stop(host);
   },
+  async W27() { // a host going by sea lands out of reach: England's crossing to Munich lost no land unit at sea in seven turns (every one died embarked, Run 32)
+    const host = await start("run32-t117-munich");
+    for (let i = 0; i < 15 && (await get("/state")).json.turn < 124; i++) await post("/advance", { turns: 124 - (await get("/state")).json.turn });
+    const lost = (await logOf("England", 117)).filter((line) => /^Our (Pikeman|Trebuchet|Longbowman|Catapult|Swordsman|Spearman|Knight)[^.]* was lost in action (at the harbour of|in the waters)/.test(line.text));
+    check("W27 no land unit of England's host lost at sea", lost.length === 0, lost.map((line) => `T${line.turn} ${line.text.slice(0, 90)}`).join(" | "));
+    const strikes = (await logOf("England", 117)).filter((line) => /struck Munich/.test(line.text));
+    // At T119-120 only the Triremes reached Munich: their blows are the ships', not a landed host's
+    check("W27 ships' strikes are said as the ships'", strikes.some((line) => /^Our ships struck Munich/.test(line.text)) && !strikes.some((line) => line.turn <= 120 && /^Our host struck Munich/.test(line.text)), strikes.map((line) => `T${line.turn} ${line.text.slice(0, 50)}`).join(" | "));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
