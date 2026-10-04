@@ -192,8 +192,9 @@ const oddityPictures = async (round: RoundResult, seen: { campaigns: string[]; c
   const answer = await oddityScene(round, round.publicEvents, seen.campaigns, seen.curiosities, painting).catch((error) => { log("the oddity of the age failed:", error.message); return null; });
   if (!answer) return [];
   if (!answer.oddity) { log(`no oddity this age (${round.fromYear} to ${round.year}): ${answer.why}`); return []; }
-  const caption = `The oddity of the age. ${answer.oddity.caption.trim()}`;
-  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption === caption)) { log(`the Chronicler's oddity was painted before: ${answer.why}`); return []; }
+  // The caption stands on its own: no fixed opening (Olle, 2026-10-04: it reads better and funnier without)
+  const caption = answer.oddity.caption.trim();
+  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.replace(/^The oddity of the age\. /, "") === caption)) { log(`the Chronicler's oddity was painted before: ${answer.why}`); return []; }
   log(`the Chronicler found an oddity (${round.fromYear} to ${round.year}): ${answer.why}`);
   return [{ turn: round.turn, year: round.year, for: "chronicle", caption, description: answer.oddity.description, note: "" }];
 };
