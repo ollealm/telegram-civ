@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, loadSchema, advisorReply, chooseWonder, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
+import { advisorGreeting, loadSchema, advisorReply, chooseWonder, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -93,7 +93,7 @@ async function createWorld() {
   for (const seat of state.seats.filter((other) => other.kind === "agent")) {
     const taken = state.seats.map((other) => other.civ).filter(Boolean);
     seat.civ ||= shuffled(nations.filter((nation) => !taken.includes(nation.name)))[0].name;
-    seat.character ??= await draftSovereign(seat.civ, seat.model ?? ADVISOR_MODEL).then(({ name, title, pronouns, sheet }) => ({ name, title, pronouns, sheet }));
+    seat.character ??= await draftSovereign(seat.civ, textModel(seat.model)).then(({ name, title, pronouns, sheet }) => ({ name, title, pronouns, sheet }));
     log(`${seat.civ} is ruled by ${seat.character?.name} (${seat.model})`);
   }
   const ruled = state.seats.map((seat) => seat.civ);

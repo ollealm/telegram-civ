@@ -109,8 +109,9 @@ async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer
   const args = ["exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "workspace-write", "-c", 'model_reasoning_effort="low"', ...(process.env.CODEX_IMAGE_MODEL ? ["-m", process.env.CODEX_IMAGE_MODEL] : []), "--json", "-"];
   let events = "";
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("codex", args, { cwd: dir, stdio: ["pipe", "pipe", "ignore"] });
-    const timer = setTimeout(() => { child.kill(); reject(new Error("timed out")); }, TIMEOUT_MS);
+    // Its own process group: `codex` is a Node wrapper around the native binary, and killing the wrapper alone left the binary running
+    const child = spawn("codex", args, { cwd: dir, stdio: ["pipe", "pipe", "ignore"], detached: true });
+    const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGTERM"); } catch { child.kill(); } reject(new Error("timed out")); }, TIMEOUT_MS);
     child.stdout.on("data", (chunk) => (events += chunk));
     child.on("error", reject);
     child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`codex exited ${code}`)); });

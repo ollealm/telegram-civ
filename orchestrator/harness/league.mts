@@ -26,7 +26,7 @@
 // then playtest reviews and interviews of every sovereign.
 
 import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { chroniclerEpic, loadSchema, onTrace, playtestReview } from "../src/agents.ts";
+import { chroniclerEpic, loadSchema, onTrace, playtestReview, textModel } from "../src/agents.ts";
 import { draftSovereign } from "../src/characters.ts";
 import { host } from "../src/host.ts";
 import { playRound } from "../src/round.ts";
@@ -96,20 +96,22 @@ const failedOf = (result: string): string[] | undefined => {
 
 // Every look-in: was it scheduled or a wake-up, did it change anything, what did it cost - to judge whether the fixed look-in earns its keep
 const passes = `../data/harness/league-${stamp}-passes.csv`;
-if (!resuming) appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds\n");
+if (!resuming) appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds,inputTokens,cachedInputTokens,outputTokens,reasoningTokens\n");
 // The game turn a look-in happened at, read off the round's own log lines
 let gameTurn = 0;
 onTrace((trace) => {
   if (trace.role === "govern") {
     // Orders only: a look-in that just rewrote its plan changed nothing in the realm
     const orderCalls = trace.toolCalls.filter((call) => /set_orders/.test(call.name)).length;
-    appendFileSync(passes, [gameTurn, trace.civ, labelOf(trace.civ), /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000)].join(",") + "\n");
+    appendFileSync(passes, [gameTurn, trace.civ, labelOf(trace.civ), /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000), trace.inputTokens, trace.cachedInputTokens ?? "", trace.outputTokens, trace.reasoningTokens ?? ""].join(",") + "\n");
     // Every real call costs something; an error that comes back as a reply (a spent session limit) costs nothing
-    const unreached = trace.costUsd === 0 || trace.reply.startsWith("(failed") || /session limit|could not be reached/i.test(trace.reply);
+    // A Codex seat costs no dollars (the ChatGPT subscription gives no figure): a call that used tokens was reached
+    const unreached = (trace.costUsd === 0 && trace.inputTokens === 0) || trace.reply.startsWith("(failed") || /session limit|could not be reached/i.test(trace.reply);
     if (unreached) pauseIfLimited(trace.civ, trace.reply);
     lookIn(trace.civ, !unreached, trace.reply);
     appendFileSync(lookIns, JSON.stringify({ turn: gameTurn, civ: trace.civ, model: labelOf(trace.civ), trigger: /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled",
-      systemPrompt: trace.systemPrompt, prompt: trace.prompt, toolCalls: trace.toolCalls, reply: trace.reply, costUsd: trace.costUsd, ms: trace.ms }) + "\n");
+      systemPrompt: trace.systemPrompt, prompt: trace.prompt, toolCalls: trace.toolCalls, reply: trace.reply, costUsd: trace.costUsd, ms: trace.ms,
+      inputTokens: trace.inputTokens, cachedInputTokens: trace.cachedInputTokens, outputTokens: trace.outputTokens, reasoningTokens: trace.reasoningTokens }) + "\n");
   }
   for (const call of trace.toolCalls) {
     const result = call.result ?? "";
@@ -139,6 +141,7 @@ if (resuming) {
   const peoples = await host.nations();
   const nations = peoples.map((nation) => nation.name).sort(() => Math.random() - 0.5);
   state.seats = seatSpecs.map(({ model, effort }, index): Seat => ({ civ: nations[index], kind: "agent", model, ...(effort && { effort }), will: "", journal: [], chat: [], ready: false }));
+  if (seatSpecs.some(({ model }) => model.startsWith("gpt-"))) say("gpt-* seats play through the Codex CLI on the ChatGPT subscription: their look-ins count tokens, and their costUsd is 0 - no dollar figure exists for them; their character sheets are drafted on Claude");
   // Fixed sovereigns take the character out of the comparison: a drafted one differs in ambition and is written by the seat's own model
   const fixedSheets = process.env.LEAGUE_CHARACTERS ? (JSON.parse(readFileSync(process.env.LEAGUE_CHARACTERS, "utf8")) as { sheet: string }[]) : undefined;
   const handedOut = new Map<string, number>();
@@ -151,7 +154,7 @@ if (resuming) {
       say(`${seat.civ}: ${leader} on ${labelOf(seat.civ)}, fixed character ${(turn % fixedSheets.length) + 1}`);
       continue;
     }
-    const { name, title, pronouns, sheet } = await draftSovereign(seat.civ, seat.model!);
+    const { name, title, pronouns, sheet } = await draftSovereign(seat.civ, textModel(seat.model));
     seat.character = { name, title, pronouns, sheet };
     say(`${seat.civ}: ${name} on ${labelOf(seat.civ)}`);
   }

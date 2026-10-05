@@ -10,6 +10,8 @@ import { z } from "zod";
 import { host, type AgeSummary, type HostSchema, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
 import { endLookIn, noteRefusals, refusalsForPrompt } from "./refusals.ts";
+import { runCodex, serveRealm, type CodexReply } from "./codex.ts";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 const CLERK_MODEL = process.env.CLERK_MODEL ?? "claude-sonnet-5";
@@ -133,6 +135,20 @@ export async function listingProblems(loaded: HostSchema): Promise<string[]> {
     } finally {
       await client.close().catch(() => {});
     }
+  }
+  // A gpt-* seat is served the same tools over loopback HTTP (codex.ts): listed that way too, so a Codex seat cannot start toolless either
+  const realm = gameTools({ civ: "(schema check)", kind: "agent" } as Seat, { canRecordWill: true, sideTools: ALL_SIDE_TOOLS }, loaded);
+  const served = await serveRealm((realm.server as unknown as { instance: never }).instance);
+  const client = new Client({ name: "schema-check-http", version: "1.0.0" });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(served.url)));
+    const listed = (await client.listTools()).tools.map((each) => each.name);
+    problems.push(...realm.served.filter((name) => !listed.includes(name)).map((name) => `the realm server over HTTP (a Codex seat's) does not list ${name}`));
+  } catch (error) {
+    problems.push(`the realm server over HTTP (a Codex seat's) cannot list its tools: ${(error as Error).message}`);
+  } finally {
+    await client.close().catch(() => {});
+    await served.close();
   }
   return problems;
 }
@@ -387,6 +403,10 @@ export type Trace = {
   reply: string;
   inputTokens: number;
   outputTokens: number;
+  /** The breakdown as the backend reports it, beside the totals above: cached input (the SDK's cache reads; Codex's cached_input_tokens) and
+   *  reasoning output (Codex's reasoning_output_tokens; null where the SDK gives none). Token use is a headline measure of the Sol league */
+  cachedInputTokens: number | null;
+  reasoningTokens: number | null;
   costUsd: number;
   ms: number;
 };
@@ -404,6 +424,8 @@ type RunOptions = Moment & {
 
 /** One model call; the answer is prose, or data in the shape of outputSchema when one is given */
 async function call(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }, attempt = 1): Promise<{ text: string; data?: unknown }> {
+  // A model named gpt-* runs through the Codex CLI on the ChatGPT subscription (codex.ts), with the same tools, trace, usage and failure shape
+  if (model.startsWith("gpt-")) return callCodex(role, model, systemPrompt, prompt, options);
   const { seat, onText, outputSchema, timeoutMs } = options;
   const started = Date.now();
   const abortController = new AbortController();
@@ -480,11 +502,12 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
         costUsd: message.total_cost_usd ?? 0,
       };
       addUsage(role, spent);
+      const breakdown = { cachedInputTokens: usage.cache_read_input_tokens ?? null, reasoningTokens: null };
       const data = message.subtype === "success" ? message.structured_output : undefined;
       // The whole reply as written, not only the tail after the last tool call; the result is used when nothing was collected (a structured answer, or an SDK that did not stream the blocks)
       const whole = (role === "govern" ? spoken.at(-1) ?? "" : spoken.join("\n\n")).trim() || (message.subtype === "success" ? message.result.trim() : "");
       const reply = message.subtype !== "success" ? `(failed: ${message.subtype})` : data !== undefined ? JSON.stringify(data, null, 1) : whole;
-      traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ms: Date.now() - started });
+      traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls, reply, ...spent, ...breakdown, ms: Date.now() - started });
       if (message.subtype !== "success") throw new Error(`${role} agent failed: ${message.subtype}`);
       if (outputSchema && data === undefined) throw new Error(`${role} agent gave no structured answer`);
       return { text: whole, data };
@@ -492,6 +515,38 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
     throw new Error(`${role} agent returned nothing`);
   }
 }
+
+/** The Codex backend: the seat's realm tools served to it from this process (codex.ts), effort as model_reasoning_effort ("max" is Codex's "xhigh"),
+ *  the final message as the reply - the last one alone for a look-in, as on the SDK path - and held to the schema when one is given. Tokens are counted;
+ *  the cost is 0, since the subscription gives no figure (the league labels it so) */
+async function callCodex(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }): Promise<{ text: string; data?: unknown }> {
+  const { seat, outputSchema, timeoutMs } = options;
+  const started = Date.now();
+  const realm = seat && gameTools(seat, options, await loadSchema());
+  const effort = (seat?.effort ?? EFFORT[role] ?? process.env.EFFORT)?.replace(/^max$/, "xhigh");
+  let reply: CodexReply;
+  try {
+    reply = await runCodex(model, systemPrompt, prompt, { realm: (realm?.server as unknown as { instance?: never })?.instance, outputSchema, effort, timeoutMs });
+  } catch (error) {
+    if (/timed out/.test((error as Error).message)) throw new Error(`${role} agent ${(error as Error).message}`);
+    throw error;
+  }
+  const spent = { inputTokens: reply.inputTokens, outputTokens: reply.outputTokens, costUsd: 0 };
+  addUsage(role, spent);
+  const whole = (role === "govern" ? reply.spoken.at(-1) ?? "" : reply.spoken.join("\n\n")).trim();
+  let data: unknown;
+  if (outputSchema && !reply.failure) try { data = JSON.parse(reply.spoken.at(-1) ?? ""); } catch { data = undefined; }
+  const text = reply.failure ? `(failed: ${reply.failure})` : data !== undefined ? JSON.stringify(data, null, 1) : whole;
+  traceSink({ role, civ: seat?.civ, model, systemPrompt, prompt, toolCalls: reply.toolCalls, reply: text, ...spent,
+    cachedInputTokens: reply.cachedInputTokens, reasoningTokens: reply.reasoningTokens, ms: Date.now() - started });
+  if (reply.failure) throw new Error(`${role} agent failed: ${reply.failure}`);
+  if (outputSchema && data === undefined) throw new Error(`${role} agent gave no structured answer`);
+  return { text: whole, data };
+}
+
+/** The model a seat's text roles run on (its character sheet): the seat's own when it is Claude, the advisor default when the seat plays on gpt-*
+ *  - a seat's model is its player model; the prose roles stay on Claude for now (codex-seat brief, 2026-10-05) */
+export const textModel = (model?: string) => (!model || model.startsWith("gpt-") ? ADVISOR_MODEL : model);
 
 /** A call whose answer is prose */
 export const run = async (role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions = {}) =>

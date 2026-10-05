@@ -1,5 +1,6 @@
 // Post-merge probe: one real govern look-in on a throwaway copy of the live game, so a merge that breaks a session shows before a league or a ruler does.
-// Run after every merge:  npx tsx harness/probe-live.mts [civ]      (PROBE_MODEL, default haiku; PROBE_PORT, default 8768 - never 8765)
+// Run after every merge:  npx tsx harness/probe-live.mts [civ]      (PROBE_MODEL, default haiku - a gpt-* model runs through the Codex CLI;
+// PROBE_EFFORT, the seat's effort; PROBE_PORT, default 8768 - never 8765)
 // It asserts, with no model judgement: the session got its realm tools, the briefing parsed, and set_orders answered without an exception. It prints what a
 // reviewer should look at: the refusals block the look-in was shown, the policyBranches the briefing shows against those the court ordered, and any
 // set_orders the look-in made. The live game is never touched: its save, host.json and orchestrator.json are copied to a scratch directory, the host runs
@@ -49,6 +50,7 @@ try {
   const seat = state.seats.find((each) => each.civ === process.argv[2]) ?? state.seats.find((each) => game.ruled.includes(each.civ));
   if (!seat) throw new Error(`no seat of the copied game is ruled by the host (${state.seats.map((each) => each.civ).join(", ")})`);
   seat.model = MODEL; // on the copy only: the probe's look-in runs on the cheap model whatever the seat plays
+  if (process.env.PROBE_EFFORT) seat.effort = process.env.PROBE_EFFORT as typeof seat.effort; // as a league seat's model:effort
   console.log(`Probing ${seat.civ} (${seat.kind === "agent" ? "a sovereign" : "an advised court"}) at turn ${game.turn}, ${MODEL}, on a copy of ${LIVE}`);
 
   // The startup check the bot runs: the host's lists against the tools, and the realm server's own tool list
@@ -79,7 +81,7 @@ try {
   let trace: { toolCalls: { name: string; input: unknown; result?: string }[]; costUsd: number } | undefined;
   onTrace((each) => { if (each.role === "govern") trace = each; });
   const look = await governPass(seat, game.turn - 4, 4).then(() => "", (error: Error) => error.message);
-  check("a real look-in ran with its realm tools", look === "" && trace !== undefined, look || `${trace?.toolCalls.length ?? 0} tool calls, $${trace?.costUsd?.toFixed(3)}`);
+  check("a real look-in ran with its realm tools", look === "" && trace !== undefined, look || `${trace?.toolCalls.length ?? 0} tool calls (${trace?.toolCalls.map((call) => call.name).join(", ")}), $${trace?.costUsd?.toFixed(3)}; tokens in ${trace?.inputTokens} (cached ${trace?.cachedInputTokens ?? "-"}), out ${trace?.outputTokens} (reasoning ${trace?.reasoningTokens ?? "-"}); ${Math.round((trace?.ms ?? 0) / 1000)} s`);
   for (const call of trace?.toolCalls.filter((each) => each.name.endsWith("set_orders")) ?? [])
     console.log(`the look-in's set_orders: ${JSON.stringify(call.input).slice(0, 300)}\n  answered: ${(call.result ?? "").slice(0, 400)}`);
 
