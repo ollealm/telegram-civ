@@ -199,6 +199,8 @@ export const host = {
   schema: () => call<HostSchema>("GET", "/schema"),
   nations: () => call<{ name: string; leader: string }[]>("GET", "/nations"),
   events: () => call<PublicEvent[]>("GET", "/events"),
+  /** A sovereign's proclamation: a public event at once, and a line in every other court's log ([by]: the speaker, "Ieyasu, the Shogun") */
+  proclaim: (civ: string, words: string, by?: string) => call<{ proclaimed: string; turn: number }>("POST", "/proclaim" + civQuery(civ), { words, by }),
   /** Any people's cities with their lie of the land, largest first - a painter's anchor */
   cities: (civ: string) => call<{ name: string; capital: boolean; size: number; land: string }[]>("GET", `/cities${civQuery(civ)}`),
   /** What the realm's people did since a turn: marches, losses, what the scouts and ships found, whom it met - in the world's words */

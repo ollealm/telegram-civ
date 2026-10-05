@@ -137,6 +137,22 @@ export async function listingProblems(loaded: HostSchema): Promise<string[]> {
   return problems;
 }
 
+/** One realm tool called as a session would call it, over the same in-memory server and with no model - for the harness to prove what a side tool
+ *  does (the sovereign's proclaim posts to the host). Returns the tool's text */
+export async function callRealmTool(seat: Seat, moment: Moment, loaded: HostSchema, name: string, args: Record<string, unknown>): Promise<string> {
+  const realm = gameTools(seat, moment, loaded);
+  const [atServer, atClient] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "tool-check", version: "1.0.0" });
+  try {
+    await (realm.server as unknown as { instance: { connect(transport: unknown): Promise<void> } }).instance.connect(atServer);
+    await client.connect(atClient);
+    const result = await client.callTool({ name, arguments: args });
+    return (result.content as { type: string; text?: string }[]).map((block) => block.text ?? "").join("\n");
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
 /** Where the host's lists and what the tools offer and say of them part: none when they agree */
 export function schemaProblems(loaded: HostSchema): string[] {
   // An empty list would build an enum no tool can be described with: said here, before the tools are built at all
@@ -302,7 +318,10 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
           strict({ words: z.string().describe("One sentence, as you would say it aloud") }),
           async ({ words }) => {
             if (seat.proclamations?.length) return text("You have spoken once this age already; the heralds carry that.");
-            seat.proclamations = [`${seat.character?.name ?? "The sovereign"}${seat.character?.title ? `, ${seat.character.title}` : ""}, sovereign of ${seat.civ}, in their own words: ${words}`];
+            // Speech to the world: a public event the moment it is said, heard in every other court's log; the Chronicler reads it with the world's events
+            const by = `${seat.character?.name ?? "The sovereign"}${seat.character?.title ? `, ${seat.character.title}` : ""}`;
+            try { await host.proclaim(seat.civ, words, by); } catch (error) { return text(`The heralds could not carry it this time (${(error as Error).message}); you may try again.`); }
+            seat.proclamations = [`${by}, sovereign of ${seat.civ}, in their own words: ${words}`]; // the once-an-age guard
             persist();
             return text("The heralds have it.");
           },

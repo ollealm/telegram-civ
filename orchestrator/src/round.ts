@@ -197,11 +197,10 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
     // Candidates for the oddity of the age, from every realm: the world's lines once, a realm's own lines under its name
     const curiosities = seats.flatMap((seat) => (ages.get(seat.civ)?.curiosities ?? []).map((line) => (/^Our /.test(line) ? `${seat.civ}: ${line}` : line)))
       .filter((line, index, all) => all.indexOf(line) === index);
-    // A sovereign's word was said during the age, at a look-in: it belongs to this chapter, and is cleared for the next age
-    const sovereignsSaid = seats.filter((seat) => seat.kind === "agent").flatMap((seat) => seat.proclamations ?? []);
+    // A sovereign's word is a public event the moment it is said (POST /proclaim), so the Chronicler reads it with the world's events: only its
+    // once-an-age guard is cleared here. What is "said in the courts" for the chapter is the rulers' remarks leaked by their advisors
     for (const seat of seats) if (seat.kind === "agent") seat.proclamations = undefined;
-    (state.proclaimed ??= []).push(...sovereignsSaid.map((text) => ({ turn: finished.fromTurn, year: finished.fromYear, text })));
-    const proclaimedInAge = [...proclaimed, ...sovereignsSaid];
+    const proclaimedInAge = proclaimed;
     // The Chronicler reads its own last two chapters whole; of what lies further back, only the last few events
     const lastChapters = (state.chapters ?? []).slice(-2).map(({ years, text }) => ({ years, text }));
     const lastChaptersFrom = state.ageStarts?.at(-1 - lastChapters.length) ?? finished.fromTurn;

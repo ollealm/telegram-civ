@@ -630,6 +630,26 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W36 still at peace after the turn", (await status()) === "peace", `${await status()}`);
     await stop(host);
   },
+  async W37() { // a sovereign's proclamation is speech to the world: a public event at once, heard in every other court's log, not in the speaker's own
+    const host = await start("run21-t300-war");
+    const said = await post(`/proclaim?civ=Aztecs`, { words: "The sun does not set on the Mexica.", by: "Itzcoatl, the Speaker" });
+    check("W37 the host takes it", said.status === 200, JSON.stringify(said.json));
+    const events = ((await get("/events?since=300")).json as { text: string }[]).map((event) => event.text);
+    check("W37 the world hears it at once", events.includes("Itzcoatl, the Speaker, sovereign of Aztecs, proclaimed: \u201cThe sun does not set on the Mexica.\u201d"), events.slice(-3).join(" | "));
+    check("W37 another court hears it in its log", (await logOf("Japan", 300)).some((line) => line.text === "Proclaimed by Aztecs' sovereign, Itzcoatl, the Speaker: \u201cThe sun does not set on the Mexica.\u201d"));
+    check("W37 the speaker's own log does not repeat it", !(await logOf("Aztecs", 300)).some((line) => /Proclaimed by/.test(line.text)));
+    // The sovereign's own tool posts it, at once, and speaks once an age
+    process.env.RULER_HOST_URL = BASE;
+    const { callRealmTool } = await import("../src/agents.ts");
+    const schema = (await get("/schema")).json;
+    const seat = { civ: "Japan", kind: "agent", character: { name: "Ieyasu", title: "the Shogun" }, journal: [] } as any;
+    const first = await callRealmTool(seat, { sideTools: ["proclaim"] } as any, schema, "proclaim", { words: "Japan keeps its word." });
+    const again = await callRealmTool(seat, { sideTools: ["proclaim"] } as any, schema, "proclaim", { words: "And keeps it twice." });
+    const after = ((await get("/events?since=300")).json as { text: string }[]).map((event) => event.text);
+    check("W37 the sovereign's proclaim tool posts it as a public event", /heralds have it/.test(first) && after.includes("Ieyasu, the Shogun, sovereign of Japan, proclaimed: \u201cJapan keeps its word.\u201d"), first + " / " + after.slice(-2).join(" | "));
+    check("W37 once an age: the second is not posted", /spoken once this age/.test(again) && !after.some((text) => /keeps it twice/.test(text)), again);
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
