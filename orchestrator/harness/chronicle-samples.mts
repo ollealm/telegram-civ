@@ -46,7 +46,7 @@ const said: string[] = [];
 onTrace((trace) => {
   if (trace.role === "herald" && trace.prompt.startsWith("The years ")) heraldInput = { systemPrompt: trace.systemPrompt, prompt: trace.prompt };
   for (const call of trace.toolCalls.filter((each) => /proclaim/.test(each.name)))
-    said.push(`${trace.civ}: ${(call.input as { words?: string }).words} -> ${/already/.test(call.result ?? "") ? "refused (spoken already this age)" : "carried"}`);
+    said.push(`${trace.civ}: ${(call.input as { words?: string }).words} -> ${/already/.test(call.result ?? "") ? "refused (spoken already this age)" : /could not carry/.test(call.result ?? "") ? "not carried (the host refused it)" : "carried, a public event at once"}`);
 });
 
 let systemShown = false;

@@ -20,3 +20,4 @@ Each is save.unciv + host.json (chancery trimmed to its last 12 turns). Run one 
 | run32-t168-siam | 168 | Run 32 at T168: Siam at war on Germany, posture attack on Hamburg across the sea, its host strung out at sea off Lampang since T156; the landings recursed to a StackOverflowError at T169 |
 | run32-t189-osaka | 189 | Run 32 at T189: England at war with Japan, its host at sea off Osaka with no shore out of reach (the court had just set defend: W33 sets attack on Osaka); a Japanese Frigate off York |
 | run32-t216-peace | 216 | Run 32 at T216: Japan's offer of peace with 150 gold waits on England's desk, sent with the trade order (want: Peace Treaty) and so one-sided; England's peace order accepted it and stayed at war |
+| run32-t259-munich | 259 | Run 32 at T259: England's fleet at war off Munich, Berlin and Hamburg; on the build before the shore rule it lost five ships to the shore's guns in ten turns |

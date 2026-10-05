@@ -45,10 +45,10 @@ index 0a2fd63..ba25f43 100644
              }
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..5ec9053
+index 0000000..56399e6
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,511 @@
+@@ -0,0 +1,555 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -247,6 +247,50 @@ index 0000000..5ec9053
 +        return reach
 +    }
 +
++    /** Water a ruled civ's warship at war does not end a move on: within an enemy city's guns, beside an enemy citadel, or within the reach of an enemy
++     *  soldier ashore it can see. England's ships sent to clear Osaka's shore ended their turns there and died to Cannon, Musketmen and a Citadel (three
++     *  Ironclads and two Privateers, Run 32, T233-238). A melee ship moving in to strike is let through for that move (Battle.movePreparingAttack); a ranged
++     *  one strikes from out of reach (TargetHelper); one left within reach with movement to spare withdraws (withdrawShip). Ship against ship is war at sea */
++    @yairm210.purity.annotations.Readonly
++    fun shipUnderGuns(unit: MapUnit, tile: Tile): Boolean {
++        if (!tile.isWater || !unit.baseUnit.isWaterUnit || !unit.isMilitary() || unit.civ.civID !in ruledCivs || shipRuleWaived) return false
++        return tile in landReach(unit.civ)
++    }
++    @Volatile private var shipRuleWaived = false
++    fun <T> withShipRuleWaived(body: () -> T): T {
++        shipRuleWaived = true
++        try { return body() } finally { shipRuleWaived = false }
++    }
++    /** The water an enemy city's guns, an enemy citadel or an enemy soldier ashore this civ can see could strike next turn; reckoned once while a power plays */
++    @yairm210.purity.annotations.Cache private val landReachSeen = ConcurrentHashMap<String, Pair<String, Set<Tile>>>()
++    @yairm210.purity.annotations.Readonly
++    fun landReach(civ: Civilization): Set<Tile> {
++        val key = "${civ.gameInfo.turns}/${civ.gameInfo.currentPlayer}"
++        landReachSeen[civ.civID]?.takeIf { it.first == key }?.let { return it.second }
++        val reach = HashSet<Tile>()
++        if (civ.isAtWar()) {
++            for (enemy in civ.getKnownCivs().filter { civ.isAtWarWith(it) }) for (city in enemy.cities) if (city.getCenterTile().isExplored(civ))
++                reach += city.getCenterTile().getTilesInDistance(city.getBombardRange())
++            for (tile in civ.viewableTiles) {
++                val owner = tile.getOwner()
++                if (owner != null && civ.isAtWarWith(owner) && tile.getUnpillagedTileImprovement()?.hasUnique(com.unciv.models.ruleset.unique.UniqueType.DamagesAdjacentEnemyUnits) == true)
++                    reach += tile.neighbors
++                for (soldier in tile.getUnits()) if (soldier.isMilitary() && soldier.baseUnit.isLandUnit && civ.isAtWarWith(soldier.civ))
++                    reach += tile.getTilesInDistance(soldier.getMaxMovement() - 1 + soldier.getRange())
++            }
++        }
++        landReachSeen[civ.civID] = key to reach
++        return reach
++    }
++    /** A ruled civ's warship left within reach (shipUnderGuns) with movement to spare: to the nearest tile out of it it can reach */
++    fun withdrawShip(unit: MapUnit) {
++        if (!unit.baseUnit.isWaterUnit || !unit.isMilitary() || unit.civ.civID !in ruledCivs || unit.isDestroyed || !unit.hasMovement()) return
++        val here = unit.getTile()
++        if (here !in landReach(unit.civ)) return
++        unit.movement.getDistanceToTiles().keys.filter { it != here && unit.movement.canMoveTo(it) }.minByOrNull { it.aerialDistanceTo(here) }
++            ?.let { unit.movement.moveToTile(it) }
++    }
++
 +    /** Does this ruled civ's land unit go by sea to the city - at sea now, or with water on its way? Then it lands out of reach and walks (headForLanding) */
 +    @yairm210.purity.annotations.Readonly
 +    fun goesBySea(unit: MapUnit, path: List<Tile>): Boolean =
@@ -414,7 +458,7 @@ index 0000000..5ec9053
 +    fun guarded(unit: MapUnit, move: () -> Unit) {
 +        if (unit.civ.civID !in ruledCivs) return move()
 +        // A routine that recurses without end is caught too: it costs the unit its turn, not the game (Run 32 stopped at T169 on one)
-+        try { fault?.invoke("move", unit.civ); move() } catch (ex: StackOverflowError) {
++        try { fault?.invoke("move", unit.civ); move(); withdrawShip(unit) } catch (ex: StackOverflowError) {
 +            System.err.println("The officials could not move ${unit.civ.civName}'s ${unit.name} #${unit.id}: $ex")
 +            unitNotMoved?.invoke(unit.civ, unit, "the officials' routine failed on it")
 +        } catch (ex: Exception) {
@@ -1868,7 +1912,7 @@ index 0df8cb8..689fe91 100644
              Battle.addXp(MapUnitCombatant(interceptor), 2, attacker)
  
 diff --git a/core/src/com/unciv/logic/battle/Battle.kt b/core/src/com/unciv/logic/battle/Battle.kt
-index d2524e2..99997c8 100644
+index d2524e2..453da3b 100644
 --- a/core/src/com/unciv/logic/battle/Battle.kt
 +++ b/core/src/com/unciv/logic/battle/Battle.kt
 @@ -2,6 +2,7 @@ package com.unciv.logic.battle
@@ -1879,7 +1923,18 @@ index d2524e2..99997c8 100644
  import com.unciv.logic.automation.civilization.NextTurnAutomation
  import com.unciv.logic.city.City
  import com.unciv.logic.civilization.*
-@@ -117,7 +118,7 @@ object Battle {
+@@ -49,7 +50,9 @@ object Battle {
+      */
+     fun movePreparingAttack(attacker: MapUnitCombatant, attackableTile: AttackableTile, tryHealPillage: Boolean = false): Boolean {
+         val tilesMovedThrough = attacker.unit.movement.getDistanceToTiles().getPathToTile(attackableTile.tileToAttackFrom)
+-        attacker.unit.movement.moveToTile(attackableTile.tileToAttackFrom)
++        // A ruled civ's melee ship moves in under the shore's guns to strike (com.unciv.logic.automation.RulerOverrides.shipUnderGuns): let through for this move only
++        if (attacker.unit.baseUnit.isWaterUnit && attacker.unit.baseUnit.isMelee()) com.unciv.logic.automation.RulerOverrides.withShipRuleWaived { attacker.unit.movement.moveToTile(attackableTile.tileToAttackFrom) }
++        else attacker.unit.movement.moveToTile(attackableTile.tileToAttackFrom)
+         /**
+          * When calculating movement distance, we assume that a hidden tile is 1 movement point,
+          * which can lead to EXCEEDINGLY RARE edge cases where you think
+@@ -117,7 +120,7 @@ object Battle {
          val interceptDamage: DamageDealt
          if (attacker is MapUnitCombatant && attacker.unit.baseUnit.isAirUnit()) {
              interceptDamage = AirInterception.tryInterceptAirAttack(attacker, attackedTile, defender.getCivInfo(), defender)
@@ -1888,7 +1943,7 @@ index d2524e2..99997c8 100644
          } else interceptDamage = DamageDealt.None
  
          if (hasWithdrawnFromMelee(attacker, defender, attackedTile)) return DamageDealt.None
-@@ -134,6 +135,12 @@ object Battle {
+@@ -134,6 +137,12 @@ object Battle {
          // As ravignir clarified in issue #4374, this only works for aggressor
          val captureMilitaryUnitSuccess = BattleUnitCapture.tryCaptureMilitaryUnit(attacker, defender, attackedTile)
  
@@ -1901,7 +1956,7 @@ index d2524e2..99997c8 100644
          if (!captureMilitaryUnitSuccess) // capture creates a new unit, but `defender` still is the original, so this function would still show a kill message
              postBattleNotifications(attacker, defender, attackedTile, attacker.getTile(), damageDealt)
  
-@@ -226,6 +233,7 @@ object Battle {
+@@ -226,6 +235,7 @@ object Battle {
                  )
  
                  defender.city.destroyCity()
@@ -1909,7 +1964,7 @@ index d2524e2..99997c8 100644
  
                  if (defendingCiv.cities.isEmpty()) {
                      destroyIfDefeated(defendingCiv, attacker.getCivInfo(), defender.getTile().position)
-@@ -240,6 +248,7 @@ object Battle {
+@@ -240,6 +250,7 @@ object Battle {
              defender.takeDamage(-1) // Back to 2 HP
              val ransom = min(200, defender.city.civ.gold)
              defender.city.civ.addGold(-ransom)
@@ -1917,7 +1972,7 @@ index d2524e2..99997c8 100644
              defender.city.civ.addNotification(
                  "Barbarians raided [${defender.city.name}] and stole [$ransom] Gold from your treasury!",
                  defender.city.location,
-@@ -689,9 +698,9 @@ object Battle {
+@@ -689,9 +700,9 @@ object Battle {
  
          city.hasJustBeenConquered = true
          city.getCenterTile().apply {
@@ -1929,7 +1984,7 @@ index d2524e2..99997c8 100644
          }
  
          val gameContext = GameContext(civInfo = attackerCiv, city=city, unit = attacker.unit, ourCombatant = attacker, attackedTile = city.getCenterTile())
-@@ -717,6 +726,9 @@ object Battle {
+@@ -717,6 +728,9 @@ object Battle {
          } else if (attackerCiv.isHuman() && UncivGame.Current.worldScreen?.autoPlay?.isAutoPlayingAndFullAutoPlayAI() == false) {
              // we're not taking our former capital
              attackerCiv.popupAlerts.add(PopupAlert(AlertType.CityConquered, city.id))
@@ -2016,7 +2071,7 @@ index 2fb9f1b..96b5088 100644
              Battle.destroyIfDefeated(defender.getCivInfo(), attacker.getCivInfo())
          }
 diff --git a/core/src/com/unciv/logic/battle/TargetHelper.kt b/core/src/com/unciv/logic/battle/TargetHelper.kt
-index 26ebbc1..988290b 100644
+index 26ebbc1..a67b040 100644
 --- a/core/src/com/unciv/logic/battle/TargetHelper.kt
 +++ b/core/src/com/unciv/logic/battle/TargetHelper.kt
 @@ -29,6 +29,9 @@ object TargetHelper {
@@ -2029,6 +2084,19 @@ index 26ebbc1..988290b 100644
              // If we are a melee unit that is escorting, we only want to be able to attack from this
              // tile if the escorted unit can also move into the tile we are attacking if we kill the enemy unit.
              if (unit.baseUnit.isMelee() && unit.isEscorting()) {
+@@ -97,7 +100,11 @@ object TargetHelper {
+             // still got leftover movement points after all that, to attack
+             .filter { it.second > Constants.minimumMovementEpsilon }
+             .filter {
+-                it.first == unit.getTile() || unit.movement.canMoveTo(it.first)
++                // A ruled civ's melee ship may move in under the shore's guns to strike (RulerOverrides.shipUnderGuns); a ranged one strikes from out of
++                // reach, from where it lies only if it can move on after striking
++                if (it.first == unit.getTile()) !com.unciv.logic.automation.RulerOverrides.shipUnderGuns(unit, it.first) || !unit.baseUnit.isRanged() || unit.hasUnique(com.unciv.models.ruleset.unique.UniqueType.CanMoveAfterAttacking)
++                else unit.movement.getCannotMoveToReason(it.first).let { reason -> reason == null ||
++                    reason == com.unciv.logic.map.mapunit.movement.UnitMovement.CannotMoveToReason.UnderEnemyGuns && unit.baseUnit.isMelee() }
+             }
+ 
+     @Readonly
 diff --git a/core/src/com/unciv/logic/city/City.kt b/core/src/com/unciv/logic/city/City.kt
 index 0c8b389..2717af6 100644
 --- a/core/src/com/unciv/logic/city/City.kt
@@ -2463,10 +2531,18 @@ index a0565d8..58f7c6d 100644
                  "Our [${unit.name}] took [$tileDamage] tile damage and was destroyed",
                  unit.currentTile.position,
 diff --git a/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt b/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt
-index f926332..a42056b 100644
+index f926332..239d6f3 100644
 --- a/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt
 +++ b/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt
-@@ -727,6 +727,10 @@ class UnitMovement(val unit: MapUnit) {
+@@ -717,6 +717,7 @@ class UnitMovement(val unit: MapUnit) {
+         EscortCannotMove,
+         TileIsNotEmpty,
+         NoAirUnitTransport,
++        UnderEnemyGuns,
+     }
+ 
+     @Readonly
+@@ -727,6 +728,10 @@ class UnitMovement(val unit: MapUnit) {
          val canPassThroughReason = if (assumeCanPassThrough) null else cannotPassThroughReason(tile)
          if (canPassThroughReason != null) return canPassThroughReason
  
@@ -2477,6 +2553,18 @@ index f926332..a42056b 100644
          // even if they'll let us pass through, we can't enter their city - unless we just captured it
          if (isCityCenterCannotEnter(tile))
              return CannotMoveToReason.CannotEnterCityCenter
+@@ -745,6 +750,11 @@ class UnitMovement(val unit: MapUnit) {
+ 
+         if (!tileIsEmpty) return CannotMoveToReason.TileIsNotEmpty
+ 
++        // Nor does a ruled civ's warship end a move under the guns of the shore (RulerOverrides.shipUnderGuns) - the last reason asked, so that a melee
++        // ship moving in to strike can be let past this one alone
++        if (com.unciv.logic.automation.RulerOverrides.shipUnderGuns(unit, tile))
++            return CannotMoveToReason.UnderEnemyGuns
++
+         return null
+     }
+ 
 diff --git a/core/src/com/unciv/logic/trade/Trade.kt b/core/src/com/unciv/logic/trade/Trade.kt
 index 2ac7326..cda1dd9 100644
 --- a/core/src/com/unciv/logic/trade/Trade.kt
@@ -4919,10 +5007,10 @@ index 0000000..f448fe8
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..af9b8ca
+index 0000000..4061d53
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,3205 @@
+@@ -0,0 +1,3217 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -6890,11 +6978,23 @@ index 0000000..af9b8ca
 +    private fun recordPeace(before: WorldSnapshot, after: WorldSnapshot) {
 +        val ended = (before.wars - after.wars).filter { war -> war.all { it in after.alive } }.map { it.toList() }
 +        val isCityState = { name: String -> game().civilizations.firstOrNull { it.civName == name }?.isCityState == true }
-+        // City-states make peace with a power as their ally does, eight at once: one line per power, as their joining a war is (the joins are folded too)
-+        val withCityStates = ended.filter { pair -> pair.count(isCityState) == 1 }.groupBy({ pair -> pair.first { !isCityState(it) } }, { pair -> pair.first(isCityState) })
-+        for (war in ended.filter { pair -> pair.count(isCityState) != 1 }) addPublicEvent("${war.joinToString(" and ")} have made peace.")
-+        for ((power, cityStates) in withCityStates)
-+            addPublicEvent(if (cityStates.size == 1) "$power and ${cityStates[0]} have made peace." else "$power and the city-states ${andList(cityStates)} have made peace.")
++        // A round of peace is one line per great power - whom it made peace with, the powers and then the city-states - each peace told once, in the line
++        // of the power that made the most. City-states at peace with one another are no news (Run 32, T245: thirteen lines in one turn, six of them
++        // between city-states); a power's own two-sided peace keeps its plain line
++        val pairs = ended.filter { pair -> pair.any { !isCityState(it) } }.map { it.toSet() }.toMutableSet()
++        val partners = { power: String -> pairs.filter { power in it }.map { pair -> pair.first { it != power } } }
++        val powers = pairs.flatten().filterNot(isCityState).distinct().sortedWith(compareBy({ -partners(it).size }, { it }))
++        for (power in powers) {
++            val theirs = partners(power).ifEmpty { continue }
++            pairs.removeAll { power in it }
++            val (cityStates, majors) = theirs.partition(isCityState)
++            addPublicEvent(when {
++                theirs.size == 1 -> "$power and ${theirs[0]} have made peace."
++                cityStates.isEmpty() -> "$power made peace with ${andList(majors)}."
++                majors.isEmpty() -> "$power made peace with the city-states ${andList(cityStates)}."
++                else -> "$power made peace with ${andList(majors)}, and with the city-state${plural(cityStates.size)} ${andList(cityStates)}."
++            })
++        }
 +    }
 +
 +    private fun recordPublicEvents(before: WorldSnapshot, after: WorldSnapshot) {

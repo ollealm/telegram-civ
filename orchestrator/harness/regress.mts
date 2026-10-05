@@ -448,7 +448,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const made = await orders("Greece", { peace: ["Inca"] });
     await post("/advance", { turns: 1 });
     const events = ((await get("/events")).json as { turn: number; text: string }[]).filter((event) => event.turn >= 245 && /made peace/.test(event.text));
-    check("W25 the peace made by order is a public event", (made.json.done ?? []).some((line: string) => /Peace made with Inca/.test(line)) && events.some((event) => event.text === "Greece and Inca have made peace."), events.map((event) => event.text).join(" | "));
+    check("W25 the peace made by order is a public event", (made.json.done ?? []).some((line: string) => /Peace made with Inca/.test(line)) && events.some((event) => /Greece/.test(event.text) && /Inca/.test(event.text)), events.map((event) => event.text).join(" | "));
     check("W25 the city-states' peaces are one line per power", events.filter((event) => /^Inca and /.test(event.text) && !/Greece/.test(event.text)).length <= 1, events.map((event) => event.text).join(" | "));
     await stop(host);
   },
@@ -648,6 +648,40 @@ const CASES: Record<string, () => Promise<void>> = {
     const after = ((await get("/events?since=300")).json as { text: string }[]).map((event) => event.text);
     check("W37 the sovereign's proclaim tool posts it as a public event", /heralds have it/.test(first) && after.includes("Ieyasu, the Shogun, sovereign of Japan, proclaimed: \u201cJapan keeps its word.\u201d"), first + " / " + after.slice(-2).join(" | "));
     check("W37 once an age: the second is not posted", /spoken once this age/.test(again) && !after.some((text) => /keeps it twice/.test(text)), again);
+    await stop(host);
+  },
+  async W38() { // a ruled civ's warship does not end its turn under the shore's guns unless it strikes (five English ships died at Osaka's and Munich's shores, Run 32)
+    // An English Frigate is put in Osaka's harbour, full of movement: it may strike from out of reach, or from there only if it can move on after; it must
+    // not end the turn within Osaka's guns
+    const host = await start("run32-t189-osaka", "", undefined, (game) => {
+      const tile = game.tileMap.tileList.find((t: any) => (t.position?.x ?? 0) === 2 && (t.position?.y ?? 0) === 13);
+      game.lastUnitId += 1;
+      tile.militaryUnit = { owner: "England", originalOwner: "England", name: "Frigate", id: game.lastUnitId, currentMovement: 5 };
+      // Osaka's walls broken: the strike the automation reaches for, which left ships under the guns in the league
+      game.civilizations.find((c: any) => c.civName === "Japan").cities.find((c: any) => c.name === "Osaka").health = 40;
+    });
+    const id = (await get(`/briefing?civ=England`)).json.units.find((line: string) => /^Frigate #\d+ at \(2,13\)/.test(line))?.match(/#(\d+)/)?.[1];
+    await orders("England", { posture: { warAim: "Osaka", stance: "attack", reserve: 3 } }); // the court had set defend: the fleet goes home under it
+    await post("/advance", { turns: 1 });
+    const line = ((await get(`/briefing?civ=England`)).json.units as string[]).find((unit) => unit.startsWith(`Frigate #${id} `));
+    const at = line && /at \((-?\d+),(-?\d+)\)/.exec(line);
+    const hex = (x: number, y: number) => { const dx = x - 2, dy = y - 14; return Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dx - dy)); };
+    check("W38 the Frigate is not left within Osaka's guns", !!id && (!line || (!!at && hex(Number(at[1]), Number(at[2])) > 2)), line ?? `#${id} gone`);
+    await stop(host);
+  },
+  async W39() { // a round of peace is one line per great power, each peace told once, and city-states at peace with one another are no news (Run 32, T245: thirteen lines)
+    const host = await start("run23-t236-persia");
+    await orders("Persia", { mayDeclareWar: true, declareWar: ["Polynesia"] });
+    for (let i = 0; i < 15 && (await get("/state")).json.turn < 247; i++) await post("/advance", { turns: 247 - (await get("/state")).json.turn });
+    await orders("Persia", { peace: ["Polynesia"] });
+    await orders("Polynesia", { peace: ["Persia"] });
+    await post("/advance", { turns: 1 });
+    const majors = new Set(((await get("/state")).json.majorCivs as { civ: string }[]).map((civ) => civ.civ));
+    const peace = ((await get("/events?since=246")).json as { text: string }[]).map((event) => event.text).filter((text) => /made peace/.test(text));
+    const subjects = peace.map((text) => /^(.+?)( and | made peace)/.exec(text)?.[1] ?? text);
+    check("W39 the peace round is told", peace.some((text) => /Persia/.test(text) && /Polynesia/.test(text)), peace.join(" | "));
+    check("W39 one line per great power: none named in two", [...majors].every((power) => peace.filter((text) => text.includes(power)).length <= 1) && subjects.every((subject) => majors.has(subject)), peace.join(" | "));
+    check("W39 no city-state-with-city-state peace", !peace.some((text) => { const m = /^(.+?) and (.+?) have made peace\.$/.exec(text); return !!m && !majors.has(m[1]) && !majors.has(m[2]); }), peace.join(" | "));
     await stop(host);
   },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
