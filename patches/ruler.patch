@@ -45,10 +45,10 @@ index 0a2fd63..ba25f43 100644
              }
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..eea4cc1
+index 0000000..5ec9053
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,501 @@
+@@ -0,0 +1,511 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -220,9 +220,19 @@ index 0000000..eea4cc1
 +     *  a city. One already at sea may move on - out of it, if it can. A city's guns stay with the landing rule, which may accept them */
 +    @yairm210.purity.annotations.Readonly
 +    fun underEnemyShips(unit: MapUnit, tile: Tile): Boolean {
-+        if (!tile.isWater || unit.isEmbarked() || !unit.baseUnit.isLandUnit || unit.civ.civID !in ruledCivs || unit.civ.isBarbarian) return false
++        if (!tile.isWater || unit.isEmbarked() || !unit.baseUnit.isLandUnit || unit.civ.civID !in ruledCivs || unit.civ.isBarbarian || embarkRuleWaived) return false
 +        return tile in shipReach(unit.civ)
 +    }
++    /** Set only while a way is reckoned as if the rule were not there, to say why an order cannot be carried out ([withEmbarkRuleWaived]) */
++    @Volatile private var embarkRuleWaived = false
++    fun <T> withEmbarkRuleWaived(body: () -> T): T {
++        embarkRuleWaived = true
++        try { return body() } finally { embarkRuleWaived = false }
++    }
++    /** Who of the enemy this civ can see could strike [tile] next turn: "Japan's Frigate", one entry each, for a refusal's words */
++    fun strikersOf(civ: Civilization, tile: Tile): List<Pair<Civilization, String>> =
++        civ.viewableTiles.flatMap { at -> at.getUnits().filter { it.isMilitary() && civ.isAtWarWith(it.civ) && at.aerialDistanceTo(tile) <= it.getMaxMovement() - 1 + it.getRange() }.map { it.civ to it.name } }
++
 +    /** The water an enemy ship or soldier this civ can see could strike next turn; reckoned once for each civ while one power plays its turn (they stand still) */
 +    @yairm210.purity.annotations.Cache private val shipReachSeen = ConcurrentHashMap<String, Pair<String, Set<Tile>>>()
 +    @yairm210.purity.annotations.Readonly
@@ -1526,7 +1536,7 @@ index 8135bb7..df08169 100644
          val holyCity = unit.civ.religionManager.getHolyCity()
          val cityToConvert = determineBestInquisitorCityToConvert(unit) // Also returns null if the inquisitor can't convert cities
 diff --git a/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt b/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
-index 9a9354b..868e240 100644
+index 9a9354b..1e8d7c8 100644
 --- a/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/UnitAutomation.kt
 @@ -63,10 +63,15 @@ object UnitAutomation {
@@ -1560,7 +1570,7 @@ index 9a9354b..868e240 100644
  
          if (unit.health < 50 && (tryRetreat(unit) || tryHealUnit(unit))) return // do nothing but heal
  
-@@ -88,6 +94,31 @@ object UnitAutomation {
+@@ -88,6 +94,34 @@ object UnitAutomation {
  
          if (tryHeadTowardsOurSiegedCity(unit)) return
  
@@ -1573,6 +1583,9 @@ index 9a9354b..868e240 100644
 +            if (tryAttacking(unit, homeGroundTargets(unit))) return
 +            if (tryGarrisoningLandUnit(unit)) return
 +            if (unit.health < 100 && tryHealUnit(unit)) return
++            // A soldier at sea is never home, our own coastal water included: it comes ashore on our land (a defending host sat embarked off York for good,
++            // Run 32 - our water counted as home ground, and "home" was the harbour it had reached)
++            if (unit.isEmbarked()) { if (!tryHeadHome(unit)) tryRetreat(unit); return }
 +            if (unit.getTile().getOwner() != unit.civ) { if (!tryRetreat(unit)) tryHeadHome(unit); return }
 +            tryPrepare(unit); return
 +        }
@@ -1592,7 +1605,7 @@ index 9a9354b..868e240 100644
          // if a embarked melee unit can land and attack next turn, do not attack from water.
          if (BattleHelper.tryDisembarkUnitToAttackPosition(unit)) return
  
-@@ -117,15 +148,31 @@ object UnitAutomation {
+@@ -117,15 +151,31 @@ object UnitAutomation {
  
          if (tryFogBust(unit)) return
  
@@ -1625,7 +1638,7 @@ index 9a9354b..868e240 100644
                  && tile.getTilesInDistance(unitVisibilityRange).any { !unit.civ.hasExplored(it) }
                  && (!unit.civ.isCityState || tile.neighbors.any { it.getOwner() == unit.civ }) // Don't want city-states exploring far outside their borders
                  && unit.getDamageFromTerrain(tile) <= 0    // Don't take unnecessary damage
-@@ -157,6 +204,9 @@ object UnitAutomation {
+@@ -157,6 +207,9 @@ object UnitAutomation {
          // Nothing immediate, lets look further. Number increases exponentially with distance - at 10 this took a looong time
          for (tile in unit.currentTile.getTilesInDistance(5))
              if (isGoodTileToExplore(unit, tile, unitVisibilityRange)) {
@@ -1635,7 +1648,7 @@ index 9a9354b..868e240 100644
                  unit.movement.headTowards(tile)
                  return true
              }
-@@ -276,10 +326,10 @@ object UnitAutomation {
+@@ -276,10 +329,10 @@ object UnitAutomation {
      }
  
  
@@ -1649,7 +1662,7 @@ index 9a9354b..868e240 100644
              // Calvary style tctic, attack and then retreat
              if (unit.health < 50 && tryRetreat(unit)) return true
          }
-@@ -301,6 +351,55 @@ object UnitAutomation {
+@@ -301,6 +354,57 @@ object UnitAutomation {
          return true
      }
  
@@ -1694,9 +1707,11 @@ index 9a9354b..868e240 100644
 +
 +    /** A soldier of a defending host left abroad, with no enemy near enough to retreat from, walks back to the nearest of our cities */
 +    private fun tryHeadHome(unit: MapUnit): Boolean {
++        // Home is land of ours near the city, out of every reach - never the harbour water nearest the unit (RulerOverrides.perilAtSea)
++        val peril = com.unciv.logic.automation.RulerOverrides.perilAtSea(unit)
 +        for (city in unit.civ.cities.sortedBy { it.getCenterTile().aerialDistanceTo(unit.currentTile) }.take(2)) {
 +            val tile = city.getCenterTile().getTilesInDistance(2).sortedBy { it.aerialDistanceTo(unit.currentTile) }
-+                .firstOrNull { unit.movement.canMoveTo(it) && unit.movement.canReach(it) } ?: continue
++                .firstOrNull { it.isLand && it.getOwner() == unit.civ && it !in peril && unit.movement.canMoveTo(it) && unit.movement.canReach(it) } ?: continue
 +            if (com.unciv.logic.automation.RulerOverrides.tryHeadTowards(unit, tile)) return true
 +        }
 +        return false
@@ -1705,7 +1720,7 @@ index 9a9354b..868e240 100644
      private fun tryRetreat(unit: MapUnit): Boolean {
          // Precondition: This must be a military unit
          if (unit.isCivilian()) return false
-@@ -324,10 +423,12 @@ object UnitAutomation {
+@@ -324,10 +428,12 @@ object UnitAutomation {
          }
  
          val ourDistanceToClosestEnemy = unit.civ.threatManager.getDistanceToClosestEnemyUnit(unit.getTile(),4, false)
@@ -1718,7 +1733,7 @@ index 9a9354b..868e240 100644
  
              val otherUnit = retreatTile.militaryUnit
              if (otherUnit == null) {
-@@ -338,6 +439,7 @@ object UnitAutomation {
+@@ -338,6 +444,7 @@ object UnitAutomation {
              } else if (otherUnit.civ == unit.civ) {
                  // The tile is taken, lets see if we want to swap retreat to it
                  if (otherUnit.health <= 80) continue
@@ -1726,7 +1741,7 @@ index 9a9354b..868e240 100644
                  if (otherUnit.baseUnit.isRanged()) {
                      // Don't swap ranged units closer than they have to be
                      val range = otherUnit.baseUnit.range
-@@ -371,7 +473,9 @@ object UnitAutomation {
+@@ -371,7 +478,9 @@ object UnitAutomation {
          if (unitDistanceToTiles.isEmpty()) return true // can't move, so...
  
          val dangerousTiles = unit.civ.threatManager.getDangerousTiles(unit, 3)
@@ -1737,7 +1752,7 @@ index 9a9354b..868e240 100644
          // If the unit can heal on this tile in two turns, just heal here
          if (unit.currentTile !in dangerousTiles 
              && canUnitHealInTurnsOnCurrentTile(unit,3)) return true
-@@ -462,9 +566,10 @@ object UnitAutomation {
+@@ -462,9 +571,10 @@ object UnitAutomation {
      fun tryPillageImprovement(unit: MapUnit, onlyPillageToHeal: Boolean = false): Boolean {
          if (unit.isCivilian()) return false
          val unitDistanceToTiles = unit.movement.getDistanceToTiles()
@@ -1749,7 +1764,7 @@ index 9a9354b..868e240 100644
                      && (it.canPillageTileImprovement()
                      || (!onlyPillageToHeal && it.canPillageRoad() && it.getRoadOwner() != null && unit.civ.isAtWarWith(it.getRoadOwner()!!))) }
  
-@@ -485,7 +590,7 @@ object UnitAutomation {
+@@ -485,7 +595,7 @@ object UnitAutomation {
       *
       *  Limited by [CLOSE_ENEMY_TURNS_AWAY_LIMIT] and [CLOSE_ENEMY_TILES_AWAY_LIMIT].
       *  Tiles attack from which would result in instant death of the [unit] are ignored. */
@@ -1758,7 +1773,7 @@ index 9a9354b..868e240 100644
          // this can be sped up if we check each layer separately
          val unitDistanceToTiles = unit.movement.getMovementToTilesAtPosition(
                  unit.getTile().position,
-@@ -493,6 +598,7 @@ object UnitAutomation {
+@@ -493,6 +603,7 @@ object UnitAutomation {
          )
          val closeEnemy = TargetHelper.getAttackableEnemies(unit, unitDistanceToTiles, tilesToCheck = unit.getTile().getTilesInDistance(CLOSE_ENEMY_TILES_AWAY_LIMIT).toList())
              .filterNot { unit.baseUnit.isRanged() && it.tileToAttack.isCityCenter() && it.tileToAttack.getCity()!!.health == 1 } // occurs fairly often probably because AI dumb
@@ -1766,7 +1781,7 @@ index 9a9354b..868e240 100644
              .filter { unit.getDamageFromTerrain(it.tileToAttackFrom) <= 0 }  // Don't attack from a mountain or near enemy citadels
              .filter {
              // Ignore units that would 1-shot you if you attacked
-@@ -532,10 +638,11 @@ object UnitAutomation {
+@@ -532,10 +643,11 @@ object UnitAutomation {
              .sortedBy { unit.getTile().aerialDistanceTo(it.getCenterTile()) }
  
          // Move to the closest city with a tile we can enter nearby
@@ -1779,7 +1794,7 @@ index 9a9354b..868e240 100644
              unit.movement.headTowards(tileToMoveTo)
              return true
          }
-@@ -567,10 +674,11 @@ object UnitAutomation {
+@@ -567,10 +679,11 @@ object UnitAutomation {
          if (siegedCities.any { it.getCenterTile().aerialDistanceTo(unit.getTile()) <= 2 })
              return false
  
@@ -8197,10 +8212,10 @@ index 0000000..6dccfc1
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..2851261
+index 0000000..7178f4c
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,808 @@
+@@ -0,0 +1,824 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -8441,7 +8456,7 @@ index 0000000..2851261
 +                        return true
 +                    }
 +                    dropped(unit, "Our ${unit.name} has been stuck for ${order.turnsStuck} turns on its way to ${RulerCampaigns.placeOf(civ, target)}, no nearer than it was" +
-+                        (blocker?.let { " - the tile is held by ${it.civ.civName}'s ${it.name}" } ?: " - no way to it opens"))
++                        (blocker?.let { " - the tile is held by ${it.civ.civName}'s ${it.name}" } ?: seaBlock(unit, target)?.let { " - $it" } ?: " - no way to it opens"))
 +                    return false
 +                }
 +                return true // still on the way
@@ -8726,6 +8741,8 @@ index 0000000..2851261
 +            (if (occupant.civ == civ) "Use garrison to swap places with it, pick a tile beside it, or leave it be - the place is already covered." else "Pick another tile."))
 +        // Orders are given between turns, when a unit has usually spent its movement - and Unciv finds no path at all for a unit with none left
 +        val path = if (target == unit.getTile()) listOf() else pathTo(unit, target)
++        // A way closed only because it puts to sea within an enemy's reach (RulerOverrides.underEnemyShips) is refused in those words, not as no way at all
++        if (target != unit.getTile() && !willSwap && path.isEmpty()) seaBlock(unit, target)?.let { throw IllegalArgumentException("${unit.name} cannot reach ${where(civ, target)}: $it") }
 +        if (target != unit.getTile() && !willSwap && path.isEmpty()) throw IllegalArgumentException("${unit.name} cannot reach ${where(civ, target)} (water, mountains or foreign borders in the way)" + if (action == "settle") nearestSiteHint(civ, unit, target) else "")
 +        val ability = json.get("ability")?.takeUnless { it.isNull }?.asString()
 +        if (ability != null && abilitiesNamed(ability).isEmpty()) throw IllegalArgumentException("Unknown ability '$ability'; use one of: ${ABILITY_WORDS.keys.joinToString()}")
@@ -8840,6 +8857,20 @@ index 0000000..2851261
 +     *  path for a spent unit. A yes is a hope, not a promise: the engine's path reckoning counts unexplored tiles as passable, so a way found now may close as the
 +     *  march uncovers the ground - why a garrison march can fail turns later and a march can wander (Runs 22 and 23), and why failures are remembered and
 +     *  "stuck" means no nearer */
++    /** Why [unit] cannot reach [target] when the reason is the embark rule alone: "it would have to put to sea within reach of Japan's Frigate".
++     *  Null when the way is closed for any other reason too */
++    fun seaBlock(unit: MapUnit, target: Tile): String? {
++        unit.movement.clearPathfindingCache()
++        val way = try { RulerOverrides.withEmbarkRuleWaived { pathTo(unit, target) } } finally { unit.movement.clearPathfindingCache() }
++        if (way.isEmpty() || way.none { it.isWater }) return null
++        val reach = RulerOverrides.shipReach(unit.civ)
++        val wet = way.filter { it.isWater && it in reach }.ifEmpty { return null }
++        val strikers = wet.flatMap { RulerOverrides.strikersOf(unit.civ, it) }.distinct()
++        val named = strikers.groupBy { it.first }.map { (owner, units) -> "${RulerCampaigns.possessive(owner.civName)} " +
++            Prose.andList(units.map { it.second }.groupingBy { it }.eachCount().map { (name, n) -> if (n == 1) name else "$n ${Prose.pluralOf(name)}" }) }
++        return "it would have to put to sea within reach of ${Prose.andList(named).ifEmpty { "the enemy" }}, and a soldier ashore at war does not"
++    }
++
 +    fun canMarch(unit: MapUnit, target: Tile) = target == unit.getTile() || pathTo(unit, target).isNotEmpty()
 +
 +    /** Does this unit, sent on a trade mission to [target]'s city-state, stand on that city-state's land - where the engine lets the mission be made (the tile's owner,

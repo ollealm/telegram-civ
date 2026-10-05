@@ -585,6 +585,37 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W33 no article inside a possessive (\"Japan's a Frigate\")", !JSON.stringify(posture?.hostAtSea ?? []).includes("'s a ") && !england.some((line) => /'s an? [A-Z]/.test(line.text) && /waits/.test(line.text)));
     await stop(host);
   },
+  async W34() { // a ruler's order the embark rule closes is refused in words that say why, naming whose reach it is
+    // Two more Japanese Frigates are put off England's coasts, so every way across the water to Japan's island starts within some ship's reach
+    const host = await start("run32-t189-osaka", "", undefined, (game) => {
+      const tile = (x: number, y: number) => game.tileMap.tileList.find((t: any) => (t.position?.x ?? 0) === x && (t.position?.y ?? 0) === y);
+      for (const [x, y] of [[-4, 4], [1, 12]]) {
+        game.lastUnitId += 1;
+        tile(x, y).militaryUnit = { owner: "Japan", originalOwner: "Japan", name: "Frigate", id: game.lastUnitId, currentMovement: 0 };
+      }
+    });
+    const reply = await orders("England", { units: [{ unit: 275, action: "move", x: 4, y: 10 }] });
+    const refusal = JSON.stringify(reply.json.failed ?? []);
+    check("W34 the order is refused for the reason, the reach named", /cannot reach .*: it would have to put to sea within reach of Japan's .*Frigate/.test(refusal), refusal.slice(0, 300) + " / " + JSON.stringify(reply.json.done ?? []).slice(0, 200));
+    await stop(host);
+  },
+  async W35() { // a defending host does not sit at sea: no soldier stays embarked on one water tile three turns running (England's off York stayed for good, Run 32)
+    const host = await start("run32-t189-osaka"); // the court had just set defend
+    const seen = new Map<string, string[]>();
+    for (let i = 0; i < 7; i++) {
+      for (const line of (await get(`/briefing?civ=England`)).json.units as string[]) {
+        const unit = /^([A-Z][\w' ]+?) (#\d+) at \((-?\d+),(-?\d+)\)/.exec(line);
+        if (unit && / at sea/.test(line) && !/Great|Work|Caravel|Frigate|Galleass|Trireme|Ship|Privateer|Ironclad/.test(unit[1])) seen.set(unit[2], [...(seen.get(unit[2]) ?? []), `${i}:${unit[3]},${unit[4]}`]);
+      }
+      await post("/advance", { turns: 1 });
+    }
+    const stuck = [...seen.entries()].filter(([, places]) => places.some((place, index) => {
+      const [turn, at] = place.split(":");
+      return [1, 2].every((k) => places.includes(`${Number(turn) + k}:${at}`));
+    })).map(([id, places]) => `${id} ${places.join(" ")}`);
+    check("W35 no soldier sits embarked on one water tile three turns running under defend", stuck.length === 0, stuck.join(" | "));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
