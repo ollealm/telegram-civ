@@ -616,6 +616,20 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W35 no soldier sits embarked on one water tile three turns running under defend", stuck.length === 0, stuck.join(" | "));
     await stop(host);
   },
+  async W36() { // an accepted peace holds: Japan's one-sided offer (sent with the trade order) is signed on both sides, the gold comes our way, and the court is told only what is so
+    const host = await start("run32-t216-peace");
+    const status = async () => ((await get(`/briefing?civ=England`)).json.knownCivs as any[]).find((known) => known.civ === "Japan")?.status;
+    const gold = async () => (await get(`/briefing?civ=England`)).json.gold as number;
+    const before = await gold();
+    const reply = await orders("England", { peace: ["Japan"] });
+    check("W36 the peace order is answered as made", JSON.stringify(reply.json.done ?? []).includes("Peace made with Japan"), JSON.stringify(reply.json).slice(0, 300));
+    check("W36 England and Japan are at peace once it is accepted", (await status()) === "peace", `${await status()}`);
+    check("W36 Japan's 150 gold came to England", (await gold()) - before === 150, `${before} -> ${await gold()}`);
+    await post("/advance", { turns: 1 });
+    check("W36 the world hears the peace", ((await get("/events?since=216")).json as { text: string }[]).some((event) => event.text === "England and Japan have made peace."));
+    check("W36 still at peace after the turn", (await status()) === "peace", `${await status()}`);
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
