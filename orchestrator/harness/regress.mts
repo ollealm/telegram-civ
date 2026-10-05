@@ -72,7 +72,7 @@ const hostLog = (host: Host) => readFileSync(host.log, "utf8");
 /** Each case: its own host(s), its own assertions; a case that throws is a FAIL, and the next still runs */
 const CASES: Record<string, () => Promise<void>> = {
   // ---- planted failures: the guards of the robustness pair ----
-  async F1() { // a turn the engine fails partway: reload, every court told, 503, exit 3; restarted, the world is the turn before
+  async F1() { // a turn the engine fails partway: reload, the operator told (never a court), 503, exit 3; restarted, the world is the turn before
     const host = await start("run22-t234-greece", "engine:Greece");
     const first = await post("/advance", { turns: 1 });
     check("F1 the failed turn answers 500 'could not be played'", first.status === 500 && /could not be played/.test(JSON.stringify(first.json)), JSON.stringify(first.json));
@@ -82,7 +82,9 @@ const CASES: Record<string, () => Promise<void>> = {
     check("F1 the host exits with code 3", code === 3, `${code}`);
     const again = await start("run22-t234-greece", "", host.dir);
     check("F1 restarted, the world is at turn 234", (await get("/state")).json.turn === 234);
-    check("F1 every court was told", (await Promise.all(["Greece", "Inca", "Japan"].map((name) => logOf(name, 233)))).every((lines) => lines.some((line) => /The turn could not be played/.test(line.text))));
+    // The operator's word stays with the operator: the self-check log has it, no court's chancery does (Run 32, T169: it read as news of the realm)
+    check("F1 no court was told the operator's word", (await Promise.all(["Greece", "Inca", "Japan"].map((name) => logOf(name, 233)))).every((lines) => !lines.some((line) => /could not be played/.test(line.text))));
+    check("F1 the self-check log has it", readFileSync(join(host.dir, "selfcheck.log"), "utf8").includes("the turn could not be played"));
     await stop(again);
   },
   async F2() { // one court's bookkeeping fails: its line says so, the others' are whole, the turns are saved and backed up
@@ -506,7 +508,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const siam = await logOf("Siam", 168);
     check("W28 no turn failed in Siam's log", !siam.some((line) => /could not be played/.test(line.text)));
     const posture = (await get(`/briefing?civ=Siam`)).json.standingOrders?.posture;
-    check("W28 the posture says where the host at sea is bound", Array.isArray(posture?.hostAtSea) && posture.hostAtSea.some((line: string) => /(crossing to (its|their) landing at .*|holding at sea out of reach: no shore near Hamburg .*), against Hamburg \(.* turns? at sea\)|holding at sea out of reach: no shore near Hamburg .* \(.* turns? at sea\)/.test(line)), JSON.stringify(posture?.hostAtSea ?? posture).slice(0, 300));
+    check("W28 the posture says where the host at sea is bound", Array.isArray(posture?.hostAtSea) && posture.hostAtSea.some((line: string) => /crossing to (its|their) landing at .*, against Hamburg \(.* turns? at sea\)|waiting out of reach off .*, against Hamburg: every shore near it lies under .* \(.* turns? at sea\)|holding at sea out of reach: no shore near Hamburg .* \(.* turns? at sea\)/.test(line)), JSON.stringify(posture?.hostAtSea ?? posture).slice(0, 300));
     const holding = siam.filter((line) => /^Our host holds at sea out of reach: no shore near Hamburg/.test(line.text)).map((line) => line.turn);
     check("W28 a host holding at sea is said when it begins, not every turn", holding.every((turn, index) => index === 0 || turn - holding[index - 1] > 1), holding.join(", "));
     await stop(host);
@@ -546,6 +548,41 @@ const CASES: Record<string, () => Promise<void>> = {
     const declared = polynesia.find((line) => /^Persia has declared war on us/.test(line.text));
     check("W30 the struck court's line names the war and its minimum", !!declared && /No peace can be made for \d+ turns\.$/.test(declared.text), declared?.text);
     check("W30 the joins it names are not told again", !polynesia.some((line) => /has joined|have joined/.test(line.text) && declared && line.text.split(" ")[0] && declared.text.includes(line.text.split(" ")[0])), polynesia.filter((line) => /joined/.test(line.text)).map((line) => line.text).join(" | "));
+    await stop(host);
+  },
+  async W31() { // an original capital held by a city-state: the race view names it as one, and the counts hold (Quebec City took Tokyo in Run 32; Kyoto is planted here)
+    const host = await start("run32-t189-osaka", "", undefined, (game) => {
+      const civ = (name: string) => game.civilizations.find((c: any) => c.civName === name);
+      const japan = civ("Japan"), quebec = civ("Quebec City");
+      const kyoto = japan.cities.find((c: any) => c.name === "Kyoto");
+      japan.cities = japan.cities.filter((c: any) => c !== kyoto);
+      quebec.cities.push(kyoto);
+    });
+    const race = (await get(`/briefing?civ=England`)).json.victory?.race?.Domination as string[] | undefined;
+    check("W31 the city-state holding a capital is named as one", !!race?.some((line) => /^the city-state of Quebec City: 1 of the 4 original capitals - Kyoto \(Japan's\)/.test(line)), JSON.stringify(race));
+    check("W31 the counts hold: four capitals, each told once", (race ?? []).flatMap((line) => line.replace(/^.*?original capitals - /, "").split(/, | and /)).filter((part) => /^(London|Kyoto|Berlin|Sukhothai)/.test(part)).length === 4, JSON.stringify(race));
+    await stop(host);
+  },
+  async W32() { // a soldier ashore at war does not embark within an enemy warship's reach, whatever routine moves it (Run 32: seven sunk off their own coasts)
+    // Japan's Frigate stands at (3,12), off York; two English Pikemen on the coast are sent across the water past it
+    const host = await start("run32-t189-osaka");
+    await orders("England", { units: [{ unit: 275, action: "move", x: 4, y: 10 }, { unit: 291, action: "move", x: 4, y: 10 }] });
+    await post("/advance", { turns: 1 });
+    const units = (await get(`/briefing?civ=England`)).json.units as string[];
+    const sent = units.filter((line) => /^Pikeman #(275|291) /.test(line));
+    check("W32 neither soldier put to sea within the Frigate's reach", sent.length === 2 && sent.every((line) => !/ at sea/.test(line)), sent.join(" | "));
+    await stop(host);
+  },
+  async W33() { // no shore out of reach off Osaka: the host waits out of reach off the least perilous shore, said once, and the posture says under whose guns and what would open a landing
+    const host = await start("run32-t189-osaka");
+    await orders("England", { posture: { warAim: "Osaka", stance: "attack", reserve: 3 } });
+    for (let i = 0; i < 3; i++) await post("/advance", { turns: 1 });
+    const england = await logOf("England", 189);
+    const waits = england.filter((line) => /^Our host waits out of reach off .+: no shore near Osaka lies out of reach of .+, and it will not land under them\. Ships to clear that shore, or a weaker aim, would open a landing\.$/.test(line.text)).map((line) => line.turn);
+    check("W33 the wait is said when it begins, not every turn", waits.length >= 1 && waits.every((turn, index) => index === 0 || turn - waits[index - 1] > 1), waits.join(", "));
+    const posture = (await get(`/briefing?civ=England`)).json.standingOrders?.posture;
+    check("W33 the posture says where it waits, under whose guns, and what would open a landing", Array.isArray(posture?.hostAtSea) && posture.hostAtSea.some((line: string) => /waiting out of reach off .+, against Osaka: every shore near it lies under .+ - ships to clear that shore, or a weaker aim, would open a landing/.test(line)), JSON.stringify(posture?.hostAtSea ?? posture).slice(0, 300));
+    check("W33 no article inside a possessive (\"Japan's a Frigate\")", !JSON.stringify(posture?.hostAtSea ?? []).includes("'s a ") && !england.some((line) => /'s an? [A-Z]/.test(line.text) && /waits/.test(line.text)));
     await stop(host);
   },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept

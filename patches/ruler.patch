@@ -45,10 +45,10 @@ index 0a2fd63..ba25f43 100644
              }
 diff --git a/core/src/com/unciv/logic/automation/RulerOverrides.kt b/core/src/com/unciv/logic/automation/RulerOverrides.kt
 new file mode 100644
-index 0000000..880a149
+index 0000000..eea4cc1
 --- /dev/null
 +++ b/core/src/com/unciv/logic/automation/RulerOverrides.kt
-@@ -0,0 +1,468 @@
+@@ -0,0 +1,501 @@
 +package com.unciv.logic.automation
 +
 +import com.unciv.logic.GameInfo
@@ -196,13 +196,46 @@ index 0000000..880a149
 +
 +    /** Where a ruled civ's host at sea is bound this turn: each unit's landing (null: no shore out of reach, it holds out of reach) and the city it goes
 +     *  against. Written by the landing routine, read and cleared by the host's bookkeeping */
-+    class Landing(val landing: Tile?, val city: Tile)
++    class Landing(val landing: Tile?, val city: Tile, val mode: String = "crossing", val cover: List<String> = emptyList())
 +    val landings = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<Int, Landing>>()
-+    fun noteLanding(unit: MapUnit, landing: Tile?, city: Tile) {
-+        landings.getOrPut(unit.civ.civID) { java.util.concurrent.ConcurrentHashMap() }[unit.id] = Landing(landing, city)
++    /** [mode]: "crossing" to a shore out of reach; "waiting" out of reach off [landing], the least perilous shore, for one to come out of reach;
++     *  "holding" with no shore it can land on at all. [cover]: who covers the shores it lands on - "city:Osaka", "unit:Japan:Frigate", one entry each */
++    fun noteLanding(unit: MapUnit, landing: Tile?, city: Tile, mode: String = "crossing", cover: List<String> = emptyList()) {
++        landings.getOrPut(unit.civ.civID) { java.util.concurrent.ConcurrentHashMap() }[unit.id] = Landing(landing, city, mode, cover)
 +    }
++
++    /** Where a host with no shore out of reach waits, reckoned once for a realm and a city while it plays its turn: the least perilous shore with a land
++     *  way to the city ([shore]), who covers the shores near it ([cover], as in [Landing]), and every tile within some enemy's reach ([perilous]) */
++    class ShoreWait(val key: String, val shore: Tile, val cover: List<String>, val perilous: Set<Tile>)
++    /** Where each realm's host waits off each city, by "civID@x,y" */
++    val shoreWaits = ConcurrentHashMap<String, ShoreWait>()
++    /** The city each of a ruled civ's units at sea is bound for: who belongs to which host */
++    val boundFor = ConcurrentHashMap<Int, com.unciv.logic.map.HexCoord>()
 +    /** The landing each unit at sea was last bound for, by unit id: kept while it stands, so the host does not turn about as the enemy moves */
 +    val headingFor = java.util.concurrent.ConcurrentHashMap<Int, com.unciv.logic.map.HexCoord>()
++
++    /** Water a ruled civ's land unit ashore does not step onto at war, whatever the routine that moves it: within the reach (move and strike) of an enemy
++     *  ship or soldier it can see. Six Japanese and an English soldier embarked along their own coasts and were sunk by ships that came after them (Run 32,
++     *  T174-189), and a wounded Trebuchet put to sea by the retreat routine died to a Crossbowman on the shore; the landing rule covered only the march to
++     *  a city. One already at sea may move on - out of it, if it can. A city's guns stay with the landing rule, which may accept them */
++    @yairm210.purity.annotations.Readonly
++    fun underEnemyShips(unit: MapUnit, tile: Tile): Boolean {
++        if (!tile.isWater || unit.isEmbarked() || !unit.baseUnit.isLandUnit || unit.civ.civID !in ruledCivs || unit.civ.isBarbarian) return false
++        return tile in shipReach(unit.civ)
++    }
++    /** The water an enemy ship or soldier this civ can see could strike next turn; reckoned once for each civ while one power plays its turn (they stand still) */
++    @yairm210.purity.annotations.Cache private val shipReachSeen = ConcurrentHashMap<String, Pair<String, Set<Tile>>>()
++    @yairm210.purity.annotations.Readonly
++    fun shipReach(civ: Civilization): Set<Tile> {
++        val key = "${civ.gameInfo.turns}/${civ.gameInfo.currentPlayer}"
++        shipReachSeen[civ.civID]?.takeIf { it.first == key }?.let { return it.second }
++        val reach = HashSet<Tile>()
++        if (civ.isAtWar()) for (tile in civ.viewableTiles) for (ship in tile.getUnits())
++            if (ship.isMilitary() && civ.isAtWarWith(ship.civ))
++                reach += tile.getTilesInDistance(ship.getMaxMovement() - 1 + ship.getRange())
++        shipReachSeen[civ.civID] = key to reach
++        return reach
++    }
 +
 +    /** Does this ruled civ's land unit go by sea to the city - at sea now, or with water on its way? Then it lands out of reach and walks (headForLanding) */
 +    @yairm210.purity.annotations.Readonly
@@ -1243,7 +1276,7 @@ index c6f0076..9277b9f 100644
              // Priotirize capture threat over ranged attack
              .sortedByDescending { unit.civ.threatManager.getEnemyUnitsOnTiles(listOf(it)).isNotEmpty() }
 diff --git a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
-index 3fc1b5e..c017de1 100644
+index 3fc1b5e..f47b10f 100644
 --- a/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 +++ b/core/src/com/unciv/logic/automation/unit/HeadTowardsEnemyCityAutomation.kt
 @@ -20,7 +20,7 @@ object HeadTowardsEnemyCityAutomation {
@@ -1313,7 +1346,7 @@ index 3fc1b5e..c017de1 100644
          val unitDistanceToTiles = unit.movement.getDistanceToTiles()
  
          val unitRange = unit.getRange()
-@@ -96,6 +133,73 @@ object HeadTowardsEnemyCityAutomation {
+@@ -96,6 +133,141 @@ object HeadTowardsEnemyCityAutomation {
          return true
      }
  
@@ -1328,7 +1361,7 @@ index 3fc1b5e..c017de1 100644
 +    /** A ruled civ's land unit going by sea: the landing is a land tile on the city's landmass, at least three from it and out of every reach
 +     *  (RulerOverrides.perilAtSea), that can be come to by water out of reach - the one nearest the city, further along the coast when the near shore is
 +     *  under the guns (Munich's whole western shore was, across the strait from London, Run 32). Each turn the unit goes as far along that way as it can,
-+     *  never ending a turn at sea within reach, and lands; on its landing it walks as any soldier does. With no such landing, it keeps out of reach */
++     *  never ending a turn at sea within reach, and lands; on its landing it walks as any soldier does. With no such landing, it waits out of reach (waitOffShore) */
 +    private fun headForLanding(unit: MapUnit, cityTile: Tile): Boolean {
 +        val peril = com.unciv.logic.automation.RulerOverrides.perilAtSea(unit)
 +        val landmass = cityTile.getContinent()
@@ -1364,10 +1397,9 @@ index 3fc1b5e..c017de1 100644
 +        val heading = com.unciv.logic.automation.RulerOverrides.headingFor[unit.id]?.let { unit.civ.gameInfo.tileMap.getIfTileExistsOrNull(it.x, it.y) }
 +        val target = heading?.takeIf { it in landings } ?: landings.minWithOrNull(compareBy({ it.aerialDistanceTo(cityTile) }, { depth[it] }))
 +        val open = unit.movement.getDistanceToTiles().keys.filter { (it == start || unit.movement.canMoveTo(it)) && !(it.isWater && it in peril) }.toHashSet()
-+        val step = if (target == null) {
-+            // No shore out of reach: it keeps out of reach, and the court sees it hold (the posture's hostAtSea, and the log once)
-+            if (start in peril) open.minByOrNull { tile -> unit.civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: 0 } else null
-+        } else {
++        if (target == null) return waitOffShore(unit, cityTile, byLand, peril)
++        com.unciv.logic.automation.RulerOverrides.boundFor[unit.id] = cityTile.position
++        val step = run {
 +            // The reachable tile nearest the landing by the way's own waters: a host strung out along a narrow channel stood each on the next one's
 +            // way and none moved (Siam, Run 32); round a tile taken by one of our own it goes alongside
 +            val toLanding = HashMap<Tile, Int>().apply { put(target, 0) }
@@ -1378,10 +1410,79 @@ index 3fc1b5e..c017de1 100644
 +            }
 +            open.filter { it in toLanding }.minByOrNull { toLanding[it]!! }?.takeIf { toLanding[it]!! < (toLanding[start] ?: Int.MAX_VALUE) }
 +        }
-+        if (target != null) com.unciv.logic.automation.RulerOverrides.headingFor[unit.id] = target.position else com.unciv.logic.automation.RulerOverrides.headingFor.remove(unit.id)
++        com.unciv.logic.automation.RulerOverrides.headingFor[unit.id] = target.position
 +        if (target != start && unit.isEmbarked()) com.unciv.logic.automation.RulerOverrides.noteLanding(unit, target, cityTile)
 +        if (step != null && step != start) unit.movement.moveToTile(step)
 +        return true
++    }
++
++    /** No shore out of reach: the host waits out of reach off the least perilous shore with a land way to the city - at the safe water nearest it, ready
++     *  to cross the turn a shore comes out of reach (England's host off Osaka did, Run 32), and the court is told who covers the shores and what would
++     *  open a landing. It does not land under the guns: measured on Run 32, a landing together under them put one soldier ashore at a time off Hamburg
++     *  and lost each (T182, T189), while the rest of the host crossed elsewhere; the brief's rule for that case is to hold and say so */
++    private fun waitOffShore(unit: MapUnit, cityTile: Tile, byLand: Set<Tile>, peril: Set<Tile>): Boolean {
++        val overrides = com.unciv.logic.automation.RulerOverrides
++        val civ = unit.civ
++        val start = unit.currentTile
++        overrides.headingFor.remove(unit.id)
++        overrides.boundFor[unit.id] = cityTile.position
++        val turn = "${civ.gameInfo.turns}/${civ.gameInfo.currentPlayer}"
++        val key = "${civ.civID}@${cityTile.position.x},${cityTile.position.y}"
++        var wait = overrides.shoreWaits[key]
++        if (wait == null || wait.key != turn) {
++            // The shore it chose stays its shore while it still leads to the city: a host whose shore moved with the enemy never drew near (Run 32)
++            wait = planShoreWait(civ, cityTile, byLand, turn, wait?.shore)
++            if (wait == null) overrides.shoreWaits.remove(key) else overrides.shoreWaits[key] = wait
++        }
++        val reachable = unit.movement.getDistanceToTiles().keys.filter { it == start || unit.movement.canMoveTo(it) }
++        val step = if (wait == null) {
++            // No shore at all that leads to the city by land: it keeps out of reach where it is
++            overrides.noteLanding(unit, null, cityTile, "holding")
++            if (start in peril) reachable.filter { !(it.isWater && it in peril) }.minByOrNull { tile -> civ.cities.minOfOrNull { it.getCenterTile().aerialDistanceTo(tile) } ?: 0 } else null
++        } else {
++            // By safe water to its waiting point off the shore, the farthest tile along the way this turn reaches
++            overrides.noteLanding(unit, wait.shore, cityTile, "waiting", wait.cover)
++            val way = gatheringOf(unit, wait, peril)
++            generateSequence(way.point) { tile -> way.came[tile]?.takeIf { it != tile } }.firstOrNull { it in reachable && !way.unsafe(it) }?.takeIf { it != start }
++                ?: if (way.unsafe(start)) reachable.firstOrNull { !way.unsafe(it) } else null
++        }
++        if (step != null && step != start) unit.movement.moveToTile(step)
++        return true
++    }
++
++    /** A unit's waiting point: of the water it can reach by safe water - beyond every reach and a tile's margin past it (two died waiting on the edge
++     *  off Munich, by a Crossbowman's reach reckoned a tile short) - the tile nearest the shore; the way there and how many steps it is */
++    private class Gathering(val point: Tile, val steps: Int, val came: Map<Tile, Tile>, val unsafe: (Tile) -> Boolean)
++    private fun gatheringOf(unit: MapUnit, wait: com.unciv.logic.automation.RulerOverrides.ShoreWait, peril: Set<Tile>): Gathering {
++        val reached = HashSet<Tile>().apply { for (tile in peril + wait.perilous) { add(tile); addAll(tile.neighbors) } }
++        val unsafe = { tile: Tile -> tile.isWater && tile in reached }
++        val start = unit.currentTile
++        val came = HashMap<Tile, Tile>().apply { put(start, start) }
++        val depth = HashMap<Tile, Int>().apply { put(start, 0) }
++        val queue = ArrayDeque(listOf(start))
++        while (queue.isNotEmpty()) {
++            val tile = queue.removeFirst()
++            for (next in tile.neighbors) if (next !in came && next.isWater && !unsafe(next) && next.aerialDistanceTo(start) <= 30) { came[next] = tile; depth[next] = depth[tile]!! + 1; queue.addLast(next) }
++        }
++        val point = came.keys.minWithOrNull(compareBy({ it.aerialDistanceTo(wait.shore) }, { depth[it] })) ?: start
++        return Gathering(if (point.aerialDistanceTo(wait.shore) < start.aerialDistanceTo(wait.shore)) point else start, depth[point] ?: 0, came, unsafe)
++    }
++
++    /** Where [civ]'s host waits off [cityTile], reckoned from the city's side: the guns of every city at war near it and the reach of every enemy soldier
++     *  and ship we can see near it, counted over each shore - the shore with the fewest over it, nearest the city */
++    private fun planShoreWait(civ: com.unciv.logic.civilization.Civilization, cityTile: Tile, byLand: Set<Tile>, turn: String, kept: Tile?): com.unciv.logic.automation.RulerOverrides.ShoreWait? {
++        val covers = HashMap<Tile, MutableSet<String>>()
++        val cities = civ.getKnownCivs().filter { civ.isAtWarWith(it) }.flatMap { it.cities }.filter { it.getCenterTile().aerialDistanceTo(cityTile) <= 12 }
++        for (city in cities) for (tile in city.getCenterTile().getTilesInDistance(city.getBombardRange())) covers.getOrPut(tile) { LinkedHashSet() } += "city:${city.name}"
++        for (tile in cityTile.getTilesInDistance(10)) if (tile.isVisible(civ)) for (enemy in tile.getUnits())
++            if (enemy.isMilitary() && civ.isAtWarWith(enemy.civ))
++                for (reached in tile.getTilesInDistance(enemy.getMaxMovement() - 1 + enemy.getRange())) covers.getOrPut(reached) { LinkedHashSet() } += "unit:${enemy.civ.civName}:${enemy.name}:${enemy.id}"
++        val shores = byLand.filter { it.isLand && it.aerialDistanceTo(cityTile) in minDistanceFromCityToConsiderForLandingArea..10 && it.neighbors.any { n -> n.isWater } }
++        val order = compareBy<Tile>({ covers[it]?.size ?: 0 }, { it.aerialDistanceTo(cityTile) })
++        val shore = kept?.takeIf { it in shores } ?: shores.minWithOrNull(order) ?: return null
++        // Who covers the shores near it: each city's guns, and each enemy soldier or ship by number (the host words them)
++        val near = shores.filter { it.aerialDistanceTo(shore) <= 2 }
++        return com.unciv.logic.automation.RulerOverrides.ShoreWait(turn, shore, near.flatMap { covers[it] ?: emptySet() }.distinct(), covers.keys)
 +    }
 +
      /** Cannot take within 5 turns */
@@ -2346,6 +2447,21 @@ index a0565d8..58f7c6d 100644
              unit.civ.addNotification(
                  "Our [${unit.name}] took [$tileDamage] tile damage and was destroyed",
                  unit.currentTile.position,
+diff --git a/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt b/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt
+index f926332..a42056b 100644
+--- a/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt
++++ b/core/src/com/unciv/logic/map/mapunit/movement/UnitMovement.kt
+@@ -727,6 +727,10 @@ class UnitMovement(val unit: MapUnit) {
+         val canPassThroughReason = if (assumeCanPassThrough) null else cannotPassThroughReason(tile)
+         if (canPassThroughReason != null) return canPassThroughReason
+ 
++        // A ruled civ's soldier ashore does not embark where an enemy warship can strike it (RulerOverrides.underEnemyShips); passing through is not ending there
++        if (com.unciv.logic.automation.RulerOverrides.underEnemyShips(unit, tile))
++            return CannotMoveToReason.CannotEmbark
++
+         // even if they'll let us pass through, we can't enter their city - unless we just captured it
+         if (isCityCenterCannotEnter(tile))
+             return CannotMoveToReason.CannotEnterCityCenter
 diff --git a/core/src/com/unciv/logic/trade/Trade.kt b/core/src/com/unciv/logic/trade/Trade.kt
 index 2ac7326..cda1dd9 100644
 --- a/core/src/com/unciv/logic/trade/Trade.kt
@@ -4768,10 +4884,10 @@ index 0000000..c620d0e
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..af354a8
+index 0000000..3148a57
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,3171 @@
+@@ -0,0 +1,3190 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -5274,7 +5390,7 @@ index 0000000..af354a8
 +        Memory("trail", true, { trail.clear() }, { trail.toMap() }, { json -> trail.load(json) }),
 +        Memory("ages", true, { ages.clear() }, { ages.toMap() }, { json -> ages.load(json) }),
 +        Memory("turnNews", false, { turnNews.clear(); nukeRazed.clear() }),
-+        Memory("hostAtSea", false, { hostAtSea.clear(); holdingTold.clear(); RulerOverrides.landings.clear(); RulerOverrides.headingFor.clear() }),
++        Memory("hostAtSea", false, { hostAtSea.clear(); holdingTold.clear(); RulerOverrides.landings.clear(); RulerOverrides.headingFor.clear(); RulerOverrides.shoreWaits.clear(); RulerOverrides.boundFor.clear() }),
 +        Memory("atomicSeen", true, { atomicSeen = false }, { atomicSeen }, { json -> atomicSeen = json?.asBoolean() ?: false }),
 +        Memory("lockedCities", true, { RulerOverrides.lockedCities.clear() }, { RulerOverrides.lockedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.lockedCities += it } }),
 +        Memory("focusedCities", true, { RulerOverrides.focusedCities.clear() }, { RulerOverrides.focusedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.focusedCities += it } }),
@@ -6583,7 +6699,8 @@ index 0000000..af354a8
 +            val capitals = game.getCities().filter { it.isOriginalCapital && it.foundingCivObject?.isMajorCiv() == true && it.getCenterTile().isExplored(civ) }.toList()
 +            val majors = game.civilizations.count { it.isMajorCiv() }
 +            race["Domination"] = capitals.groupBy { it.civ }.entries.sortedByDescending { it.value.size }.map { (holder, held) ->
-+                "${name(holder)}: ${held.size} of the $majors original capitals - " + andList(held.map { city ->
++                // A city-state may hold a capital it took (Quebec City held Tokyo, Run 32): named as one - it is in no race, but the capital is out of every power's hands
++                "${if (holder.isCityState) "the city-state of ${holder.civName}" else name(holder)}: ${held.size} of the $majors original capitals - " + andList(held.map { city ->
 +                    city.name + (if (city.foundingCivObject != holder) " (${city.foundingCivObject!!.civName}'s)" else "") +
 +                        (if (holder != civ && city.getCenterTile().getContinent() !in ourLands) ", across the sea from us" else "") })
 +            } + listOfNotNull((majors - capitals.size).takeIf { it > 0 }?.let { "$it original capital${plural(it)} we have never seen" })
@@ -6675,24 +6792,41 @@ index 0000000..af354a8
 +
 +    /** Where each ruled realm's host at sea is bound, as the last bookkeeping found it: one line per landing, shown with the posture */
 +    private val hostAtSea = HashMap<String, List<String>>()
-+    /** The cities each realm's host found no shore out of reach near last turn: a host holding at sea is told once, when it begins to */
++    /** What each realm's host at sea was doing last turn, by "mode|city": each begins to be told once (a hold, a gathering, a landing under the guns) */
 +    private val holdingTold = HashMap<String, Set<String>>()
 +    private fun noteHostAtSea(civ: Civilization) {
-+        val plans = RulerOverrides.landings.remove(civ.civID).orEmpty().mapNotNull { (id, plan) -> civ.units.getUnitById(id)?.takeIf { it.isEmbarked() }?.let { it to plan } }
++        val all = RulerOverrides.landings.remove(civ.civID).orEmpty().mapNotNull { (id, plan) -> civ.units.getUnitById(id)?.let { it to plan } }
++        val plans = all.filter { it.first.isEmbarked() }
 +        val cityOf = { plan: RulerOverrides.Landing -> plan.city.getCity()?.name ?: "the enemy" }
-+        hostAtSea[civ.civName] = plans.groupBy { (_, plan) -> plan.landing to cityOf(plan) }.map { (key, group) ->
-+            val (landing, city) = key
-+            val longest = group.maxOf { units.turnsAtSea(it.first) }
-+            RulerCampaigns.company(group.map { it.first.name }).replaceFirstChar { it.uppercase() } +
-+                (if (landing == null) " holding at sea out of reach: no shore near $city lies out of reach of the enemy's guns"
-+                    else " crossing to ${if (group.size == 1) "its" else "their"} landing at ${RulerCampaigns.placeOf(civ, landing)}, against $city") +
-+                " (${RulerCampaigns.count(longest)} turn${Prose.plural(longest)} at sea)"
++        // Who covers the shores, in words: "the guns of Osaka and Japan's 2 Frigates"
++        val covered = { cover: List<String> ->
++            val guns = cover.filter { it.startsWith("city:") }.map { "the guns of ${it.removePrefix("city:")}" }
++            val arms = cover.filter { it.startsWith("unit:") }.map { it.split(":") }.groupBy { it[1] }
++                .map { (owner, units) -> "${RulerCampaigns.possessive(owner)} " + andList(units.map { it[2] }.groupingBy { it }.eachCount().map { (name, n) -> if (n == 1) name else "$n ${Prose.pluralOf(name)}" }) }
++            andList(guns + arms).ifEmpty { "the enemy's guns" }
 +        }
-+        // A host with no shore out of reach holds at sea: said once, when it begins - the court may choose another aim, or wait
-+        val holding = plans.filter { it.second.landing == null }.map { cityOf(it.second) }.toSet()
-+        for (city in holding - (holdingTold[civ.civName] ?: emptySet()))
-+            log(civ, "Our host holds at sea out of reach: no shore near $city lies out of reach of the enemy's guns, and it will not land under them.")
-+        holdingTold[civ.civName] = holding
++        hostAtSea[civ.civName] = plans.groupBy { (_, plan) -> Triple(plan.landing, cityOf(plan), plan.mode) }.map { (key, group) ->
++            val (landing, city, mode) = key
++            val longest = group.maxOf { units.turnsAtSea(it.first) }
++            val place = landing?.let { RulerCampaigns.placeOf(civ, it) }
++            RulerCampaigns.company(group.map { it.first.name }).replaceFirstChar { it.uppercase() } + when {
++                place == null -> " holding at sea out of reach: no shore near $city leads to it by land"
++                mode == "waiting" -> " waiting out of reach off $place, against $city: every shore near it lies under ${covered(group[0].second.cover)}" +
++                    " - ships to clear that shore, or a weaker aim, would open a landing"
++                else -> " crossing to ${if (group.size == 1) "its" else "their"} landing at $place, against $city"
++            } + " (${RulerCampaigns.count(longest)} turn${Prose.plural(longest)} at sea)"
++        }
++        // Each begins to be told once: a host waiting off a shore under the guns, or holding with none to land on
++        val now = plans.filter { it.second.mode != "crossing" }.groupBy { "${it.second.mode}|${cityOf(it.second)}" }
++        for ((what, group) in now) {
++            if (what in (holdingTold[civ.civName] ?: emptySet())) continue
++            val plan = group[0].second
++            val city = cityOf(plan)
++            log(civ, if (plan.mode == "waiting") "Our host waits out of reach off ${plan.landing?.let { RulerCampaigns.placeOf(civ, it) }}: no shore near $city lies out of reach of " +
++                    "${covered(plan.cover)}, and it will not land under them. Ships to clear that shore, or a weaker aim, would open a landing."
++                else "Our host holds at sea out of reach: no shore near $city leads to the city by land.")
++        }
++        holdingTold[civ.civName] = now.keys
 +    }
 +
 +    /** GameInfo.turns only moves once every player has played, so whatever is logged during a turn - or by an order between turns - belongs to the turn about to be counted */
@@ -7088,8 +7222,9 @@ index 0000000..af354a8
 +        Thread { Thread.sleep(2000); System.err.println("Exiting after a failed turn ($brokenTurn); the keep loop restarts the host from the last save."); kotlin.system.exitProcess(3) }.apply { isDaemon = true }.start()
 +        resetHostState()
 +        load()
-+        for (name in orders.keys) game().civilizations.firstOrNull { it.civName == name }?.let { civ ->
-+            log(civ, "The turn could not be played (${ex.javaClass.simpleName}: ${ex.message}); the world stands as it was before it, and the host waits to be restarted.") }
++        // The operator's word, never a court's: the host's log and the self-check log carry it, and the advance's error answer reaches the orchestrator.
++        // In the chancery it read as news of the realm (Run 32, T169, every court; the words self-check flagged it)
++        selfCheck("turn", null, "the turn could not be played (${ex.javaClass.simpleName}: ${ex.message}); the world was reloaded as it stood before it")
 +        save()
 +    }
 +
