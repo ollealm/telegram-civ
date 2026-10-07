@@ -78,10 +78,10 @@ try {
   console.log(refused ? `refusals shown to ${seat.civ}'s look-in:\n${refused}` : `refusals shown to ${seat.civ}'s look-in: none`);
 
   // One real look-in: the session refuses to run without its tools (call() checks the init), so its finishing is the proof
-  let trace: { toolCalls: { name: string; input: unknown; result?: string }[]; costUsd: number } | undefined;
+  let trace: import("../src/agents.ts").Trace | undefined;
   onTrace((each) => { if (each.role === "govern") trace = each; });
   const look = await governPass(seat, game.turn - 4, 4).then(() => "", (error: Error) => error.message);
-  check("a real look-in ran with its realm tools", look === "" && trace !== undefined, look || `${trace?.toolCalls.length ?? 0} tool calls (${trace?.toolCalls.map((call) => call.name).join(", ")}), $${trace?.costUsd?.toFixed(3)}; tokens in ${trace?.inputTokens} (cached ${trace?.cachedInputTokens ?? "-"}), out ${trace?.outputTokens} (reasoning ${trace?.reasoningTokens ?? "-"}); ${Math.round((trace?.ms ?? 0) / 1000)} s`);
+  check("a real look-in ran with its realm tools", look === "" && trace !== undefined, look || `${trace?.toolCalls.length ?? 0} tool calls (${trace?.toolCalls.map((call) => call.name).join(", ")}), $${trace?.costUsd?.toFixed(3)} (priced $${trace?.pricedUsd?.toFixed(3) ?? "-"}); tokens in ${trace?.inputTokens} (cached ${trace?.cachedInputTokens ?? "-"}), out ${trace?.outputTokens} (reasoning ${trace?.reasoningTokens ?? "-"}); ${Math.round((trace?.ms ?? 0) / 1000)} s`);
   for (const call of trace?.toolCalls.filter((each) => each.name.endsWith("set_orders")) ?? [])
     console.log(`the look-in's set_orders: ${JSON.stringify(call.input).slice(0, 300)}\n  answered: ${(call.result ?? "").slice(0, 400)}`);
 

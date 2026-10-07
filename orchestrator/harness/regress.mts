@@ -684,6 +684,59 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W39 no city-state-with-city-state peace", !peace.some((text) => { const m = /^(.+?) and (.+?) have made peace\.$/.exec(text); return !!m && !majors.has(m[1]) && !majors.has(m[2]); }), peace.join(" | "));
     await stop(host);
   },
+  async W40() { // a call's dollars from its tokens and the price table (prices.ts), against figures worked by hand; no host. The SDK priced Sonnet 5.5 ~2x and Haiku 5.5 ~40x
+    const { priceUsd, priceSdkCall, codexTokens, sdkTokens } = await import("../src/prices.ts");
+    const near = (got: number | null, want: number) => got !== null && Math.abs(got - want) < 1e-9;
+    const block = { input: 1_000, cacheWrite5m: 2_000, cacheWrite1h: 10_000, cacheRead: 50_000, output: 3_000 };
+    // 1,000 x $4 + 2,000 x $5 + 10,000 x $8 + 50,000 x $0.20 + 3,000 x $20, per million
+    check("W40 Opus 5.5: $0.164", near(priceUsd("claude-opus-5-5", [block]), 0.164), String(priceUsd("claude-opus-5-5", [block])));
+    // x $2, $2.50, $4, $0.20, $10
+    check("W40 Sonnet 5.5: $0.087", near(priceUsd("claude-sonnet-5-5", [block]), 0.087), String(priceUsd("claude-sonnet-5-5", [block])));
+    // a 63,000-token prompt: x $0.10, $0.125, $0.20, $0.01, $0.50
+    check("W40 Haiku 5.5 under 100k: $0.00435", near(priceUsd("claude-haiku-5-5", [block]), 0.00435), String(priceUsd("claude-haiku-5-5", [block])));
+    // a 106,000-token prompt: 1,000 x $0.50 + 10,000 x $1 + 95,000 x $0.05 + 3,000 x $2.50
+    const long = { input: 1_000, cacheWrite5m: 0, cacheWrite1h: 10_000, cacheRead: 95_000, output: 3_000 };
+    check("W40 Haiku 5.5 over 100k: $0.02275", near(priceUsd("claude-haiku-5-5", [long]), 0.02275), String(priceUsd("claude-haiku-5-5", [long])));
+    // The tier is each request's own prompt: two 60,000-token requests stay under it (2 x $0.0034), one of 120,000 is over it ($0.034), and tokens
+    // known only as a sum never reach it
+    const half = { input: 1_000, cacheWrite5m: 0, cacheWrite1h: 9_000, cacheRead: 50_000, output: 2_000 };
+    const whole = { input: 2_000, cacheWrite5m: 0, cacheWrite1h: 18_000, cacheRead: 100_000, output: 4_000 };
+    check("W40 Haiku 5.5: the tier is per request", near(priceUsd("claude-haiku-5-5", [half, half]), 0.0068) && near(priceUsd("claude-haiku-5-5", [whole]), 0.034) && near(priceUsd("claude-haiku-5-5", [], whole), 0.0068),
+      `${priceUsd("claude-haiku-5-5", [half, half])} / ${priceUsd("claude-haiku-5-5", [whole])} / ${priceUsd("claude-haiku-5-5", [], whole)}`);
+    // A Codex turn as its usage event gives it: input 400,000 with 350,000 cached, output 20,000 with 8,000 of it reasoning (inside output_tokens);
+    // 50,000 x $2 + 350,000 x $0.10 + 20,000 x $10 - the short-context rates, as a turn is a sum of requests
+    const sol = priceUsd("gpt-6.1-sol", [], codexTokens({ inputTokens: 400_000, cachedInputTokens: 350_000, cacheWriteTokens: 0, outputTokens: 20_000 }));
+    check("W40 gpt-6.1-sol, API-equivalent: $0.335", near(sol, 0.335), String(sol));
+    // An unknown model: null, and said once however often it is priced
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+    try {
+      const unknown = [priceUsd("claude-regress-9", [block]), priceUsd("claude-regress-9", [block])];
+      check("W40 a model not in the table prices as null, said once", unknown.every((each) => each === null) && warnings.filter((line) => /claude-regress-9/.test(line)).length === 1, warnings.join(" | "));
+      // A whole SDK call as Agent SDK 0.3.280 gave it (a Haiku 5.5 tool loop of four requests, 2026-10-07): the requests from the stream's events, the
+      // SDK's side call on Haiku 4.5 from modelUsage. 8 x $0.10 + 223 x $0.20 + 14,784 x $0.01 + 151 x $0.50 = $0.00026874; 911 x $1 + 12 x $5 = $0.000971
+      const usage = (input: number, write1h: number, read: number, output: number) =>
+        sdkTokens({ input_tokens: input, cache_creation_input_tokens: write1h, cache_read_input_tokens: read, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: write1h }, output_tokens: output });
+      const requests = [usage(2, 0, 3631, 69), usage(2, 99, 3631, 32), usage(2, 62, 3730, 32), usage(2, 62, 3792, 18)].map((tokens) => ({ model: "claude-haiku-5-5", tokens }));
+      const result = { input_tokens: 8, cache_creation_input_tokens: 223, cache_read_input_tokens: 14784, output_tokens: 151, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 223 } };
+      const modelUsage = {
+        "claude-haiku-4-5-20251001": { inputTokens: 911, outputTokens: 12, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.000971, costBasis: "list" },
+        // The SDK's own figure at Opus 5.5 rates, its basis "unknown": 8 x $4 + 223 x $8 + 14,784 x $0.20 + 151 x $20
+        "claude-haiku-5-5": { inputTokens: 8, outputTokens: 151, cacheReadInputTokens: 14784, cacheCreationInputTokens: 223, costUSD: 0.0077928, costBasis: "unknown" },
+      };
+      const call = priceSdkCall(requests, result, modelUsage);
+      check("W40 an SDK call: each request priced, the side call too: $0.00123974", near(call, 0.00123974), String(call));
+      // A request whose events were missed is still counted, from modelUsage's totals, its writes at the lifetime the result gives
+      const missed = priceSdkCall(requests.slice(0, 3), result, modelUsage);
+      check("W40 a request missing from the events is priced from the totals", near(missed, 0.00123974), String(missed));
+      priceSdkCall(requests, result, modelUsage);
+      check("W40 the SDK's guess at Haiku 5.5 is said once, the right Haiku 4.5 figure not at all",
+        warnings.filter((line) => /claude-haiku-5-5: the SDK says/.test(line)).length === 1 && !warnings.some((line) => /claude-haiku-4-5/.test(line)), warnings.join(" | "));
+    } finally {
+      console.warn = warn;
+    }
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];

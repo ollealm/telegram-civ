@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { host, type AgeSummary, type HostSchema, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
+import { codexTokens, priceSdkCall, priceUsd, sdkTokens, type SdkUsage, type Tokens } from "./prices.ts";
 import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
 import { endLookIn, noteRefusals, refusalsForPrompt } from "./refusals.ts";
 import { runCodex, serveRealm, type CodexReply } from "./codex.ts";
@@ -407,7 +408,10 @@ export type Trace = {
    *  reasoning output (Codex's reasoning_output_tokens; null where the SDK gives none). Token use is a headline measure of the Sol league */
   cachedInputTokens: number | null;
   reasoningTokens: number | null;
+  /** The backend's own figure: the SDK's total_cost_usd (an Opus-rate guess for a model its catalog lacks), 0 for Codex */
   costUsd: number;
+  /** Computed from the tokens and the price table (prices.ts); API-equivalent for a Codex seat; null for a model not in the table */
+  pricedUsd: number | null;
   ms: number;
 };
 let traceSink: (trace: Trace) => void = () => {};
@@ -453,7 +457,8 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
         tools: [],
         settingSources: [],
         strictMcpConfig: true,
-        includePartialMessages: !!onText,
+        // The stream's events carry each request's own usage, so a request is priced at its own prompt size (prices.ts)
+        includePartialMessages: true,
         ...((seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) && { effort: (seat?.effort ?? EFFORT[role] ?? process.env.EFFORT) as "low" | "medium" | "high" | "xhigh" | "max" }),
         ...(outputSchema && { outputFormat: { type: "json_schema" as const, schema: outputSchema } }),
         // Use the CLI's own login even when launched from inside another Claude session
@@ -467,9 +472,14 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
     // Every text the model wrote, in order: message.result holds only what came after the last tool call, and a reply written before a
     // closing tool call (smaller_matters, paint_decision) would otherwise be lost
     const spoken: string[] = [];
+    // Each request of the loop as sent: its model and input from message_start, its final output from message_delta
+    const requests: { model: string; tokens: Tokens }[] = [];
     for await (const message of stream) {
-      if (onText && message.type === "stream_event") {
-        const event = message.event as { type: string; delta?: { type?: string; text?: string } };
+      if (message.type === "stream_event") {
+        const event = message.event as { type: string; delta?: { type?: string; text?: string }; message?: { model: string; usage: SdkUsage }; usage?: SdkUsage };
+        if (event.type === "message_start" && event.message) requests.push({ model: event.message.model, tokens: sdkTokens(event.message.usage) });
+        if (event.type === "message_delta" && event.usage?.output_tokens !== undefined && requests.length) requests.at(-1)!.tokens.output = event.usage.output_tokens;
+        if (!onText) continue;
         if (event.type === "content_block_start" && streamed) streamed += "\n\n";
         if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) { streamed += event.delta.text; onText(streamed); }
         continue;
@@ -500,6 +510,7 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
         inputTokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
         outputTokens: usage.output_tokens ?? 0,
         costUsd: message.total_cost_usd ?? 0,
+        pricedUsd: priceSdkCall(requests, usage, message.modelUsage ?? {}),
       };
       addUsage(role, spent);
       const breakdown = { cachedInputTokens: usage.cache_read_input_tokens ?? null, reasoningTokens: null };
@@ -518,7 +529,7 @@ async function call(role: string, model: string, systemPrompt: string, prompt: s
 
 /** The Codex backend: the seat's realm tools served to it from this process (codex.ts), effort as model_reasoning_effort ("max" is Codex's "xhigh"),
  *  the final message as the reply - the last one alone for a look-in, as on the SDK path - and held to the schema when one is given. Tokens are counted;
- *  the cost is 0, since the subscription gives no figure (the league labels it so) */
+ *  costUsd is 0, since the subscription bills no dollars, and pricedUsd what the tokens would cost on the API (the league labels it so) */
 async function callCodex(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }): Promise<{ text: string; data?: unknown }> {
   const { seat, outputSchema, timeoutMs } = options;
   const started = Date.now();
@@ -531,7 +542,7 @@ async function callCodex(role: string, model: string, systemPrompt: string, prom
     if (/timed out/.test((error as Error).message)) throw new Error(`${role} agent ${(error as Error).message}`);
     throw error;
   }
-  const spent = { inputTokens: reply.inputTokens, outputTokens: reply.outputTokens, costUsd: 0 };
+  const spent = { inputTokens: reply.inputTokens, outputTokens: reply.outputTokens, costUsd: 0, pricedUsd: priceUsd(model, [], codexTokens(reply)) };
   addUsage(role, spent);
   const whole = (role === "govern" ? reply.spoken.at(-1) ?? "" : reply.spoken.join("\n\n")).trim();
   let data: unknown;

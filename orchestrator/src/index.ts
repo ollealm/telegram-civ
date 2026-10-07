@@ -8,6 +8,7 @@ const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
 import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
+import { dollars } from "./prices.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
 import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
 
@@ -460,9 +461,9 @@ async function maybeStartRound() {
 function usageSummary() {
   const rows = Object.entries(state.usage).map(
     ([role, usage]) =>
-      `${role}: ${usage.calls} calls, ${Math.round(usage.inputTokens / 1000)}k in / ${Math.round(usage.outputTokens / 1000)}k out, $${usage.costUsd.toFixed(2)}`,
+      `${role}: ${usage.calls} calls, ${Math.round(usage.inputTokens / 1000)}k in / ${Math.round(usage.outputTokens / 1000)}k out, $${dollars(usage).toFixed(2)}`,
   );
-  const total = Object.values(state.usage).reduce((sum, usage) => sum + usage.costUsd, 0);
+  const total = Object.values(state.usage).reduce((sum, usage) => sum + dollars(usage), 0);
   return rows.length ? `${rows.join("\n")}\nTotal: $${total.toFixed(2)} (API-price equivalent)` : "No usage yet.";
 }
 

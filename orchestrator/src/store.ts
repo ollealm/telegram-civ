@@ -91,7 +91,9 @@ export type Seat = {
 /** A picture that was asked for: who saw it ("chronicle" for the whole world, else the civ) and what it showed */
 export type Picture = { turn: number; year: string; for: string; caption: string; description: string };
 
-export type Usage = { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
+/** costUsd as the backends report it (kept, so old records compare); pricedUsd the sum of each call's priced figure, or its costUsd where the model
+ *  has no price (prices.ts) - the figure totals show. A role first counted before pricing existed starts it from its costUsd */
+export type Usage = { calls: number; inputTokens: number; outputTokens: number; costUsd: number; pricedUsd?: number };
 
 export type State = {
   /** The realms at the table: each ruler's seat bound to its advisor bot, and the sovereigns', which have none */
@@ -175,11 +177,12 @@ export function persist() {
   renameSync(FILE + ".tmp", FILE);
 }
 
-export function addUsage(role: string, usage: Omit<Usage, "calls">) {
-  const total = (state.usage[role] ??= { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
+export function addUsage(role: string, usage: { inputTokens: number; outputTokens: number; costUsd: number; pricedUsd: number | null }) {
+  const total = (state.usage[role] ??= { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, pricedUsd: 0 });
   total.calls++;
   total.inputTokens += usage.inputTokens;
   total.outputTokens += usage.outputTokens;
+  total.pricedUsd = (total.pricedUsd ?? total.costUsd) + (usage.pricedUsd ?? usage.costUsd);
   total.costUsd += usage.costUsd;
   persist();
 }

@@ -6,6 +6,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { advisorReply, onTrace, type Trace } from "../src/agents.ts";
 import { host } from "../src/host.ts";
+import { dollars } from "../src/prices.ts";
 import { playRound } from "../src/round.ts";
 import { persist, remember, state, type Seat } from "../src/store.ts";
 
@@ -26,7 +27,7 @@ const words = (text: string) => text.trim().split(/\s+/).filter(Boolean).length;
 
 // Every model call, as it lands: seconds, tokens out, cost, tool calls
 const calls: { role: string; ms: number; out: number; usd: number; tools: string[]; reply: string }[] = [];
-onTrace((trace: Trace) => calls.push({ role: trace.role, ms: trace.ms, out: trace.outputTokens, usd: trace.costUsd, tools: trace.toolCalls.map((call) => call.name.replace(/^mcp__realm__/, "")), reply: trace.reply }));
+onTrace((trace: Trace) => calls.push({ role: trace.role, ms: trace.ms, out: trace.outputTokens, usd: dollars(trace), tools: trace.toolCalls.map((call) => call.name.replace(/^mcp__realm__/, "")), reply: trace.reply }));
 const line = (call: (typeof calls)[number]) => `${(call.ms / 1000).toFixed(1)}s, ${call.out} tokens out, $${call.usd.toFixed(3)}, ${words(call.reply)} words, tools: ${call.tools.join(" ") || "none"}`;
 
 const game = await host.state();

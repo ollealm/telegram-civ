@@ -6,6 +6,7 @@
 
 import { appendFileSync, writeFileSync } from "node:fs";
 import { advisorReply, onTrace, type Trace } from "../src/agents.ts";
+import { dollars } from "../src/prices.ts";
 import { playRound } from "../src/round.ts";
 import { persist, remember, state } from "../src/store.ts";
 
@@ -64,7 +65,7 @@ for (const [civ, script] of Object.entries(SCRIPTS)) {
     remember(seat, { from: "ruler", text: message });
     remember(seat, { from: "advisor", text: reply });
     persist();
-    const cost = traces.reduce((sum, trace) => sum + trace.costUsd, 0);
+    const cost = traces.reduce((sum, trace) => sum + dollars(trace), 0);
     say(`**Advisor** (${words(reply)} words, $${cost.toFixed(2)}, looked up: ${traces.flatMap((trace) => trace.toolCalls).filter((call) => /^(get_|look_up)/.test(call.name)).map((call) => call.name).join(" ") || "nothing"}):\n\n${reply}\n`);
     const calls = acted(traces);
     if (calls.length) say(calls.map((call) => `- ${shown(call)}`).join("\n") + "\n");
@@ -89,7 +90,7 @@ if (age === "age") {
   say("## Look-ins of the ruled realms\n");
   for (const trace of traces.filter((trace) => trace.role === "govern" && ruled.has(trace.civ ?? ""))) {
     const calls = acted([trace]);
-    say(`**${trace.civ}** ($${trace.costUsd.toFixed(2)}): ${trace.reply}\n${calls.map((call) => `- ${shown(call)}`).join("\n")}\n`);
+    say(`**${trace.civ}** ($${dollars(trace).toFixed(2)}): ${trace.reply}\n${calls.map((call) => `- ${shown(call)}`).join("\n")}\n`);
   }
-  say(`Age cost (all realms, chronicle included): $${traces.reduce((sum, trace) => sum + trace.costUsd, 0).toFixed(2)}\n`);
+  say(`Age cost (all realms, chronicle included): $${traces.reduce((sum, trace) => sum + dollars(trace), 0).toFixed(2)}\n`);
 }

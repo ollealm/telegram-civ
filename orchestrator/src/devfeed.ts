@@ -5,6 +5,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { InputFile, type Bot } from "grammy";
 import { onTrace, type Trace } from "./agents.ts";
+import { dollars } from "./prices.ts";
 import { state } from "./store.ts";
 
 const traces: Trace[] = [];
@@ -21,7 +22,7 @@ const money = (usd: number) => `$${usd.toFixed(2)}`;
 const asMarkdown = (trace: Trace) =>
   [
     `## ${trace.role}${trace.civ ? ` - ${trace.civ}` : ""}`,
-    `${trace.model} - ${Math.round(trace.inputTokens / 1000)}k in, ${trace.outputTokens} out, ${money(trace.costUsd)}, ${(trace.ms / 1000).toFixed(1)}s`,
+    `${trace.model} - ${Math.round(trace.inputTokens / 1000)}k in, ${trace.outputTokens} out, ${money(dollars(trace))}, ${(trace.ms / 1000).toFixed(1)}s`,
     `### System prompt\n${trace.systemPrompt}`,
     `### Prompt\n${trace.prompt.length > 6000 ? trace.prompt.slice(0, 6000) + "\n…(cut)" : trace.prompt}`,
     ...trace.toolCalls.map((call) => `### Tool: ${call.name}\n\`\`\`json\n${JSON.stringify(call.input, null, 1)}\n\`\`\`\nResult: ${call.result ?? "(none)"}`),
@@ -35,7 +36,7 @@ export async function flushDevFeed(bot: Bot, title: string, extra: string[] = []
   const byRole = new Map<string, { calls: number; cost: number; ms: number; tokens: number }>();
   for (const trace of batch) {
     const row = byRole.get(trace.role) ?? { calls: 0, cost: 0, ms: 0, tokens: 0 };
-    row.calls++; row.cost += trace.costUsd; row.ms += trace.ms; row.tokens += trace.inputTokens + trace.outputTokens;
+    row.calls++; row.cost += dollars(trace); row.ms += trace.ms; row.tokens += trace.inputTokens + trace.outputTokens;
     byRole.set(trace.role, row);
   }
   const orders = batch.flatMap((trace) =>
@@ -47,7 +48,7 @@ export async function flushDevFeed(bot: Bot, title: string, extra: string[] = []
   const summary = [
     `🛠 ${title}`,
     ...[...byRole].map(([role, row]) => `${role}: ${row.calls} calls, ${Math.round(row.tokens / 1000)}k tok, ${money(row.cost)}, ${(row.ms / row.calls / 1000).toFixed(0)}s avg`),
-    `total ${money(batch.reduce((sum, trace) => sum + trace.costUsd, 0))}`,
+    `total ${money(batch.reduce((sum, trace) => sum + dollars(trace), 0))}`,
     ...extra,
     ...(orders.length ? ["orders:", ...orders] : []),
   ].join("\n");

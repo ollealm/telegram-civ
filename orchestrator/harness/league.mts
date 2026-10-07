@@ -29,6 +29,7 @@ import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { chroniclerEpic, loadSchema, onTrace, playtestReview, textModel } from "../src/agents.ts";
 import { draftSovereign } from "../src/characters.ts";
 import { host } from "../src/host.ts";
+import { API_EQUIVALENT, dollars } from "../src/prices.ts";
 import { playRound } from "../src/round.ts";
 import { persist, state, type Seat } from "../src/store.ts";
 import { interviewAll } from "./interview.mts";
@@ -96,21 +97,24 @@ const failedOf = (result: string): string[] | undefined => {
 
 // Every look-in: was it scheduled or a wake-up, did it change anything, what did it cost - to judge whether the fixed look-in earns its keep
 const passes = `../data/harness/league-${stamp}-passes.csv`;
-if (!resuming) appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds,inputTokens,cachedInputTokens,outputTokens,reasoningTokens\n");
+if (!resuming) appendFileSync(passes, "turn,civ,model,trigger,orderCalls,changedNothing,costUsd,seconds,inputTokens,cachedInputTokens,outputTokens,reasoningTokens,pricedUsd\n");
 // The game turn a look-in happened at, read off the round's own log lines
 let gameTurn = 0;
+// What each seat's calls cost (look-ins, its sheet, its reflection): priced from the tokens where the model is in the table (prices.ts)
+const seatCost = new Map<string, number>();
 onTrace((trace) => {
+  if (trace.civ) seatCost.set(trace.civ, (seatCost.get(trace.civ) ?? 0) + dollars(trace));
   if (trace.role === "govern") {
     // Orders only: a look-in that just rewrote its plan changed nothing in the realm
     const orderCalls = trace.toolCalls.filter((call) => /set_orders/.test(call.name)).length;
-    appendFileSync(passes, [gameTurn, trace.civ, labelOf(trace.civ), /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000), trace.inputTokens, trace.cachedInputTokens ?? "", trace.outputTokens, trace.reasoningTokens ?? ""].join(",") + "\n");
+    appendFileSync(passes, [gameTurn, trace.civ, labelOf(trace.civ), /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled", orderCalls, /^nothing to change/i.test(trace.reply.trim()) ? 1 : 0, trace.costUsd.toFixed(3), Math.round(trace.ms / 1000), trace.inputTokens, trace.cachedInputTokens ?? "", trace.outputTokens, trace.reasoningTokens ?? "", trace.pricedUsd?.toFixed(3) ?? ""].join(",") + "\n");
     // Every real call costs something; an error that comes back as a reply (a spent session limit) costs nothing
     // A Codex seat costs no dollars (the ChatGPT subscription gives no figure): a call that used tokens was reached
     const unreached = (trace.costUsd === 0 && trace.inputTokens === 0) || trace.reply.startsWith("(failed") || /session limit|could not be reached/i.test(trace.reply);
     if (unreached) pauseIfLimited(trace.civ, trace.reply);
     lookIn(trace.civ, !unreached, trace.reply);
     appendFileSync(lookIns, JSON.stringify({ turn: gameTurn, civ: trace.civ, model: labelOf(trace.civ), trigger: /sent for ahead/.test(trace.systemPrompt) ? "wake" : "scheduled",
-      systemPrompt: trace.systemPrompt, prompt: trace.prompt, toolCalls: trace.toolCalls, reply: trace.reply, costUsd: trace.costUsd, ms: trace.ms,
+      systemPrompt: trace.systemPrompt, prompt: trace.prompt, toolCalls: trace.toolCalls, reply: trace.reply, costUsd: trace.costUsd, pricedUsd: trace.pricedUsd, ms: trace.ms,
       inputTokens: trace.inputTokens, cachedInputTokens: trace.cachedInputTokens, outputTokens: trace.outputTokens, reasoningTokens: trace.reasoningTokens }) + "\n");
   }
   for (const call of trace.toolCalls) {
@@ -141,7 +145,7 @@ if (resuming) {
   const peoples = await host.nations();
   const nations = peoples.map((nation) => nation.name).sort(() => Math.random() - 0.5);
   state.seats = seatSpecs.map(({ model, effort }, index): Seat => ({ civ: nations[index], kind: "agent", model, ...(effort && { effort }), will: "", journal: [], chat: [], ready: false }));
-  if (seatSpecs.some(({ model }) => model.startsWith("gpt-"))) say("gpt-* seats play through the Codex CLI on the ChatGPT subscription: their look-ins count tokens, and their costUsd is 0 - no dollar figure exists for them; their character sheets are drafted on Claude");
+  if (seatSpecs.some(({ model }) => model.startsWith("gpt-"))) say(`gpt-* seats play through the Codex CLI on the ChatGPT subscription: their costUsd is 0, and their dollars in pricedUsd (passes.csv, lookins.jsonl), the spent totals and the seats' costs are ${API_EQUIVALENT}; their character sheets are drafted on Claude`);
   // Fixed sovereigns take the character out of the comparison: a drafted one differs in ambition and is written by the seat's own model
   const fixedSheets = process.env.LEAGUE_CHARACTERS ? (JSON.parse(readFileSync(process.env.LEAGUE_CHARACTERS, "utf8")) as { sheet: string }[]) : undefined;
   const handedOut = new Map<string, number>();
@@ -193,7 +197,7 @@ if (reflectEffort !== "own" && !["low", "medium", "high", "xhigh", "max"].includ
 const REFLECT_EFFORT = reflectEffort === "own" ? undefined : (reflectEffort as Seat["effort"]);
 
 const csv = `../data/harness/league-${stamp}.csv`;
-if (!resuming) appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd\n");
+if (!resuming) appendFileSync(csv, "turn,year,civ,model,score,cities,rank,costUsd,pricedUsd\n");
 
 const told = new Set<string>();
 for (;;) {
@@ -204,8 +208,10 @@ for (;;) {
     chronicle: async (chapter) => say(`\n${chapter}\n`),
     log,
   });
-  const spent = Object.values(state.usage).reduce((sum, usage) => sum + usage.costUsd, 0);
-  round.rankings.forEach((row, index) => appendFileSync(csv, [round.turn, round.year, row.civ, labelOf(row.civ), row.score, row.cities, index + 1, spent.toFixed(2)].join(",") + "\n"));
+  // The SDK's figure kept beside the priced one, as in passes.csv; the totals said are the priced ones
+  const reported = Object.values(state.usage).reduce((sum, usage) => sum + usage.costUsd, 0);
+  const spent = Object.values(state.usage).reduce((sum, usage) => sum + dollars(usage), 0);
+  round.rankings.forEach((row, index) => appendFileSync(csv, [round.turn, round.year, row.civ, labelOf(row.civ), row.score, row.cities, index + 1, reported.toFixed(2), spent.toFixed(2)].join(",") + "\n"));
   // Peace, captures and the fall of a power are in the round's public events, not in the turn lines - a war shows there, its end did not
   // A round broken by urgent news resumes with its earlier events carried along: each is told once
   for (const event of round.publicEvents) if (/made peace|captured|is no more|has been destroyed/.test(event.text) && !told.has(`${event.turn} ${event.text}`)) { told.add(`${event.turn} ${event.text}`); say(`T${event.turn} ${event.text}`); }
@@ -226,6 +232,10 @@ for (;;) {
       appendFileSync(`../data/harness/league-${stamp}-reviews.md`, `## ${seat.civ} - ${labelOf(seat.civ)} - ${seat.character?.name}\n\nWill:\n${seat.will}\n\nPlan:\n${seat.plan ?? ""}\n\nJournal:\n${seat.journal.join("\n")}\n\nReview:\n${review}\n\n`);
     }
     await interviewAll(state.seats, `../data/harness/league-${stamp}-interviews.md`, true, REFLECT_EFFORT, ending);
+    // The final standings' cost, reviews and interviews included
+    const total = Object.values(state.usage).reduce((sum, usage) => sum + dollars(usage), 0);
+    const codexSeats = state.seats.some((seat) => seat.model?.startsWith("gpt-"));
+    say(`cost by seat${resuming ? " since the resume" : ""}: ${state.seats.map((seat) => `${seat.civ} (${labelOf(seat.civ)}) $${(seatCost.get(seat.civ) ?? 0).toFixed(2)}`).join(", ")}; spent $${total.toFixed(2)} in all${codexSeats ? ` (gpt-* seats: ${API_EQUIVALENT})` : ""}`);
     break;
   }
 }

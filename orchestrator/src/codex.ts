@@ -11,8 +11,9 @@ import { join } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 export type CodexToolCall = { name: string; input: unknown; result?: string };
-/** Tokens exactly as codex's --json usage event reports them: input_tokens (cached included), cached_input_tokens, output_tokens, reasoning_output_tokens */
-export type CodexReply = { spoken: string[]; toolCalls: CodexToolCall[]; inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningTokens: number; failure?: string };
+/** Tokens exactly as codex's --json usage event reports them: input_tokens (cached and cache-written included), cached_input_tokens, cache_write_input_tokens,
+ *  output_tokens (reasoning included), reasoning_output_tokens */
+export type CodexReply = { spoken: string[]; toolCalls: CodexToolCall[]; inputTokens: number; cachedInputTokens: number; cacheWriteTokens: number; outputTokens: number; reasoningTokens: number; failure?: string };
 
 /** The realm's MCP server (the instance createSdkMcpServer made) on 127.0.0.1, an ephemeral port, for one call */
 export async function serveRealm(instance: { connect(transport: unknown): Promise<void>; close(): Promise<void> }) {
@@ -48,7 +49,7 @@ export async function runCodex(model: string, systemPrompt: string, prompt: stri
       ...(served ? ["-c", `mcp_servers.realm.url=${JSON.stringify(served.url)}`, "-c", `mcp_servers.realm.default_tools_approval_mode="approve"`] : []),
       ...(options.outputSchema ? ["--output-schema", join(dir, "schema.json")] : []),
       "--json", "-"];
-    const reply: CodexReply = { spoken: [], toolCalls: [], inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+    const reply: CodexReply = { spoken: [], toolCalls: [], inputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 };
     let pending = "";
     const read = (line: string) => {
       let event: { type?: string; item?: Record<string, unknown>; usage?: Record<string, number>; message?: string; error?: { message?: string } };
@@ -61,6 +62,7 @@ export async function runCodex(model: string, systemPrompt: string, prompt: stri
       if (event.type === "turn.completed" && event.usage) {
         reply.inputTokens += event.usage.input_tokens ?? 0;
         reply.cachedInputTokens += event.usage.cached_input_tokens ?? 0;
+        reply.cacheWriteTokens += event.usage.cache_write_input_tokens ?? 0;
         reply.outputTokens += event.usage.output_tokens ?? 0;
         reply.reasoningTokens += event.usage.reasoning_output_tokens ?? 0;
       }

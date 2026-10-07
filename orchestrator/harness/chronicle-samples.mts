@@ -10,6 +10,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { host } from "../src/host.ts";
+import { dollars } from "../src/prices.ts";
 
 const source = process.argv[2];
 const ages = Number(process.argv[3] ?? 2);
@@ -68,6 +69,6 @@ for (let age = 1; age <= ages; age++) {
   }
   if (round.stoppedEarly && /has won/.test(round.stoppedEarly)) break;
 }
-const spent = Object.values(state.usage).reduce((sum, usage) => sum + usage.costUsd, 0);
+const spent = Object.values(state.usage).reduce((sum, usage) => sum + dollars(usage), 0);
 appendFileSync(out, `Spent: $${spent.toFixed(2)}\n`);
 say("samples:", out, `spent $${spent.toFixed(2)}`);
