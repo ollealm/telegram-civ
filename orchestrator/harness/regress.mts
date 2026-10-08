@@ -737,6 +737,84 @@ const CASES: Record<string, () => Promise<void>> = {
       console.warn = warn;
     }
   },
+  async W41() { // Run 36 at T310: the mood's parts below zero only; "its own" Apollo; "knows X: yes/no"; the victory in every court's log; the officials sell no building
+    const courts = ["Iroquois", "India", "England", "Persia", "Siam", "Egypt", "Russia", "The Maya", "Carthage", "The Ottomans", "Austria", "Greece"];
+    const hydro = ["India", "Egypt", "The Ottomans", "Austria"];
+    const host = await start("run36-t310", "", undefined, (game) => {
+      const civ = (name: string) => game.civilizations.find((c: any) => c.civName === name);
+      // Siam's own Apollo Program and Egypt's last part (its Engine) both finish this turn: the world hears the one, every court the end
+      const satchanalai = civ("Siam").cities.find((c: any) => c.name === "Si Satchanalai").cityConstructions;
+      satchanalai.inProgressConstructions = { ...satchanalai.inProgressConstructions, "Apollo Program": 100000 };
+      const thebes = civ("Egypt").cities.find((c: any) => c.name === "Thebes").cityConstructions;
+      thebes.inProgressConstructions = { ...thebes.inProgressConstructions, "SS Engine": 100000 };
+      // A Hydro Plant in every city of four powers with their Apollo Program: their Aluminum runs short, and the engine's officials sell one to free it
+      for (const name of hydro) for (const city of civ(name).cities) if (!city.cityConstructions.builtBuildings.includes("Hydro Plant")) city.cityConstructions.builtBuildings.push("Hydro Plant");
+    });
+    const briefings = Object.fromEntries(await Promise.all(courts.map(async (name) => [name, (await get(`/briefing?civ=${civ(name)}`)).json])));
+    const parts = new Set(["cities", "population", "luxuries", "buildings", "policiesWondersAndFaith", "other"]);
+    const moods = courts.map((name) => ({ name, happiness: briefings[name].happiness as number, breakdown: briefings[name].happinessBreakdown as Record<string, number> | undefined }));
+    check("W41 the mood's parts only below zero", moods.some((m) => m.happiness < 0) && moods.every((m) => (m.happiness < 0) === (m.breakdown !== undefined)), moods.map((m) => `${m.name} ${m.happiness} ${m.breakdown ? "parts" : "-"}`).join(", "));
+    const sums = moods.filter((m) => m.breakdown).map((m) => ({ ...m, sum: Object.values(m.breakdown!).reduce((a, b) => a + b, 0) }));
+    check("W41 the parts are the six kinds and sum to the mood", sums.every((m) => Object.keys(m.breakdown!).every((key) => parts.has(key)) && Math.abs(m.sum - m.happiness) <= 3), sums.map((m) => `${m.name} ${m.happiness} = ${m.sum} ${JSON.stringify(m.breakdown)}`).join(" | "));
+    const unhappy = moods.filter((m) => m.happiness < 0).map((m) => (briefings[m.name].warnings as string[]).find((w) => /people are unhappy/.test(w)) ?? "");
+    check("W41 the mood warning says what one more luxury adds", unhappy.every((w) => /each distinct luxury not yet ours would add \d+/.test(w)), unhappy.map((w) => w.slice(0, 120)).join(" | "));
+    const others = courts.flatMap((name) => (briefings[name].spaceship?.others ?? []) as string[]);
+    check("W41 the rivals' ships say 'knows X: yes/no', never 'not yet known to them'", others.some((line) => /\(knows [^:]+: (yes|no)\)/.test(line)) && !others.some((line) => /known to them/.test(line)), others.slice(0, 2).join(" | "));
+    check("W41 a rival's Apollo Program is its own", others.some((line) => /its own Apollo Program stands/.test(line)) && courts.every((name) => !briefings[name].spaceship?.note || /^Each power builds its own Apollo Program before its parts/.test(briefings[name].spaceship.note)));
+    const before = readFileSync(join(host.dir, "save.unciv"), "utf8");
+    await post("/advance", { turns: 1 });
+    const events = ((await get("/events?since=309")).json as { text: string }[]).map((event) => event.text);
+    check("W41 the world hears Siam's Apollo Program as its own", events.some((text) => /^Siam completed its own Apollo Program in Si Satchanalai: its race for the stars begins\.$/.test(text)), events.filter((text) => /Apollo/.test(text)).join(" | "));
+    check("W41 another court hears it as Siam's own", (await logOf("Persia", 309)).some((line) => /^Siam completed its own Apollo Program in Si Satchanalai: its race for the stars begins\.$/.test(line.text)));
+    const winner = (await get("/state")).json.winner as string | undefined;
+    const told = await Promise.all(courts.map(async (name) => ({ name, lines: (await logOf(name, 309)).filter((line) => /won a Scientific victory/.test(line.text)) })));
+    check("W41 the victory is in every court's own log, once", winner === "Egypt" && told.every((court) => court.lines.length === 1 && (court.name === "Egypt" ? /^We have won a Scientific victory: the spaceship is complete and has launched\. The game is over\.$/ : /^Egypt has won a Scientific victory: its spaceship is complete and has launched\. The game is over\.$/).test(court.lines[0].text)),
+      `${winner}; ` + told.filter((court) => court.lines.length !== 1).map((court) => `${court.name}: ${court.lines.length}`).join(", ") + " " + (told[5]?.lines[0]?.text ?? ""));
+    const hydroCount = (saved: string) => { const game = JSON.parse(gunzipSync(Buffer.from(saved, "base64")).toString("utf8"));
+      return hydro.map((name) => game.civilizations.find((c: any) => c.civName === name).cities.filter((c: any) => c.cityConstructions.builtBuildings.includes("Hydro Plant")).length).join(","); };
+    const sold = (await Promise.all(hydro.map((name) => logOf(name, 309)))).flat().filter((line) => /sold the/.test(line.text));
+    check("W41 the officials sell no building, Aluminum short or not", hydroCount(before) === hydroCount(readFileSync(join(host.dir, "save.unciv"), "utf8")) && sold.length === 0, `${hydroCount(before)} -> ${hydroCount(readFileSync(join(host.dir, "save.unciv"), "utf8"))}; ${sold.map((line) => line.text).join(" | ")}`);
+    await stop(host);
+  },
+  async W42() { // Run 36 at T300: settlers with no site come ashore on our land and stay; the renewals ordered in a turn are one line; a refused proposal is told once
+    const host = await start("run36-t300");
+    // The renewals Siam has not yet ordered, ordered at once: one line for them all
+    const ending = ((await get(`/briefing?civ=Siam`)).json.dealsLedger?.endingSoon ?? []) as string[];
+    const renew = ending.filter((line) => /order renew/.test(line)).map((line) => ({ power: line.slice(0, line.indexOf(": ")), terms: line.slice(line.indexOf(": ") + 2, line.indexOf(" - ")) }));
+    await orders("Siam", { renew });
+    const renewLines = (await logOf("Siam", 299)).filter((line) => /to be offered again, on the same terms/.test(line.text));
+    check("W42 the renewals ordered in a turn are told in one line", renew.length >= 2 && renewLines.length === 1 && new RegExp(`^By your order: ${renew.length} deals are to be offered again`).test(renewLines[0].text), `${renew.length} ordered; ${renewLines.length} lines: ${renewLines[0]?.text.slice(0, 160)}`);
+    const settlers = { Greece: [737], Persia: [633, 639], "The Maya": [654, 661] } as Record<string, number[]>;
+    const where: Record<string, string[]> = {};
+    for (let turn = 0; turn < 8; turn++) {
+      for (const [name, ids] of Object.entries(settlers)) {
+        const warnings = (await get(`/briefing?civ=${civ(name)}`)).json.warnings as string[];
+        for (const id of ids) (where[`${name} #${id}`] ??= []).push(warnings.find((w) => w.startsWith(`Settler #${id} `))?.match(/It (waits|stands)/)?.[1] ?? "gone or ordered");
+      }
+      await post("/advance", { turns: 1 });
+    }
+    const back = Object.entries(where).filter(([, seen]) => seen.includes("waits") && seen.slice(seen.indexOf("waits")).includes("stands"));
+    check("W42 a settler with no site, once ashore, never goes back to sea", back.length === 0, back.map(([unit, seen]) => `${unit}: ${seen.join(" ")}`).join(" | "));
+    check("W42 the settlers near home are ashore within eight turns", ["Greece #737", "The Maya #661", "The Maya #654"].every((unit) => where[unit]?.at(-1) === "waits"), Object.entries(where).map(([unit, seen]) => `${unit}: ${seen.join(" ")}`).join(" | "));
+    const ashoreLines = (await Promise.all(Object.keys(settlers).map((name) => logOf(name, 299)))).flat().filter((line) => /comes ashore/.test(line.text));
+    const told = ashoreLines.map((line) => /#(\d+)/.exec(line.text)?.[1]);
+    check("W42 coming ashore is told once a settler", told.length >= 3 && new Set(told).size === told.length, ashoreLines.map((line) => line.text).slice(0, 3).join(" | "));
+    // The officials' refused proposals: terms refused once by a power are not told as proposed or refused again
+    const courts = ["Iroquois", "India", "England", "Persia", "Siam", "Egypt", "Russia", "The Maya", "Carthage", "The Ottomans", "Austria", "Greece"];
+    const repeats = (await Promise.all(courts.map(async (name) => {
+      const lines = (await logOf(name, 299)).map((line) => line.text);
+      const refused = lines.map((text) => /^The officials' proposal to (.+?) \((.+)\) was refused/.exec(text)).filter(Boolean).map((m) => `${m![1]}: ${m![2]}`);
+      return refused.filter((key, index) => refused.indexOf(key) !== index).map((key) => `${name} -> ${key}`);
+    }))).flat();
+    check("W42 a refused proposal of the officials is told refused once", repeats.length === 0, repeats.slice(0, 3).join(" | "));
+    const perTurn = (await Promise.all(courts.map(async (name) => {
+      const counts = new Map<string, number>();
+      for (const line of await logOf(name, 299)) if (/ended and (was|were each) offered again/.test(line.text)) counts.set(`${name} T${line.turn}`, (counts.get(`${name} T${line.turn}`) ?? 0) + 1);
+      return [...counts].filter(([, n]) => n > 1).map(([key, n]) => `${key}: ${n}`);
+    }))).flat();
+    check("W42 the renewals sent in a turn are one line", perTurn.length === 0, perTurn.slice(0, 3).join(" | "));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
