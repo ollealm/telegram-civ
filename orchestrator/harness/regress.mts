@@ -690,8 +690,8 @@ const CASES: Record<string, () => Promise<void>> = {
     const block = { input: 1_000, cacheWrite5m: 2_000, cacheWrite1h: 10_000, cacheRead: 50_000, output: 3_000 };
     // 1,000 x $4 + 2,000 x $5 + 10,000 x $8 + 50,000 x $0.20 + 3,000 x $20, per million
     check("W40 Opus 5.5: $0.164", near(priceUsd("claude-opus-5-5", [block]), 0.164), String(priceUsd("claude-opus-5-5", [block])));
-    // x $2, $2.50, $4, $0.20, $10
-    check("W40 Sonnet 5.5: $0.087", near(priceUsd("claude-sonnet-5-5", [block]), 0.087), String(priceUsd("claude-sonnet-5-5", [block])));
+    // x $2, $2.50, $4, $0.10, $10
+    check("W40 Sonnet 5.5: $0.082", near(priceUsd("claude-sonnet-5-5", [block]), 0.082), String(priceUsd("claude-sonnet-5-5", [block])));
     // a 63,000-token prompt: x $0.10, $0.125, $0.20, $0.01, $0.50
     check("W40 Haiku 5.5 under 100k: $0.00435", near(priceUsd("claude-haiku-5-5", [block]), 0.00435), String(priceUsd("claude-haiku-5-5", [block])));
     // a 106,000-token prompt: 1,000 x $0.50 + 10,000 x $1 + 95,000 x $0.05 + 3,000 x $2.50

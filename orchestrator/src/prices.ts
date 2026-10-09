@@ -4,7 +4,7 @@
 // Prices are USD per million tokens, copied from the official pages:
 //   Claude: https://platform.claude.com/docs/en/about-claude/pricing.md (Model pricing table), read 2026-10-07
 //   OpenAI: https://developers.openai.com/api/docs/pricing (Standard pricing data; "Short context: <=272K input tokens. Long context: >272K"), read 2026-10-07
-// The page conflicts with itself on one figure: the Claude table gives Sonnet 5.5 cache hits as $0.20, its prompt-caching section as 0.05x ($0.10).
+// Sonnet 5.5 cache hits are $0.10 (0.05x): the page's table now agrees with its prompt-caching section (read again 2026-10-09; on 2026-10-07 the table still said $0.20).
 // The table's figure is used here, as the prompt-caching page's own table gives it too.
 // A model missing here prices as null (and says so once); add it from the same pages, with the date read.
 
@@ -30,7 +30,7 @@ const PRICES: Record<string, Price> = {
   "claude-opus-4-7": claude(5, 6.25, 10, 0.5, 25),
   "claude-opus-4-6": claude(5, 6.25, 10, 0.5, 25),
   "claude-opus-4-5": claude(5, 6.25, 10, 0.5, 25),
-  "claude-sonnet-5-5": claude(2, 2.5, 4, 0.2, 10),
+  "claude-sonnet-5-5": claude(2, 2.5, 4, 0.1, 10),
   "claude-sonnet-5": claude(2, 2.5, 4, 0.2, 10),
   "claude-sonnet-4-6": claude(3, 3.75, 6, 0.3, 15),
   "claude-sonnet-4-5": claude(3, 3.75, 6, 0.3, 15),
