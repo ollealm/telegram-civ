@@ -657,6 +657,13 @@ Then ${turnsPerRound} turns pass - ${yearsOf(turnsPerRound, briefing)} - while y
   );
 };
 
+/** In a look-in the refusals block above the briefing carries what set_orders turned back, across look-ins: the order ledger's own "refused" stays out of it */
+const withoutLedgerRefusals = (briefing: unknown) => {
+  const ledger = (briefing as { standingOrders?: { sinceLastLookIn?: Record<string, unknown> } })?.standingOrders?.sinceLastLookIn;
+  if (ledger) delete ledger.refused;
+  return briefing;
+};
+
 /** The advisor governing between audiences: a short pass every few turns, with the fresh briefing already in hand */
 export const governPass = async (seat: Seat, sinceTurn: number, turnsAhead: number, wokenBy: string[] = [], newAge = false) => {
   const refused = refusalsForPrompt(seat);
@@ -670,7 +677,7 @@ ${seat.kind === "agent" ? "You are looking in on your realm, as you do every few
 ${newAge ? "An age has turned. Before the day's business, weigh the longer game for a moment - what this realm is becoming, and what would undo it - and if your course should change, rewrite your standing intent with record_rulers_will (goals, stance towards each neighbour, red lines; a few lines, no history). If it should not, leave it be. Then read your operating plan against the realm as it now is, and rewrite it if it has gone stale.\n" : ""}Reply with only a 1-3 sentence log entry of what you found and ordered (it goes into your journal), or "Nothing to change".${seat.kind === "agent" ? `
 A sovereign is heard of in the world's history by what they let fall: once an age at most, when the age has moved you to it, proclaim says one sentence aloud in your own voice for the heralds to carry. Never a plan, the treasury, research or a weakness.` : `
 If you met a decision in this look-in that you truly wished you could have put to the ruler before acting - one their record does not answer and that could not wait for the next audience - set it down with wish_i_could_ask. You cannot send for them; this is kept to learn whether advisors should ever be able to. Most look-ins have no such wish.`}`,
-      `${memory(seat)}\n\n${refused}Briefing:\n${JSON.stringify(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)"))}`,
+      `${memory(seat)}\n\n${refused}Briefing:\n${JSON.stringify(withoutLedgerRefusals(await host.briefing(seat.civ, sinceTurn).catch(() => "(unavailable - use get_briefing)")))}`,
       { seat, canRecordWill: newAge, sideTools: seat.kind === "agent" ? ["proclaim"] : ["wish_i_could_ask"] },
     );
   } finally {

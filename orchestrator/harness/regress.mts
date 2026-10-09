@@ -815,6 +815,30 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W42 the renewals sent in a turn are one line", perTurn.length === 0, perTurn.slice(0, 3).join(" | "));
     await stop(host);
   },
+  async W43() { // the order ledger (standingOrders.awaiting, .sinceLastLookIn): what waits on an outcome and what became of the orders, in the log's words, not twice
+    const host = await start("run36-t300");
+    const given = await orders("Greece", { queue: [{ city: "Sparta", items: ["Nuclear Plant", "Science"] }, { city: "Corinth", items: ["Flying Carpet Factory"] }],
+      trade: [{ with: "Siam", give: [{ item: "Gold", amount: 30 }] }], units: [{ unit: 737, action: "move", x: 20, y: 11 }] });
+    await post("/advance", { turns: 1 });
+    const briefing = (await get(`/briefing?civ=Greece&since=299`)).json;
+    const ledger = briefing.standingOrders ?? {};
+    const awaiting = (ledger.awaiting ?? []) as string[];
+    const since = (ledger.sinceLastLookIn ?? {}) as Record<string, string[]>;
+    check("W43 awaiting: the proposal and who answers it", awaiting.some((line) => /^Our proposal to Siam \(we give Gold x30; they give nothing\): Siam is an advised court/.test(line)), awaiting.join(" | "));
+    check("W43 awaiting: a march under way, whither and turns so far", awaiting.some((line) => /^Settler #737 is on its way to .+, \d+ turns? so far/.test(line)) || briefing.units.some((unit: string) => /^Settler #737 .* in Athens/.test(unit)), awaiting.join(" | "));
+    check("W43 awaiting: an item waiting for its tech, with why", awaiting.some((line) => /^Nuclear Plant waits in Sparta's queue: it needs Nuclear Fission/.test(line)));
+    check("W43 awaiting: the renewals set to go out", awaiting.some((line) => /is to be offered again the turn it ends\.$/.test(line)));
+    check("W43 refused: what set_orders turned back, with its turn", (given.json.failed as string[]).length === 1 && (since.refused ?? []).some((line) => /^T301: Unknown building or unit Flying Carpet Factory/.test(line)), JSON.stringify(since.refused));
+    check("W43 carried out: the order's own line", (since.carriedOut ?? []).some((line) => /^T301: By your order: Sparta's queue is now Science/.test(line)), JSON.stringify(since.carriedOut));
+    const all = [...awaiting, ...Object.values(since).flat()];
+    check("W43 the ledger's lines are not in the log a second time", !(briefing.log as string[]).some((line) => all.includes(line)));
+    check("W43 no unit number in prose: units by name and #id only", !all.some((line) => /\b(unit|number|no\.) ?#?\d+/i.test(line)), all.find((line) => /\b(unit|number|no\.) ?#?\d+/i.test(line)));
+    // A later briefing with no window of its own reaches back one look-in only
+    await post("/advance", { turns: 6 });
+    const later = (await get(`/briefing?civ=Greece`)).json.standingOrders?.sinceLastLookIn?.refused ?? [];
+    check("W43 the since list is capped at the look-in window", !later.some((line: string) => /^T301:/.test(line)), JSON.stringify(later));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];

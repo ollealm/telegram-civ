@@ -3872,10 +3872,10 @@ index 0000000..ec06cec
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
 new file mode 100644
-index 0000000..159567a
+index 0000000..aa77dd5
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerDiplomacy.kt
-@@ -0,0 +1,1204 @@
+@@ -0,0 +1,1217 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -4080,6 +4080,19 @@ index 0000000..159567a
 +    }
 +
 +    /** Who answers what is put to [other], in one wording wherever it is said: an advised court's advisor at its look-in, or the officials on their turn */
++    /** The order ledger's part of diplomacy: what the ruler proposed that waits on another's answer, our friendships proposed and not yet answered,
++     *  and the renewals set to go out when a deal ends - in the log's words */
++    fun awaiting(civ: Civilization): List<String> {
++        val game = civ.gameInfo
++        val answers = { name: String -> game.civilizations.firstOrNull { it.civName == name }?.let { whoAnswers(it) } ?: "they answer on their turn" }
++        return pending.filter { it.first == civ.civName }.map { (_, to, terms) -> if (terms == "peace") "Peace proposed to $to: ${answers(to)}." else "Our proposal to $to ($terms): ${answers(to)}." } +
++            game.civilizations.filter { other -> other.popupAlerts.any { it.type == AlertType.DeclarationOfFriendship && it.value == civ.civID } }
++                .map { "A Declaration of Friendship proposed to ${it.civName}: ${whoAnswers(it)}." } +
++            renewals.filter { it.civ == civ.civName }.map { renewal ->
++                if (renewal.friendship) "The Declaration of Friendship with ${renewal.partner} is to be proposed again the turn it lapses."
++                else "The ${renewal.goods} deal with ${renewal.partner} (${renewal.terms}) is to be offered again the turn it ends" + (if (renewal.afterFriendship) ", once ${renewal.partner} has taken the friendship proposed again" else "") + "." }
++    }
++
 +    fun whoAnswers(other: Civilization): String =
 +        if (other.civID in RulerOverrides.ruledCivs) "${other.civName} is an advised court: its advisor answers at its next look-in" else "they answer on their turn"
 +    private fun String.capitalised() = replaceFirstChar { it.uppercase() }
@@ -5082,10 +5095,10 @@ index 0000000..159567a
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
 new file mode 100644
-index 0000000..d5b2d39
+index 0000000..500fd7c
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerHost.kt
-@@ -0,0 +1,3274 @@
+@@ -0,0 +1,3308 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonReader
@@ -5596,6 +5609,8 @@ index 0000000..d5b2d39
 +        Memory("focusedCities", true, { RulerOverrides.focusedCities.clear() }, { RulerOverrides.focusedCities.toList() }, { json -> json?.asStringArray()?.let { RulerOverrides.focusedCities += it } }),
 +        Memory("cadence", true, { ageTurns = 12; lookInTurns = 4 }, { mapOf("ageTurns" to ageTurns, "lookInTurns" to lookInTurns) },
 +            { json -> json?.let { ageTurns = it.getInt("ageTurns", 12); lookInTurns = it.getInt("lookInTurns", 4) } }),
++        Memory("refusedOrders", true, { refusedOrders.clear() }, { refusedOrders.mapValues { (_, list) -> list.map { mapOf("turn" to it.first, "text" to it.second) } } },
++            { json -> json?.forEach { civ -> refusedOrders[civ.name] = ArrayList(civ.map { it.getInt("turn") to it.getString("text") }) } }),
 +        Memory("waiting", true, { waiting.clear() }, { waiting }, { json -> json?.forEach { city -> waiting[city.name] = ArrayList(city.asStringArray().toList()) } }),
 +        Memory("inPlay", true, { inPlaySeen.clear() }, { inPlaySeen.filterValues { it.isNotEmpty() }.mapValues { it.value.sorted() } },
 +            { json -> json?.forEach { civ -> inPlaySeen[civ.name] = civ.asStringArray().toHashSet() } }), // older files have none: latched afresh
@@ -5905,6 +5920,34 @@ index 0000000..d5b2d39
 +    /** Every field an order may carry: an order with none of them is no order (a model that wrapped its fields in "arguments" sent nothing) */
 +    /** city id -> what the ruler queued there before it could be built, in the order given: each starts once it can (startWaiting) */
 +    private val waiting = HashMap<String, ArrayList<String>>()
++
++    /** By realm: the lines set_orders sent back under "failed", with the turn - the order ledger's "refused" */
++    private val refusedOrders = HashMap<String, ArrayList<Pair<Int, String>>>()
++
++    /** The court's orders in one view, from what the host already keeps (asked for by every Sol seat, Runs 34-38): what waits on an outcome, and what became
++     *  of the orders since the last look-in - carried out, refused (set_orders turned it back), lapsed (another power refused it, let it drop or countered it)
++     *  and overridden (the order dropped or undone by what happened) - one line each in the log's words. Nothing in it is decided here */
++    private fun orderLedger(civ: Civilization, logSince: Int?): Pair<Map<String, Any?>, Set<String>> {
++        val since = maxOf(logSince ?: -1, game().turns - lookInTurns - 1)
++        val sorted = chanceryLog(civ, since).mapNotNull { line -> ledgerKind(line["text"] as String)?.let { it to "T${line["turn"]}: ${line["text"]}" } }.groupBy({ it.first }, { it.second })
++        val waits = civ.cities.flatMap { city -> waiting[city.id].orEmpty().mapNotNull { item -> runCatching { civ.construction(item) }.getOrNull()?.let {
++            "$item waits in ${city.name}'s queue: ${whyNot(city, it, city.cityConstructions.constructionQueue.toList()).ifEmpty { listOf("what it needs is queued ahead of it") }.joinToString()}." } } }
++        return mapOf(
++            "awaiting" to diplomacy.awaiting(civ) + units.awaiting(civ) + waits,
++            "sinceLastLookIn" to mapOf("carriedOut" to sorted["carriedOut"], "refused" to refusedOrders[civ.civName]?.filter { it.first > since }?.map { "T${it.first}: ${it.second}" },
++                "lapsed" to sorted["lapsed"], "overridden" to sorted["overridden"])
++        ) to sorted.values.flatten().toSet()
++    }
++
++    /** Which part of the ledger a log line of ours belongs to, if any: the host's own wording is the record */
++    private fun ledgerKind(text: String): String? = when {
++        LEDGER_OVERRIDDEN.containsMatchIn(text) -> "overridden"
++        text.startsWith("Our proposal to ") -> if (" was accepted" in text) "carriedOut" else "lapsed"
++        text.startsWith("By your order") || text.startsWith("By your standing order") || LEDGER_RELIEVED.containsMatchIn(text) -> "carriedOut"
++        else -> null
++    }
++    private val LEDGER_OVERRIDDEN = Regex("order is dropped|is dropped:|is spent|but it cannot be|could not be done|did not take|no longer waits|no longer usable|could not use its ability|stays and the order|^The officials dropped .+ from .+'s queue")
++    private val LEDGER_RELIEVED = Regex("^Our .+ relieved the .+ as garrison")
 +
 +    /** Each turn, before the officials' turn: a waiting item that can now be built goes to the front of its city's queue, in the order given; one that can
 +     *  never be built there now (a wonder raised elsewhere, made obsolete) is dropped, and both are told */
@@ -6253,6 +6296,8 @@ index 0000000..d5b2d39
 +            applyStandingOrders(civ)
 +            save()
 +        }
++        // The order ledger's "refused": what set_orders turned back, by turn, kept an age
++        if (failed.isNotEmpty()) refusedOrders.getOrPut(civ.civName) { ArrayList() }.apply { addAll(failed.map { stamp() to it }); removeAll { it.first <= stamp() - ageTurns } }
 +        return mapOf("orders" to standing.toMap(civ), "done" to done, "failed" to failed,
 +            "researchQueue" to civ.tech.techsToResearch, "researchNote" to "researchQueue is the scholars' path to the first goal; every goal stands under orders.research and is taken up in turn",
 +            "gold" to civ.gold)
@@ -7547,6 +7592,7 @@ index 0000000..d5b2d39
 +        val next = civ.stats.statsForNextTurn
 +        val turn = civ.gameInfo.turns
 +        val sites = units.citySites(civ) // the full site search, once: the warnings want it too
++        val ledger = orderLedger(civ, logSince)
 +        return mapOf(
 +            "civ" to civ.civName,
 +            "turn" to turn,
@@ -7617,16 +7663,17 @@ index 0000000..d5b2d39
 +            "strategicResources" to strategicResources(civ),
 +            "religion" to told(civ, "religion"),
 +            "knownCivs" to diplomacy.relations(civ),
-+            "log" to condensed(chanceryLog(civ, logSince ?: (turn - ageTurns)).map { "T${it["turn"]}: ${it["text"]}" }),
++            "log" to condensed(chanceryLog(civ, logSince ?: (turn - ageTurns)).map { "T${it["turn"]}: ${it["text"]}" }.filter { it !in ledger.second }),
 +            "peaceOffers" to diplomacy.peaceOffers(civ),
 +            "tradeOffers" to diplomacy.tradeOffers(civ) + diplomacy.friendshipOffers(civ),
 +            "demands" to diplomacy.demands(civ),
 +            "dealsLedger" to diplomacy.ledger(civ, lookInTurns + 1),
 +            // The posture with where its host at sea is bound: the generals' own craft, told, no decision asked
-+            "standingOrders" to orders[civ.civName]?.toMap(civ)?.let { standing ->
++            // The standing orders, and the ledger of the rest: the lines it carries are not in the log a second time
++            "standingOrders" to (orders[civ.civName]?.toMap(civ)?.let { standing ->
 +                val posture = standing["posture"]
 +                if (posture is Map<*, *> && !hostAtSea[civ.civName].isNullOrEmpty()) standing + ("posture" to posture + ("hostAtSea" to hostAtSea[civ.civName])) else standing
-+            }
++            } ?: emptyMap()) + ledger.first
 +        )
 +    }
 +
@@ -8479,10 +8526,10 @@ index 0000000..6dccfc1
 +}
 diff --git a/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
 new file mode 100644
-index 0000000..7178f4c
+index 0000000..676b049
 --- /dev/null
 +++ b/desktop/src/com/unciv/app/desktop/ruler/RulerUnits.kt
-@@ -0,0 +1,824 @@
+@@ -0,0 +1,840 @@
 +package com.unciv.app.desktop.ruler
 +
 +import com.badlogic.gdx.utils.JsonValue
@@ -8515,7 +8562,9 @@ index 0000000..7178f4c
 +         *  to notice an order that is going nowhere - standing still or wandering alike */
 +        var stepsBest: Int? = null
 +        var turnsStuck = 0
-+        fun toMap() = mapOf("action" to action, "x" to x, "y" to y, "ability" to ability, "to" to to, "stepsBest" to stepsBest, "turnsStuck" to turnsStuck)
++        /** Turns the unit has marched under this order without arriving: the order ledger's "turns so far" */
++        var turnsMarching = 0
++        fun toMap() = mapOf("action" to action, "x" to x, "y" to y, "ability" to ability, "to" to to, "stepsBest" to stepsBest, "turnsStuck" to turnsStuck, "turnsMarching" to turnsMarching)
 +    }
 +
 +    /** unit id -> order */
@@ -8582,7 +8631,7 @@ index 0000000..7178f4c
 +    fun load(json: JsonValue?) {
 +        orders.clear()
 +        json?.forEach { orders[it.name.toInt()] = Order(it.getString("action"), it.get("x")?.takeUnless { v -> v.isNull }?.asInt(), it.get("y")?.takeUnless { v -> v.isNull }?.asInt(), it.get("ability")?.takeUnless { v -> v.isNull }?.asString(), it.getString("to", null)).apply {
-+            stepsBest = it.get("stepsBest")?.takeUnless { v -> v.isNull }?.asInt(); turnsStuck = it.getInt("turnsStuck", 0) } }
++            stepsBest = it.get("stepsBest")?.takeUnless { v -> v.isNull }?.asInt(); turnsStuck = it.getInt("turnsStuck", 0); turnsMarching = it.getInt("turnsMarching", 0) } }
 +    }
 +
 +    fun toMap() = orders.mapKeys { it.key.toString() }.mapValues { it.value.toMap() }
@@ -8713,6 +8762,7 @@ index 0000000..7178f4c
 +                // Nearer is fewer steps left at the turn's start than at any before: a march that moves but comes no nearer - the way reckoned through unknown ground
 +                // closing as it is explored (Babylon's Warrior wandered at sea for 18 turns, Run 22) - is as stuck as one that stands still
 +                val best = order.stepsBest
++                order.turnsMarching++
 +                order.turnsStuck = if (best != null && way.size >= best) order.turnsStuck + 1 else 0
 +                order.stepsBest = if (best == null) way.size else minOf(best, way.size)
 +                if (order.turnsStuck >= 3) {
@@ -8901,6 +8951,19 @@ index 0000000..7178f4c
 +    private fun drop(unit: MapUnit) {
 +        orders.remove(unit.id)
 +        if (unit.isGreatPerson()) released += unit.id
++    }
++
++    /** The order ledger's part of the units: marches under way (whither, turns so far) and re-armings put off to our next turn, in the log's words */
++    fun awaiting(civ: Civilization): List<String> {
++        val marching = setOf("move", "settle", "garrison", "use", "gift")
++        return orders.entries.sortedBy { it.key }.mapNotNull { (id, order) ->
++            val unit = civ.units.getUnitById(id) ?: return@mapNotNull null
++            val target = order.x?.let { x -> order.y?.let { y -> civ.gameInfo.tileMap.getIfTileExistsOrNull(x, y) } }
++            if (order.action !in marching || target == null || unit.getTile() == target) return@mapNotNull null
++            val purpose = when (order.action) { "settle" -> " to found a city"; "garrison" -> " to garrison it"; "use" -> " to use its ability${order.ability?.let { " ($it)" } ?: ""}"; "gift" -> " to be given to ${order.to}"; else -> "" }
++            "${unit.name} #$id is on its way to ${where(civ, target)}$purpose, ${order.turnsMarching} turn${if (order.turnsMarching == 1) "" else "s"} so far" +
++                (if (order.turnsStuck > 0) ", no nearer for ${order.turnsStuck}" else "") + "."
++        } + rearmNext.keys.mapNotNull { id -> civ.units.getUnitById(id)?.let { "${it.name} #$id had marched when its re-arming was ordered: it is re-armed at the start of our next turn, if the treasury still allows." } }
 +    }
 +
 +    /** At the start of our turn, before the officials spend a coin: the re-armings ordered for units that had marched. Re-arming keeps a unit's number */
