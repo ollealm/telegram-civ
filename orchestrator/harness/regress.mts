@@ -5,7 +5,7 @@
 // REGRESS_PORT (default 8772; never 8765 or 8790), FIXTURES_DIR (default ../data/fixtures), HOST_SH (default ../host.sh). Sequential; about a minute on this machine (each host answers in a few seconds).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -758,9 +758,11 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W41 the parts are the six kinds and sum to the mood", sums.every((m) => Object.keys(m.breakdown!).every((key) => parts.has(key)) && Math.abs(m.sum - m.happiness) <= 3), sums.map((m) => `${m.name} ${m.happiness} = ${m.sum} ${JSON.stringify(m.breakdown)}`).join(" | "));
     const unhappy = moods.filter((m) => m.happiness < 0).map((m) => (briefings[m.name].warnings as string[]).find((w) => /people are unhappy/.test(w)) ?? "");
     check("W41 the mood warning says what one more luxury adds", unhappy.every((w) => /each distinct luxury not yet ours would add \d+/.test(w)), unhappy.map((w) => w.slice(0, 120)).join(" | "));
-    const others = courts.flatMap((name) => (briefings[name].spaceship?.others ?? []) as string[]);
-    check("W41 the rivals' ships say 'knows X: yes/no', never 'not yet known to them'", others.some((line) => /\(knows [^:]+: (yes|no)\)/.test(line)) && !others.some((line) => /known to them/.test(line)), others.slice(0, 2).join(" | "));
-    check("W41 a rival's Apollo Program is its own", others.some((line) => /its own Apollo Program stands/.test(line)) && courts.every((name) => !briefings[name].spaceship?.note || /^Each power builds its own Apollo Program before its parts/.test(briefings[name].spaceship.note)));
+    // The rivals' ships are the race view's lines since 2026-10-10 (spaceship.others said the same, and is gone)
+    const others = courts.flatMap((name) => ((briefings[name].victory?.race?.Scientific ?? []) as string[]).filter((line) => !line.startsWith("us: ")));
+    check("W41 the rivals' ships name the learning each lacks, never 'not yet known to them'", others.some((line) => /it has yet to learn [^;]+ \(for the SS [A-Za-z ]+\)/.test(line)) && !others.some((line) => /known to them/.test(line)) &&
+      courts.every((name) => briefings[name].spaceship?.others === undefined), others.slice(0, 2).join(" | "));
+    check("W41 a rival's Apollo Program is its own", others.some((line) => /its own Apollo Program/.test(line)) && courts.every((name) => !briefings[name].spaceship?.note || /^Each power builds its own Apollo Program before its parts/.test(briefings[name].spaceship.note)));
     const before = readFileSync(join(host.dir, "save.unciv"), "utf8");
     await post("/advance", { turns: 1 });
     const events = ((await get("/events?since=309")).json as { text: string }[]).map((event) => event.text);
@@ -837,6 +839,83 @@ const CASES: Record<string, () => Promise<void>> = {
     await post("/advance", { turns: 6 });
     const later = (await get(`/briefing?civ=Greece`)).json.standingOrders?.sinceLastLookIn?.refused ?? [];
     check("W43 the since list is capped at the look-in window", !later.some((line: string) => /^T301:/.test(line)), JSON.stringify(later));
+    await stop(host);
+  },
+  async W44() { // the race view says what is under way (2026-10-10): a rival's line carries what it lacks, its last step and how long ago, what is under way and where;
+    // a part added, a branch of policy completed and the United Nations built are public events the courts that know the power hear; no turns to come, ever
+    const host = await start("run36-t300", "", undefined, (game) => {
+      const civ = (name: string) => game.civilizations.find((c: any) => c.civName === name);
+      const city = (power: string, name: string) => civ(power).cities.find((c: any) => c.name === name).cityConstructions;
+      // Persia's Booster in its capital finishes this turn, to be added to its ship
+      const persepolis = city("Persia", "Persepolis");
+      persepolis.inProgressConstructions = { ...persepolis.inProgressConstructions, "SS Booster": 100000 };
+      // Siam is one policy short of Tradition again, with the culture to adopt it and the order to
+      const siam = civ("Siam").policies;
+      siam.adoptedPolicies = siam.adoptedPolicies.filter((p: string) => p !== "Monarchy" && p !== "Tradition Complete");
+      siam.numberOfAdoptedPolicies -= 1;
+      siam.storedCulture = 0;
+      // Egypt builds the United Nations this turn; Austria has it under way in Vienna
+      for (const name of ["Egypt", "Austria"]) civ(name).tech.techsResearched.push("Globalization");
+      const thebes = city("Egypt", "Thebes");
+      thebes.constructionQueue = ["United Nations", ...thebes.constructionQueue];
+      thebes.inProgressConstructions = { ...thebes.inProgressConstructions, "United Nations": 100000 };
+      const vienna = city("Austria", "Vienna");
+      vienna.constructionQueue = ["United Nations", ...vienna.constructionQueue];
+    });
+    // Culture for that one policy and no more, so the step is the order's: read from the briefing, planted on a restart
+    const needed = (await get(`/briefing?civ=Siam`)).json.culture?.neededForNextPolicy as number;
+    await stop(host);
+    const again = await start("run36-t300", "", host.dir, (game) => { game.civilizations.find((c: any) => c.civName === "Siam").policies.storedCulture = needed; });
+    const race = async (name: string) => (await get(`/briefing?civ=${civ(name)}`)).json.victory?.race as Record<string, string[]>;
+    const lineOf = (view: Record<string, string[]>, road: string, power: string) => view?.[road]?.find((line) => line.startsWith(`${power}: `)) ?? "";
+    const before = await race("Egypt");
+    check("W44 a rival's parts still to add and the learning it lacks for them", /^India: 4 of 6 spaceship parts; still to add to its ship: an SS Engine and an SS Stasis Chamber; it has yet to learn Particle Physics \(for the SS Engine\) and Nanotechnology \(for the SS Stasis Chamber\)/.test(lineOf(before, "Scientific", "India")), lineOf(before, "Scientific", "India"));
+    check("W44 parts under way, and where", /; SS Boosters are under way in Persepolis, Susa and Tarsus$/.test(lineOf(before, "Scientific", "Persia")), lineOf(before, "Scientific", "Persia"));
+    check("W44 the last step and how long ago, from the events recorded", /; it completed its own Apollo Program last turn;/.test(lineOf(before, "Scientific", "Persia")));
+    check("W44 a rival's own Apollo Program under way", /; its own Apollo Program is under way in Utique$/.test(lineOf(before, "Scientific", "Carthage")), lineOf(before, "Scientific", "Carthage"));
+    // Egypt's five parts were added before the parts were told: no older step stands in for the last one
+    check("W44 no last step the standing does not match", !/ ago|this turn|last turn/.test(lineOf(await race("Persia"), "Scientific", "Egypt")), lineOf(await race("Persia"), "Scientific", "Egypt"));
+    check("W44 the branches still to complete", /^India: 4 of 5 branches of policy complete; 1 more branch of policy to complete, then the Utopia Project$/.test(lineOf(before, "Cultural", "India")), lineOf(before, "Cultural", "India"));
+    check("W44 the United Nations under way before it stands", (before.Diplomatic ?? []).includes("Austria: the United Nations is under way in Vienna"), JSON.stringify(before.Diplomatic));
+    await orders("Siam", { policyBranches: ["Tradition"] });
+    await post("/advance", { turns: 1 });
+    const events = ((await get("/events?since=300")).json as { text: string }[]).map((event) => event.text);
+    const un = events.find((text) => /^Egypt completed the wonder United Nations in Thebes/.test(text)) ?? "";
+    check("W44 the United Nations built: the wonder's line says the vote it brings", /: the vote for world leader begins\.$/.test(un), un);
+    const branch = "Siam completed the branch of policy Tradition: 3 of the 5 a cultural victory asks.";
+    check("W44 a branch of policy completed is a public event", events.includes(branch), events.filter((text) => /^Siam/.test(text)).join(" | "));
+    check("W44 a court that knows the power hears it, its own court as ours", (await logOf("Egypt", 300)).some((line) => line.text === branch) && (await logOf("Siam", 300)).some((line) => line.text === "We completed the branch of policy Tradition: 3 of the 5 a cultural victory asks."));
+    const after = await race("Egypt");
+    check("W44 the step's age in the race line", /; it completed the branch of policy Tradition this turn$/.test(lineOf(after, "Cultural", "Siam")), lineOf(after, "Cultural", "Siam"));
+    check("W44 the holder of the United Nations: votes short and its last step", /^us: \d+ of \d+ votes, in the city-states allied$/.test(lineOf(after, "Diplomatic", "us")) &&
+      /^Egypt: \d+ of \d+ votes, in the city-states allied; \d+ votes? short; it completed the United Nations this turn$/.test(lineOf(await race("Persia"), "Diplomatic", "Egypt")), lineOf(await race("Persia"), "Diplomatic", "Egypt"));
+    await post("/advance", { turns: 2 });
+    const added = ((await get("/events?since=300")).json as { text: string }[]).map((event) => event.text).find((text) => /^Persia added /.test(text)) ?? "";
+    check("W44 a part added to a spaceship is a public event, with the count", /^Persia added an SS Booster to its spaceship in Persepolis: 1 of 6 parts\.$/.test(added), added);
+    check("W44 its own court hears it as ours", (await logOf("Persia", 300)).some((line) => line.text === "We added an SS Booster to our spaceship in Persepolis: 1 of 6 parts."));
+    check("W44 the part's step in the race line", /; it added an SS Booster to its spaceship (this turn|last turn|2 turns ago)/.test(lineOf(await race("Egypt"), "Scientific", "Persia")), lineOf(await race("Egypt"), "Scientific", "Persia"));
+    // Invariants over every court's race view: no turns to come, no stage word, no engine token
+    const views = await Promise.all(["Egypt", "Persia", "Siam", "Carthage", "Greece", "Austria"].map(race));
+    const text = views.flatMap((view) => Object.values(view ?? {}).flat()).join("\n");
+    const banned = /turns? (to|until|left|more)|\bin \d+ turns?|nearly|almost|soon|\[|\d+ turns?\b(?! ago)/;
+    check("W44 no turns to come, no stage word, no bracket", !banned.test(text), (text.match(new RegExp(`.{60}(${banned.source}).{20}`)) ?? [""])[0]);
+    await stop(again);
+  },
+  async W45() { // the officials free no resource from a unit the court bought this turn (Carthage's Rocket Artillery, Run 40); a 20th turn's backup is kept for good
+    const host = await start("run36-t300");
+    // India has 3 Aluminum and none in use: two Rocket Artillery bought leave it one, and the officials free Aluminum for the spaceship below two
+    const bought = await orders("India", { purchase: [{ city: "Delhi", item: "Rocket Artillery" }, { city: "Mumbai", item: "Rocket Artillery" }] });
+    const ids = ((bought.json.done ?? []) as string[]).map((line) => /Rocket Artillery #(\d+)/.exec(line)?.[1]).filter(Boolean);
+    // Backups planted from long ago, T21 to T99: past the rolling dozen once T301 is played, all but every 20th turn's go
+    for (let turn = 21; turn <= 99; turn++) mkdirSync(join(host.dir, "backups", `turn-${String(turn).padStart(4, "0")}`), { recursive: true });
+    await post("/advance", { turns: 1 });
+    const units = (await get(`/briefing?civ=India`)).json.units as string[];
+    const freed = (await logOf("India", 300)).filter((line) => line.turn === 301 && /disbanded by the officials to free its Aluminum/.test(line.text));
+    check("W45 a unit bought this turn is not disbanded to free its resource", ids.length === 2 && ids.every((id) => units.some((unit) => unit.startsWith(`Rocket Artillery #${id} `))) && freed.length === 0,
+      `${ids.join(",")}; ${freed.map((line) => line.text).join(" | ")}`);
+    const kept = ["turn-0040", "turn-0060", "turn-0080"].every((name) => existsSync(join(host.dir, "backups", name)));
+    const pruned = ["turn-0021", "turn-0041", "turn-0059", "turn-0081"].every((name) => !existsSync(join(host.dir, "backups", name)));
+    check("W45 every 20th turn's backup survives the rolling dozen; the others go", kept && pruned && existsSync(join(host.dir, "backups", "turn-0301")));
     await stop(host);
   },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
