@@ -918,6 +918,42 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W45 every 20th turn's backup survives the rolling dozen; the others go", kept && pruned && existsSync(join(host.dir, "backups", "turn-0301")));
     await stop(host);
   },
+  async W46() { // an acknowledged warning stays folded, first clause, every look-in while its condition stands, whatever its figures and names do
+    // (Spain's starvation, Run 42; a weak defender swapped for another as weak brought the line back in full, Runs 20 and 29). Planted on Japan at T100:
+    // Tokyo at 30 people with nothing stored starves for turns on end; Kyoto is held by a Scout, later swapped for a Catapult, both weak
+    const plantDefender = (name: string) => (game: any) => {
+      const kyoto = game.tileMap.tileList.find((tile: any) => (tile.position?.x ?? 0) === 11 && (tile.position?.y ?? 0) === 2);
+      game.lastUnitId += 1;
+      kyoto.militaryUnit = { owner: "Japan", originalOwner: "Japan", name, id: game.lastUnitId, currentMovement: 2 };
+    };
+    const host = await start("t100-world", "", undefined, (game) => {
+      const tokyo = game.civilizations.find((civ: any) => civ.civName === "Japan").cities.find((city: any) => city.name === "Tokyo");
+      tokyo.population.population = 30;
+      tokyo.population.foodStored = 0;
+      plantDefender("Scout")(game);
+    });
+    const briefing = async () => (await get(`/briefing?civ=Japan`)).json as { warnings: string[]; warningsAcknowledged?: string[] | null; cities: { name: string; foodSurplus: number }[] };
+    const first = await briefing();
+    check("W46 the planted warnings stand in full", first.warnings.includes("Tokyo is starving.") && first.warnings.some((line) => line.startsWith("Kyoto is only held by a Scout")), first.warnings.join(" | "));
+    const acknowledged = await orders("Japan", { acknowledge: ["Tokyo is starving", "Kyoto is only held by a Scout"] });
+    check("W46 both are acknowledged", acknowledged.status === 200 && (acknowledged.json.done as string[]).filter((line) => line.startsWith("Acknowledged: ")).length === 2, JSON.stringify(acknowledged.json.done ?? acknowledged.json));
+    // The soldier holding Kyoto changes for another as weak: the city is still weakly held, so the line stays folded, naming the soldier there now
+    await stop(host);
+    const again = await start("t100-world", "", host.dir, plantDefender("Catapult"));
+    const swapped = await briefing();
+    check("W46 a weak defender swapped for another stays folded, its first clause as it reads now", (swapped.warningsAcknowledged ?? []).includes("Kyoto is only held by a Catapult") && !swapped.warnings.some((line) => line.startsWith("Kyoto is only held by")),
+      `${swapped.warnings.join(" | ")} || ${(swapped.warningsAcknowledged ?? []).join(" | ")}`);
+    // Two turns played: while Tokyo still starves its line is folded at every look-in, and never in full
+    for (const turn of [1, 2]) {
+      await post("/advance", { turns: 1 });
+      const now = await briefing();
+      const tokyo = now.cities.find((city) => city.name === "Tokyo");
+      check(`W46 Tokyo still starves after ${turn} turn${turn === 1 ? "" : "s"}`, (tokyo?.foodSurplus ?? 0) < 0, `${tokyo?.foodSurplus}`);
+      check(`W46 its acknowledged line is still folded after ${turn} turn${turn === 1 ? "" : "s"}`, (now.warningsAcknowledged ?? []).includes("Tokyo is starving") && !now.warnings.some((line) => line.startsWith("Tokyo is starving")),
+        `${now.warnings.join(" | ")} || ${(now.warningsAcknowledged ?? []).join(" | ")}`);
+    }
+    await stop(again);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];
