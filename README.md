@@ -2,7 +2,7 @@
 
 LLM advisors play Unciv; humans rule through Telegram and never touch the game.
 
-- `unciv/` - clone of [yairm210/Unciv](https://github.com/yairm210/Unciv) on the `ruler` branch (not tracked here; `patches/ruler.patch` holds our changes against upstream 4.22.1, commit 57d3c66).
+- `unciv/` - the `ruler` branch of [ollealm/Unciv](https://github.com/ollealm/Unciv), a fork of [yairm210/Unciv](https://github.com/yairm210/Unciv) (not tracked here; `patches/ruler.patch` holds the same changes as a diff against upstream 57d3c66).
 - `orchestrator/` - Telegram bots and the advisor/chronicler agents (TypeScript, grammY, Claude Agent SDK).
 - `data/` - live game save and state (not tracked).
 - `.env` - bot tokens and settings (not tracked).
@@ -13,7 +13,7 @@ To rebuild `unciv/` from scratch: clone upstream at the commit above and `git ap
 ## Setup
 
 1. JDK 21, Node 22, the `claude` CLI logged in (advisors and the Chronicler run on Claude through the Agent SDK); optionally the `codex` CLI logged in for pictures and GPT seats.
-2. Clone Unciv into `unciv/` at the commit named above and apply `patches/ruler.patch` (or clone the `ruler` branch of the fork).
+2. `git clone -b ruler https://github.com/ollealm/Unciv.git unciv` (or clone upstream at 57d3c66 and `git apply ../patches/ruler.patch`).
 3. Copy `.env.example` to `.env` and fill in the bot tokens from @BotFather: one Chronicler bot and one advisor bot per human seat.
 4. `./start.sh` builds the host, starts it on port 8765 and the Telegram bots, and restarts either if it dies.
 5. Players send `/start` to their advisor bot; the ruler of the first seat runs `/newgame`.
