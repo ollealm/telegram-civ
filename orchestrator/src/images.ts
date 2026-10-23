@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { host, type AgeSummary } from "./host.ts";
 
 const ENABLED = process.env.IMAGES !== "off";
@@ -46,19 +47,19 @@ async function viaGemini(prompt: string, references: Reference[]): Promise<Buffe
     if (!response.ok) throw Object.assign(new Error(`${response.status} ${JSON.stringify((json as any).error?.message ?? json).slice(0, 200)}`), { status: response.status });
     return json;
   };
-  const images = references.map((reference) => reference.png.toString("base64"));
+  const images = references.map((reference) => ({ mime: /\.jpe?g$/i.test(reference.name) ? "image/jpeg" : "image/png", data: reference.png.toString("base64") }));
   let json: unknown;
   try {
     json = await post(`${GEMINI_API}/interactions`, {
       model: GEMINI_MODEL,
-      input: [{ type: "text", text: prompt }, ...images.map((data) => ({ type: "image", mime_type: "image/png", data }))],
+      input: [{ type: "text", text: prompt }, ...images.map(({ mime, data }) => ({ type: "image", mime_type: mime, data }))],
       response_format: { type: "image" },
     });
   } catch (error) {
     if (![404].includes((error as { status?: number }).status ?? 0)) throw error; // a 400 is about our request - say so, do not mask it
     // Older surface of the same API
     json = await post(`${GEMINI_API}/models/${GEMINI_MODEL}:generateContent`, {
-      contents: [{ parts: [{ text: prompt }, ...images.map((data) => ({ inline_data: { mime_type: "image/png", data } }))] }],
+      contents: [{ parts: [{ text: prompt }, ...images.map(({ mime, data }) => ({ inline_data: { mime_type: mime, data } }))] }],
       generationConfig: { responseModalities: ["IMAGE"] },
     });
   }
@@ -131,16 +132,80 @@ async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer
   }
 }
 
-/** How a mapmaker of the age would have drawn it */
-const cartography = (era: string) =>
-  /Ancient/.test(era) ? "a map painted on papyrus in earth pigments, in the manner of the oldest maps: stylised waves, little drawn towns of mud and stone, rivers as blue ribbons, the edges worn"
-  : /Classical/.test(era) ? "a map in the manner of a classical mosaic or a painted wall map: tesserae-like colour, columned cities, a wine-dark sea, a laurel border"
-  : /Medieval/.test(era) ? "an illuminated medieval map on vellum, with gold leaf, tiny castles and cathedrals for cities, sea monsters, a knotwork border and gothic lettering"
-  : /Renaissance/.test(era) ? "a hand-coloured copperplate map of the age of discovery, with engraved relief, wind heads, a compass rose and a decorated cartouche"
-  : /Industrial/.test(era) ? "a finely engraved and hand-tinted nineteenth-century atlas plate: hachured mountains, delicate washes, elegant copperplate lettering, a vignette of steam and iron in the cartouche"
-  : /Modern/.test(era) ? "a lithographed pictorial map of the early twentieth century, in the manner of the great railway and shipping-line posters: bold flat colour, illustrated vignettes of factories and stations in the margins, an art-nouveau cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
-  : /Atomic/.test(era) ? "a mid-century illustrated pictorial map, in the manner of the airline and world's-fair maps: clean shapes, confident colour, isometric buildings, radio masts and airfields drawn small, a modern sans-serif cartouche; ornament of that age only - no sea monsters, wind heads or medieval figures"
-  : "a richly illustrated contemporary atlas map: satellite-like shaded relief in natural colour, cities drawn as small illustrated skylines seen from above, clean modern lettering, a restrained cartouche; entirely of its own age - no sea monsters, wind heads, parchment or medieval figures";
+/** The ages a map is painted in, each with the style Olle chose for it (data/harness/map-all-ages-2026-10-22, selected-recipes.json, 2026-10-23);
+ *  an era the game names otherwise (Future) is painted as Information */
+export const MAP_AGES = ["Ancient", "Classical", "Medieval", "Renaissance", "Industrial", "Modern", "Atomic", "Information"] as const;
+type MapAge = (typeof MAP_AGES)[number];
+const mapAge = (era: string): MapAge => MAP_AGES.find((age) => era.includes(age)) ?? "Information";
+
+/** Each age's map language, its towns and units, and what sets it apart from the age before; campaign: what the campaign plate adds, where it differs */
+const MAP_STYLES: Record<MapAge, { map: string; towns: string; change: string; campaign: string }> = {
+  Ancient: {
+    map: "Warm fresh papyrus. Assured broad, slightly broken charcoal-brown brush strokes with ochre, muted green, rust and mineral-blue touches: a flat pictorial diagram, never scenic landscape or perspective. Coasts and rivers carry expressive hand movement; the sea is small separated groups of wave marks with a few shore stones, not a continuous blue band or a shaded cliff coast. Well-spaced clusters of tree glyphs, short patterned field strips and a few hill chevrons give the land substance, with visible blank gaps among them and no continuous grain of filler. Labels in a rough brush-written hand. The signs are deliberate, confident and beautiful, not a child's drawing.",
+    towns: "Settlements are tiny flat side-elevation pictograms: a few mud-brick walls, flat roofs, a timber or thatch shelter, a fenced enclosure or granary. The capital or largest town is two to four linked signs, smaller towns one or two. No columned temple, tower or castle. Units are minute flat profile glyphs in the same brush: a spear-bearer, a walking person, a pack animal, a boat as a single hull sign. Few assured marks, no faces, no shaded bodies; storytelling through signs, not figurines.",
+    change: "The first age: the only one drawn as flat pictograms with no depth at all, towns as small linked sign groups and units as minute profile glyphs.",
+    campaign: "",
+  },
+  Classical: {
+    map: "A detailed regional plan on pale papyrus with subtle reed-pen fibre, drawn in warm carbon ink with muted blue water strokes and wash, olive grove accents and touches of vermilion on roofs and standards. Little linear hill chains, grove signs and patterned field strips give more order and detail than Ancient pictograms, still restrained and legible. Labels in Roman capitals. Keep ample open surface and restrained colour; the map stays substantially simpler than Medieval and later plates. Neither a painted panorama nor a sparse abstract outline, and not later engraving, decorative columns or scroll rollers. Do not force it into monochrome.",
+    towns: "Compact, slightly dimensional walled towns and civic precincts seen a little obliquely: low walls, a gate, civic pediments, colonnades and small roof groups, with modest depth and restrained shading, much simpler than later town prospects. The capital or largest town is a walled precinct with a colonnaded civic block and two or three subordinate roofs; lesser towns simpler, a coastal one a gate and harbour line, a distant one a small walled sign. Never flatten them into abstract signs. Units are small standards and worker or tool marks, with a few restrained profile strokes for people, integrated in the same ink and colour accents. At sea, small oared galleys in a few ink strokes. More ordered than Ancient glyphs; no realistic toy people, no medieval spires.",
+    change: "The rough Ancient brush gives way to finer, ordered carbon-ink drawing with restrained colour, towns gain walls and slight depth as civic precincts, and units become small standards and tool marks instead of profile glyphs.",
+    campaign: "",
+  },
+  Medieval: {
+    map: "An opulent illuminated manuscript map on clean ivory vellum: flat lapis-blue water with fine gold strokes, malachite green land, vermilion and small burnished-gold accents in a flat mineral-pigment hand. Graphic undulating ribbon rivers, patterned rows of hill forms and small grouped tree signs, with delicate manuscript pen work and a narrow, beautifully painted foliate edge. Rich but composed, with plenty of label space; flat expressive silhouettes, not aerial landscape rendering. Restrained, legible blackletter. Where far land runs into blankness it ends in a soft unfinished pigment edge rather than a newly outlined coast.",
+    towns: "Towns are compact flat or stacked manuscript vignettes of stone walls, timber roofs, keeps and church towers, varied in silhouette: some only ordinary roof clusters with a low church, not an identical castle at every label. The capital or largest town is a compact walled town with low roofs and one important civic tower, not a fantasy forest of turrets; towers stay modest in height. Each visible force is a handful of tiny gestural brush marks: low-detail mounted riders, small shield-and-spear foot groups, working figures; at sea, small medieval sailing craft. Figures fit the height of a doorway and sit partly hidden by terrain, realm colour only on a pennon or small cloth accent, never whole coloured bodies, and never stiff rows of toy soldiers.",
+    change: "Restrained ink gives way to opulent flat pigment, gold and a painted border, towns become varied manuscript vignettes with keeps and church towers, and units become gestural riders and spear groups with pennons.",
+    campaign: "",
+  },
+  Renaissance: {
+    map: "A generous copperplate atlas engraving of the age of discovery: hairline dark-brown incisions, engraved hill relief and close parallel sea strokes, with subdued hand washes of teal water and ochre and sage land. Rich cartographic craft, a small elegant strapwork title cartouche and one compact compass rose in known open water, all ornament subordinate to the map. Balanced and finely drawn; clearly engraved, not gold manuscript illumination or a painted fantasy landscape.",
+    towns: "Small oblique walled town prospects: tiled roofs, bastions, civic towers, quays and occasional domes, varied from town to town; the capital or largest town larger but still subordinate to the map. Armies are tiny sketched pike-and-shot detachments, cavalry and minute field pieces in fine brown engraved strokes with small realm-colour pennants and varied profiles; fine irregular marks imply motion. A group is smaller than a town and a person smaller than a doorway, yet readable on close inspection. At sea, small galleons or oared craft. No oversized people, no stiff rows, no repeated front-facing figures.",
+    change: "Flat illuminated pigment gives way to copperplate line, hachured relief and hand washes, towns become oblique bastioned prospects with domes, and units become engraved pike-and-shot, cavalry and field-piece groups.",
+    campaign: "",
+  },
+  Industrial: {
+    map: "A quiet, pale nineteenth-century steel-engraved atlas plate on pale cream paper: precise grey-brown hachured relief, hairline shore strokes, translucent sage and ochre land washes and muted slate-blue water fading softly into the paper. Fine river lines, modest engraved serif lettering, a restrained double-rule plate edge and a small typographic title. Rich topographic information in a measured print hierarchy; no baroque gilding, wind heads, medieval symbols or large title illustration.",
+    towns: "Compact brick urban blocks with mills, chimney groups, iron bridges, modest stations and quays, the industrial landmarks differing by settlement and staying tiny; no skyscrapers, and chimneys not enlarged everywhere. Infrastructure may enrich a town's vicinity but never becomes a network of roads across unknown country. Land forces are very small rifle, cavalry and artillery detachments in the same delicate grey-brown ink with minute uniform or pennant accents: every person smaller than a doorway in the nearby town, never as tall as its roofs, with a trace of walking movement rather than standing rows, still visible on close inspection. At sea, small steam vessels with a wisp of smoke. No portraits or bright toy uniforms.",
+    change: "The decorated Renaissance engraving turns into a pale, quiet steel plate with a plain rule edge, towns become brick blocks with chimneys, mills and stations, and units become minute rifle, horse and gun detachments beside steamships.",
+    campaign: "",
+  },
+  Modern: {
+    map: "A striking early-twentieth-century travel-map lithograph: bold yet sophisticated flat shapes of jade, navy, muted coral and cream, graceful simplified and gently faceted terrain, crisp printed shadow forms and controlled ink grain. A pictorial map, not photoreal terrain, rich through considered shapes rather than dense microtexture; warm, inviting and confident in colour. An assured tall-lettered typographic heading and a minimal, restrained Art Deco frame. No gilded scrollwork, parchment, medieval figures or steel-engraved hatching.",
+    towns: "Small printed vignettes of early twentieth-century urban life: compact low-to-mid-rise masonry street blocks, varied civic rooflines, a small station roof or harbour crane where it fits, a few brick industry details and a little heritage architecture, but no repeated spire clusters. No glass supertowers, slab suburbs or saturated toy skylines; buildings stay tiny, not a parade of large landmarks. Forces are tiny grounded troop or vehicle groups drawn with a few gestural strokes, not rows of dolls, and tiny steamships where ships stand, all in the same simplified lithographic shape language. No decorative fleets or extra aircraft.",
+    change: "The pale hachured steel plate gives way to bold flat lithographic colour shapes and printed shadows, towns become masonry street blocks with station roofs and cranes, and units become gestural early-twentieth-century troop and vehicle groups.",
+    campaign: "",
+  },
+  Atomic: {
+    map: "A vivid mid-century airline or world's-fair pictorial map, brighter and clearer than Modern: assured cut-paper-like gouache shapes, simplified gently faceted landforms, turquoise coasts on a warm cream ground, olive and mustard land with coral accents, and fine offset-print grain. Economical but lively drawing with playful adult editorial confidence. A strong geometric sans-serif heading, no ornate cartouche or parchment. A superb 1950s or 1960s printed map, not a modern game interface.",
+    towns: "Compact, low isometric groups of flat-roofed civic buildings in a coherent mid-century editorial hand: a small slab block, a modest radio mast, a station canopy or harbour shed, built from very few deliberately geometric shapes with restrained shadow planes, varied from town to town. The capital or largest town may have two or three modest taller modernist blocks; no spire forests, red-roofed castles, Manhattan skylines or futuristic landmarks, and an airfield only as a tiny town detail. Land forces are tiny groups of olive tracked vehicles with a few minute infantry strokes on open ground, simple olive and charcoal silhouettes with a trace of shadow, each vehicle no bigger than a small house; at sea, small naval silhouettes. No toy models, giant soldiers, comic icons or floating aircraft ornaments.",
+    change: "The lithograph's deep confident colour brightens into cut-paper gouache with turquoise and mustard, towns become low isometric slabs with radio masts, and units become olive tracked vehicles and grey naval silhouettes.",
+    campaign: "",
+  },
+  Information: {
+    map: "A contemporary editorial relief atlas on a fresh white ground, so blank unknown surface reads as paper and never as sea. Continuous, richly painted natural terrain: deep marine-blue coastal water clearly edged against the white, layered forest green and mineral-grey ridges, bright river networks and very fine urban texture. High information density with a calm visual hierarchy. Crisp, quiet modern sans-serif labels set directly on pale clearings without old placards, a minimal modern heading and generous clean margins. No parchment, ornamental frame, cartouche or compass. A contemporary illustrated atlas, not a videogame board or satellite interface.",
+    towns: "Compact contemporary urban fabric with varied density: small high-rise clusters only for major centres, quays, civic buildings and a few rooftop details, road textures confined to settled patches. The capital or largest town is the densest and largest. Forces are minute naturalistically painted vehicle and infantry formations, subdued olive and grey with small realm accents, a group comparable to a few tiny houses or smaller; at sea, tiny naval vessels. Never military icons, oversized machines or soldiers, futuristic toys, or swarms of aircraft, satellites or drones.",
+    change: "Flat mid-century gouache gives way to continuous naturalistic painted relief on white, towns become contemporary urban fabric with high-rise cores, and units become minute naturalistic vehicle formations.",
+    campaign: "",
+  },
+};
+
+/** What every age's map keeps, said once */
+const MAP_RULES = "Draw a complete head-on map of the known world, not a photograph of a map object and not a modern game map dressed in a period border. Atmosphere and the drawing hand matter more than exact coordinates, but named towns keep their broad places and the broad coasts, bays, rivers and main landmass silhouette hold. Shores are natural, with no hexagonal, honeycomb or tile traces. Unexplored surface stays blank, the age's own plain ground, never new water or filled land. Remote glimpses stay separate vignettes that thin out into that blankness on their unseen sides: no invented islands, coast rings or continents, and no joining every patch into one landmass. Richness comes from cartographic craft, not added content: no extra place names, sea names, scale bars, resource dots, UI, badges or circular icons. Labels are clear and quiet, each name copied exactly as written. Towns and units belong to the same medium and hand as the terrain. Forces appear only where units stand, each group smaller than a town, and no armies, fleets or aircraft are invented elsewhere. Leave ample space between labels and unit groups. Never mosaic in any form: no tesserae, tiled stone or mosaic texture anywhere.";
+
+/** How a mapmaker of the age draws it: the age's chosen style, for the atlas or for the campaign plate */
+export const cartography = (era: string, kind: "atlas" | "campaign" = "atlas") => {
+  const age = mapAge(era);
+  const style = MAP_STYLES[age];
+  return `THE ${age.toUpperCase()} AGE'S MAP: ${style.map}
+TOWNS AND UNITS: ${style.towns}
+${style.change}${kind === "campaign" && style.campaign ? `\nON THE CAMPAIGN PLATE: ${style.campaign}` : ""}`;
+};
+
+/** The image the age's style was chosen by, downscaled (orchestrator/assets/map-styles): passed as a style starting point, never as geography */
+const styleReference = (era: string, kind: "atlas" | "campaign") =>
+  ({ name: "style.jpg", png: readFileSync(fileURLToPath(new URL(`../assets/map-styles/${mapAge(era)}-${kind}.jpg`, import.meta.url))) });
+const STYLE_NOTE = "style.jpg is a map of another world, made in this age's style: a style starting point only - its ground, hand, palette and way of drawing towns and figures. Never copy its geography, coasts, names or places, and do not repeat it mark for mark; the map you make is of the world in map.png.";
 
 /** The schematic's badges in words, so that the painter paints the companies that are there, as what they are, and no others */
 function companies(civ: string, inSight: AgeSummary["inSight"] | undefined): string {
@@ -158,21 +223,24 @@ export async function paintedMap(civ: string): Promise<Buffer> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
   const now = await host.age(civ, Number(briefing.turn ?? 0)).catch(() => undefined);
   const inSight = now?.inSight;
-  const prompt = `The attached map.png is an accurate schematic of the world as the ${civ} know it in ${briefing.year ?? "this age"}. Make it into ${cartography(String(briefing.era ?? ""))} - something a ruler would hang in the throne room.
-Keep the geography faithful: the same landmasses, coasts, rivers, mountains and forests in the same places, and every city where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner). Show each realm's territory with a soft tinted border in its colour. ${companies(civ, inSight)} ${UNKNOWN_COUNTRY(civ, now?.glimpses)}
-Title it "The Known World of ${civ}, ${briefing.year ?? ""}".
-The schematic is built from six-sided cells; the finished map must show no trace of them. Redraw every coastline as a natural, irregular shore with bays and headlands, and every border as a soft flowing line that follows rivers and ridges - nothing angular, zigzag or honeycomb-shaped anywhere. Natural painted terrain, not game tiles.`;
-  return (await generateImage(prompt, [{ name: "map.png", png: atlas }])) ?? atlas;
+  const era = String(briefing.era ?? "");
+  const prompt = `Two attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${briefing.year ?? "this age"}. ${STYLE_NOTE}
+Make the world of map.png into a map of its age, something a ruler would hang in the throne room.
+${cartography(era)}
+${MAP_RULES}
+Every city stands where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner). Show each realm's territory with a soft tinted border in its colour. ${companies(civ, inSight)} ${UNKNOWN_COUNTRY(civ, now?.glimpses)}
+Title it "The Known World of ${civ}, ${briefing.year ?? ""}", modestly.`;
+  return (await generateImage(prompt, [{ name: "map.png", png: atlas }, styleReference(era, "atlas")])) ?? atlas;
 }
 
-/** Nothing but bare parchment beyond what the realm has seen: how a painter is to treat it */
-const UNKNOWN_COUNTRY = (civ: string, glimpses: string[] = []) => `Where the schematic's colours fade out into bare light parchment, the ${civ}'s knowledge ends. That parchment is unexplored - not sea, not shore, not land. Nothing runs along its edge: known land that fades into it does not end there but runs on unseen, so never close it with a coastline or ring it with water, and known sea fading into it gets no shore or shallows either - both simply thin out into the parchment, as on the old maps. Leave the parchment bare; you may sketch conjectured coasts and islands there as the map-makers of the age did, but only in dotted, unshaded outline, faint and unlabelled, so that what is guessed is plainly told from what is known - never solid painted land or open sea.${glimpses.length ? ` ${glimpses.join(", ")} ${glimpses.length === 1 ? "stands" : "stand"} in a glimpse of country seen from afar, not on an island: paint the land round ${glimpses.length === 1 ? "it" : "each"} as a small vignette that thins out into the parchment on every side, with no coast and no water round it.` : ""} A city that stands on the bare parchment is known to exist and stands on such conjectured ground, at the place the schematic gives it. Paint all of the known world the schematic shows, out to its farthest seas and shores; crop nothing.`;
+/** Nothing but blank ground beyond what the realm has seen: how a painter is to treat it */
+const UNKNOWN_COUNTRY = (civ: string, glimpses: string[] = []) => `Where the schematic's colours fade out into its bare light ground, the ${civ}'s knowledge ends. That ground is unexplored - not sea, not shore, not land: leave it as the map's own plain blank ground. Nothing runs along its edge: known land that fades into it does not end there but runs on unseen, so never close it with a coastline or ring it with water, and known sea fading into it gets no shore or shallows either - both simply thin out into the blank.${glimpses.length ? ` ${glimpses.join(", ")} ${glimpses.length === 1 ? "stands" : "stand"} in a glimpse of country seen from afar, not on an island: paint the land round ${glimpses.length === 1 ? "it" : "each"} as a small vignette that thins out into the blank on every side, with no coast and no water round it.` : ""} A city that stands on the blank ground is known to exist: draw it where the schematic gives it, on a little land that thins out into the blank. Paint all of the known world the schematic shows, out to its farthest seas and shores; crop nothing.`;
 
 /** An age's campaigns on the painted map, as a history atlas prints them: the host reckons the forces and draws their arrows; the painter only repaints them */
 export async function campaignMap(civ: string, age: AgeSummary, marches: Buffer): Promise<Buffer> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
   const title = `The Marches of ${civ}, ${age.fromYear} to ${age.toYear}`;
-  const late = /Industrial|Modern|Atomic|Information|Future/.test(String(briefing.era ?? ""));
+  const era = String(briefing.era ?? "");
   const campaigns = [...age.marches, ...age.enemyMarches];
   // Only the endings this map has: a painter told of a way home draws one
   const endings = [
@@ -184,14 +252,16 @@ export async function campaignMap(civ: string, age: AgeSummary, marches: Buffer)
     ? `marches.png is the same map with the campaigns of these years already drawn on it as a history atlas draws them: one broad arrow for each force that went somewhere, in its realm's colour, broader for a larger force.${endings.length ? ` How an arrow ends tells how the campaign ended: ${endings.join("; ")}.` : ""}
 Paint exactly the ${campaigns.length} arrow${campaigns.length === 1 ? "" : "s"} marches.png has, over the painted world: each from where it starts to where it ends, along the same curve, in the same colour, with the same ending - broad, bold arrows that read at a glance, as a history atlas prints them, painted in the manner of the age. The arrows come from marches.png alone, not from the places the words below name: add no other arrow, route, trail or battle mark, and leave none out. Each arrow has one head, where marches.png puts it.`
     : "marches.png has no arrows: no force went anywhere worth an arrow in these years. Draw none.";
-  const prompt = `Two attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${age.toYear}; marches.png is the same map with the campaigns of these years drawn on it.
-Paint the world first as ${cartography(String(briefing.era ?? ""))} - something a ruler would hang in the throne room: the same landmasses, coasts, rivers, mountains and forests in the same places; every city where the schematic has it, drawn as a small illustrated town in the manner of the age's map-makers (${late ? "streets and blocks, chimneys, towers or a station, a harbour with quays" : "walls, roofs, a spire or a keep"}; the capital larger), with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner); each realm's territory with a soft tinted border in its colour. Then, over it, the campaigns of the age.
+  const prompt = `Three attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${age.toYear}; marches.png is the same map with the campaigns of these years drawn on it. ${STYLE_NOTE}
+Paint the world first as a map of its age, something a ruler would hang in the throne room, and then, over it, the campaigns of the age.
+${cartography(era, "campaign")}
+${MAP_RULES}
+Every city stands where the schematic has it, drawn as the age draws towns (the capital larger), with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner); each realm's territory with a soft tinted border in its colour.
 ${companies(civ, age.inSight)}
-${UNKNOWN_COUNTRY(civ, age.glimpses)} Do not name seas or oceans, draw no scale bar, and use no real-world coat of arms or flag.
+${UNKNOWN_COUNTRY(civ, age.glimpses)} Use no real-world coat of arms or flag.
 ${arrows}
-Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age, keeping to what the chancery's words say - no figures, no "tiles", no names in brackets: "A company of pikemen wandered from the Russian marches to the walls of Genoa; ships found new waters to the south-east." A quiet age says so in one line. What happened in these years, in the chancery's words: ${age.lines.join(" ")}
-The schematic is built from six-sided cells; the finished map must show no trace of them; natural coastlines, no honeycomb.`;
-  return (await generateImage(prompt, [{ name: "map.png", png: atlas }, { name: "marches.png", png: marches }])) ?? marches;
+Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age, keeping to what the chancery's words say - no figures, no "tiles", no names in brackets: "A company of pikemen wandered from the Russian marches to the walls of Genoa; ships found new waters to the south-east." A quiet age says so in one line. What happened in these years, in the chancery's words: ${age.lines.join(" ")}`;
+  return (await generateImage(prompt, [{ name: "map.png", png: atlas }, { name: "marches.png", png: marches }, styleReference(era, "campaign")])) ?? marches;
 }
 
 /** The Chronicler's emblem: one plate per world, painted at its making, in the medium of a later age remembering it; no face, since the Chronicler has no person */
