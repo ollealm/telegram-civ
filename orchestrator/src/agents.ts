@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { host, type AgeSummary, type HostSchema, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
 import { codexTokens, priceSdkCall, priceUsd, sdkTokens, type SdkUsage, type Tokens } from "./prices.ts";
-import { addUsage, persist, recentPictures, state, type Seat } from "./store.ts";
+import { addUsage, persist, recentPictures, state, type Picture as PictureRecord, type Seat } from "./store.ts";
 import { endLookIn, noteRefusals, refusalsForPrompt } from "./refusals.ts";
 import { runCodex, serveRealm, type CodexReply } from "./codex.ts";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -17,14 +17,48 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 const CLERK_MODEL = process.env.CLERK_MODEL ?? "claude-sonnet-5";
 const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
-/** What makes a picture worth painting. One instant, never a summary - and never the parade. */
-const PICTURE_CRAFT = `Choose one particular instant and put the viewer inside it: a focal figure doing something, a vantage a painter would pick (low among the men, over a shoulder, from the wall looking down), a named hour and weather. War is never soldiers marching through a city or standing in ranks - paint the moment it turned: ladders going up at the breach, horsemen mid-charge through a ford, a galley burning at night, archers loosing from a ridge, the rout, the keys handed over, the field the morning after. Peace is people at work or in the middle of something, not posing.`;
+/** The one picture craft for moments (picture guide C, 2026-11-02): a short description an illustrator paints from, the medium first and chosen from
+ *  what the people's age allows (the age line in the writer's input). It replaced the old craft and every role's own style words */
+const PICTURE_CRAFT = `Write the picture as a short description an illustrator paints from: the moment, where we stand to see it, and the hour and the weather. The illustrator fills in the rest, so leave out inventories of dress and props. Begin with the medium, chosen from those allowed for this people's age and described as a technique in a few plain words, never by a movement's or an artist's name. For a photograph, name the process of that decade (colour film whenever the decade had it, black and white now and then for war or grief, sepia where the age suits it) and choose a moment a camera would catch: a posed group, a documentary shot, a tall portrait of one person, an everyday snapshot - not a painter's epic view. Epic first, odd second, and quiet human moments between; never an everyday or tourist scene. When the moment is odd, show someone in it who notices. Vary the hour and the weather: not every picture is a sunset or a storm. Use concrete words, since vague ones get filled in literally. When a people appears in an age later than the one it is known for, name their faces and the clothing of that age. When a place's later fame could creep in, say what is not built there yet. Now and then a tall upright picture; never a panorama. Never a real person by name: describe a ruler as a ruler of their people.`;
+/** The media each age allows a picture (picture guide B): the people's age decides, never the calendar, whose year runs behind the game's learning */
+const EARLY_MEDIA = "A finished history painting; or an archaeological reconstruction in gouache and watercolour with even daylight and clear outlines, for a founding, a building work or a workshop";
+const LATE_MEDIA = "Usually a photograph: the process of that decade plus a camera moment. Sometimes a painting made in that decade and country, its technique described";
+export const ALLOWED_MEDIA: Record<string, string> = {
+  Ancient: EARLY_MEDIA, Classical: EARLY_MEDIA, Medieval: EARLY_MEDIA,
+  Renaissance: "A painting technique of that century and that part of the world, described in plain words",
+  Industrial: "A painting of the period; an early photograph (daguerreotype, albumen print) only rarely",
+  Modern: LATE_MEDIA, Atomic: LATE_MEDIA, Information: LATE_MEDIA, Future: LATE_MEDIA,
+};
+/** Picture guide E: an early age's founding, building work or workshop is a reconstruction, chosen here - offered as one option among others the writer
+ *  almost never took it, asked for outright it gave a fresh look. Not "every tool and garment explained": that drew a museum chart of tools */
+const RECONSTRUCTION = "Archaeological reconstruction painting in gouache and watercolour, even daylight, clear outlines.";
+const ageOf = (era?: string) => (era ?? "").replace(/ era$/i, "").trim();
+/** The people's age and the media it allows, one line for a picture writer's input. reconstruction: the picture is a founding, a building work or a
+ *  workshop (an era entry is typed so in code) - in the three early ages its line names the reconstruction alone. Empty when the age is unknown */
+export const ageLine = (civ: string, era?: string, reconstruction = false) => {
+  const media = ALLOWED_MEDIA[ageOf(era)];
+  if (!media) return "";
+  const early = reconstruction && media === EARLY_MEDIA;
+  return `The people's age: ${civ}, the ${era}. ${early ? `The medium for this picture: ${RECONSTRUCTION}` : `Media this age allows: ${media}.`}`;
+};
+/** Every great power's age, for a picture that may show any of them (the Chronicler's): the peoples grouped by age, each age's media once */
+export const peoplesAges = (civs: { civ: string; alive?: boolean; era?: string }[]) => {
+  const byAge = new Map<string, string[]>();
+  for (const { civ, alive, era } of civs) if (alive !== false && era && ALLOWED_MEDIA[ageOf(era)]) byAge.set(era, [...(byAge.get(era) ?? []), civ]);
+  return byAge.size ? `The peoples' ages (a picture takes the age of the people it shows):\n${[...byAge].map(([era, peoples]) => `- ${era}: ${peoples.join(", ")}. Media this age allows: ${ALLOWED_MEDIA[ageOf(era)]}.`).join("\n")}` : "";
+};
+/** A people's age from the briefing in hand, or from the host's state when the briefing has none (a fallen realm's last letter, an unanswered call) */
+const eraOf = async (civ: string, briefing?: unknown) => {
+  const era = (briefing as { era?: unknown } | undefined)?.era;
+  if (typeof era === "string" && era) return era;
+  return (await host.state().catch(() => undefined))?.majorCivs.find((each) => each.civ === civ)?.era ?? "";
+};
 /** What goes under a picture: not a label but a small piece of the story */
 const CAPTION_CRAFT = `The caption is read under the picture, and the reader can already see the picture: never describe it ("villagers haul a stone upright", "a warrior stands on a crag"). Write instead the line a chronicle would set beside the painting: a short title, a full stop, then one sentence (up to 25 words) on what happened here and what came of it - the event, its place in the story, why it mattered. In the world's words, no chancery terms.`;
 /** One picture as the models hand it over: what is read under it, and what the painter is told */
 const Picture = z.object({
   caption: z.string().describe("Read under the picture, which the reader can see - so never describe it; a short title, a full stop, then one sentence (up to 25 words) on what happened and what came of it, in the world's words"),
-  description: z.string().describe("For the painter: subject, setting, dress and architecture, the hour and the mood"),
+  description: z.string().describe("For the illustrator: the medium first, then the moment, where we stand to see it, the hour and the weather"),
 });
 /** Under the picture the ruler carries off from an audience: not what happened, but what now begins */
 const DECISION_CAPTION = `The caption is read under the picture as the ruler leaves, and it speaks of what this audience set in motion: a short title, a full stop, then one sentence (up to 25 words) in the present of what now begins - the order given, the road taken, the work started - as a chronicle would note it ("The gem coast. Two families and a warrior leave Edinburgh for the south-western hills, as the court decided."). Never describe the picture itself.`;
@@ -319,7 +353,7 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
     ) as never,
     tool(
       "paint_decision",
-      `Give the court painter the one picture the ruler carries off from this audience, with every closing: what this audience decided (a war or a peace, a founding, a great work begun, an envoy sent off), or, when nothing new was decided, the realm's next step under the standing plan - the settlers on the road, the smiths at the new forge, the warrior on the ridge watching the neighbours. Show the consequence where it lands, never the council table: when the decision reaches another people - gold to a city-state, an envoy to a rival's court, a gift of soldiers, a march on a foreign wall, ships on a far coast - paint it there, in that place's own dress and architecture, with ours as the visitors; our own realm, in the dress and architecture of ${seat.civ} in this year, when it lands at home. When either place would do, prefer the one the pictures already painted (listed in your prompt) have shown less lately. Never a subject or composition already among them. ${PICTURE_CRAFT} Realistic oil painting, no text. ${DECISION_CAPTION} It is painted once the court is dismissed; a later call replaces an earlier one.`,
+      `Give the court painter the one picture the ruler carries off from this audience, with every closing: what this audience decided (a war or a peace, a founding, a great work begun, an envoy sent off), or, when nothing new was decided, the realm's next step under the standing plan - the settlers on the road, the smiths at the new forge, the warrior on the ridge watching the neighbours. Show the consequence where it lands, never the council table: when the decision reaches another people - gold to a city-state, an envoy to a rival's court, a gift of soldiers, a march on a foreign wall, ships on a far coast - paint it there, in that place's own dress and architecture, with ours as the visitors; our own realm, in the dress and architecture of ${seat.civ} in this year, when it lands at home. When either place would do, prefer the one the pictures already painted (listed in your prompt) have shown less lately. Never a subject or composition already among them. ${PICTURE_CRAFT} ${DECISION_CAPTION} It is painted once the court is dismissed; a later call replaces an earlier one.`,
       strict(Picture.shape),
       async ({ caption, description }) => {
         const game = await host.state();
@@ -426,8 +460,14 @@ type RunOptions = Moment & {
   timeoutMs?: number;
 };
 
+/** A stand-in for the models, for the regress cases: while one is set, every call is answered by it and no model is asked */
+type StandIn = (call: { role: string; systemPrompt: string; prompt: string; civ?: string }) => { text: string; data?: unknown };
+let standIn: StandIn | undefined;
+export const standInForModels = (answer: StandIn | undefined) => (standIn = answer);
+
 /** One model call; the answer is prose, or data in the shape of outputSchema when one is given */
 async function call(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }, attempt = 1): Promise<{ text: string; data?: unknown }> {
+  if (standIn) return standIn({ role, systemPrompt, prompt, civ: options.seat?.civ });
   // A model named gpt-* runs through the Codex CLI on the ChatGPT subscription (codex.ts), with the same tools, trace, usage and failure shape
   if (model.startsWith("gpt-")) return callCodex(role, model, systemPrompt, prompt, options);
   const { seat, onText, outputSchema, timeoutMs } = options;
@@ -630,6 +670,8 @@ const yearsOf = (turns: number, briefing: unknown) => {
 
 export const advisorReply = async (seat: Seat, message: string, turnsPerRound: number) => {
   const briefing = await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)");
+  // The picture paint_decision is given is written here: the people's age and its media come with the briefing
+  const age = ageLine(seat.civ, await eraOf(seat.civ, briefing));
   return run(
     "advisor",
     ADVISOR_MODEL,
@@ -652,7 +694,7 @@ These few are not left to your judgement.
 ${seat.clerk ? `- Questions about the game's rules (what a wonder or a people's gift does) or about this court's workings (commands, ages, councils) are for ${seat.clerk.name}, ${seat.clerk.title}; you may send the ruler there ("ask ${seat.clerk.name}") rather than guess, and then end your message with a line that is exactly "/clerk" (the clerk holds the floor until the ruler calls you back with /advisor or your name).\n` : ""}- proclaim, once an audience at most: let something the ruler said leak to the heralds - a remark, a mood, a turn of phrase with their character in it - kept close to their own phrasing. Never a plan, the treasury, research or a weakness. If the ruler said nothing in their own voice, nothing leaks; but a ruler who speaks in character should be heard of in the world's history more often than not.
 Then ${turnsPerRound} turns pass - ${yearsOf(turnsPerRound, briefing)} - while you govern by the recorded will and look in on the realm every few turns.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
-    `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\n${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk - orders or wishes for the realm; take them up in this audience:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\n")}\n\n` : ""}Briefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(briefing)}\n\nWhat can be done right now - every city's buildable items with prices, what each power can and cannot trade, research and policies on offer (so get_options is not needed during this audience):\n${JSON.stringify(await host.options(seat.civ).catch(() => "(unavailable - use get_options)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
+    `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\n${age ? `${age}\n\n` : ""}${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk - orders or wishes for the realm; take them up in this audience:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\n")}\n\n` : ""}Briefing as of now (get_briefing again only after you change orders and need to confirm):\n${JSON.stringify(briefing)}\n\nWhat can be done right now - every city's buildable items with prices, what each power can and cannot trade, research and policies on offer (so get_options is not needed during this audience):\n${JSON.stringify(await host.options(seat.civ).catch(() => "(unavailable - use get_options)"))}\n\nThe audience so far:\n${transcript(seat) || "(this is the ruler's first word to you)"}\n\nThe ruler now says:\n${message}`,
     { seat, canRecordWill: true, sideTools: ["paint_decision", "proclaim", "smaller_matters"] },
   );
 };
@@ -735,6 +777,7 @@ const forTheLetter = (briefing: unknown) => {
 
 /** inputs: "deeds" (the age summary first, the ledger folded) or "ledger" (the chancery's every line, as letters were written before 2026-09-25) */
 export const advisorReport = async (seat: Seat, round: RoundResult, governLogs: string[], briefing: unknown, ending?: string, deeds: string[] = [], inputs: "deeds" | "ledger" = "deeds"): Promise<Dispatch> => {
+  const age = ageLine(seat.civ, await eraOf(seat.civ, briefing));
   const letter = await runStructured(
     "report",
     ADVISOR_MODEL,
@@ -753,10 +796,10 @@ strategy - the longer view, when you have something new to say about it: the cou
 
 question - open the audience the way a trusted advisor would: put the ONE broad question of this age to the ruler - the direction, not the details (the details come later, in conversation). In 60-100 words of plain talk, lay out the two or three directions you see, what each would win and what it would cost, and which way you lean and why. No list, no numbering, no "option A". End with the question itself.
 
-image - one picture of a moment from these years - our own realm (a festival, a founding, a scholar at work) or wherever our people went (a siege at a foreign wall, an envoy in a rival's court, a landing on a far coast), as a painter of the age would have made it; when the age's story happened abroad, paint it abroad, in that place's own dress and architecture; when either would do, prefer the place the pictures below have shown less lately. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to ${seat.civ} in ${round.year}, mood, "realistic oil painting, no text". Completed wonders are painted by the Chronicler, so choose something else. If these years hold nothing that is not already among the pictures painted (below), no image (null). ${CAPTION_CRAFT}
+image - one picture of a moment from these years - our own realm (a festival, a founding, a scholar at work) or wherever our people went (a siege at a foreign wall, an envoy in a rival's court, a landing on a far coast); when the age's story happened abroad, paint it abroad, in that place's own dress and architecture; when either would do, prefer the place the pictures below have shown less lately. ${PICTURE_CRAFT} Completed wonders are painted by the Chronicler, so choose something else. If these years hold nothing that is not already among the pictures painted (below), no image (null). ${CAPTION_CRAFT}
 
 journal - one or two plain sentences for your own journal: what you did this round and what you are watching. Facts, no flourish.`,
-    `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\n${inputs === "deeds" ? `What the realm's people did in these years (${round.fromYear} to ${round.year}):\n${deeds.map((line) => `- ${line}`).join("\n") || "(nothing recorded)"}\n\n` : ""}Your own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk while the clocks ran - answer them in this dispatch where they bear on it:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\n")}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing, round.rankings)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(inputs === "deeds" ? forTheLetter(briefing) : briefing)}`,
+    `${memory(seat, true)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\n${age ? `${age}\n\n` : ""}${inputs === "deeds" ? `What the realm's people did in these years (${round.fromYear} to ${round.year}):\n${deeds.map((line) => `- ${line}`).join("\n") || "(nothing recorded)"}\n\n` : ""}Your own notes while governing this round:\n${governLogs.join("\n") || "(none)"}\n\n${round.stoppedEarly ? `The round was cut short: ${round.stoppedEarly}\n\n` : ""}${(seat.forCouncil ?? []).length ? `Words the ruler left with the clerk while the clocks ran - answer them in this dispatch where they bear on it:\n${seat.forCouncil!.map((line) => `- ${line}`).join("\n")}\n\n` : ""}Your last dispatch, for what not to repeat:\n${(seat.annals ?? []).filter((annal) => !annal.urgent).at(-1)?.story ?? "(this is your first)"}\n${(seat.annals ?? []).filter((annal) => annal.course).at(-1)?.course ? `The longer view you last gave: ${(seat.annals ?? []).filter((annal) => annal.course).at(-1)!.course}\n` : ""}\nStanding among the powers now: ${standingOf(briefing, round.rankings)}\nAt your last dispatch: ${seat.standing ?? "(this is the first)"}\n\nBriefing now:\n${JSON.stringify(inputs === "deeds" ? forTheLetter(briefing) : briefing)}`,
     Letter,
   );
   seat.standing = standingOf(briefing, round.rankings) || seat.standing;
@@ -800,12 +843,12 @@ ${HOUSE_RULES}`,
   );
 
 /** The picture the ruler carries off when the advisor closed without asking the painter for one: what was decided, or the realm's next step */
-export const describeDecision = (seat: Seat) =>
+export const describeDecision = async (seat: Seat) =>
   runStructured(
     "advisor",
     ADVISOR_MODEL,
-    `You are the court painter at the court of ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}. An audience has just ended and the ruler leaves while the years pass; you paint the one picture they take with them: what this audience decided, or, if nothing new was decided, the realm's next step under its standing plan - the settlers on the road, the smiths at work, the warrior on the ridge. Where the decision lands, never the council table: a foreign city, a city-state's harbour, a rival's gate, in that place's own dress and architecture, when the decision reaches another people; our own realm when it lands at home; when either would do, the place shown less lately. Never a subject or composition already among the pictures painted. ${PICTURE_CRAFT} Realistic oil painting, no text. ${DECISION_CAPTION}`,
-    `${alreadyPainted([seat.civ, "chronicle"])}\n\nThe ruler's recorded wishes:\n${seat.will || "(nothing recorded yet)"}\n\nThe advisor's plan:\n${seat.plan || "(none)"}\n\nThe audience that just ended (its last exchanges):\n${seat.chat.slice(-6).map((message) => `${message.from === "ruler" ? "Ruler" : "Advisor"}: ${message.text}`).join("\n\n")}`,
+    `You are the court painter at the court of ${seat.rulerName ?? "the ruler"}, sovereign of ${seat.civ}. An audience has just ended and the ruler leaves while the years pass; you paint the one picture they take with them: what this audience decided, or, if nothing new was decided, the realm's next step under its standing plan - the settlers on the road, the smiths at work, the warrior on the ridge. Where the decision lands, never the council table: a foreign city, a city-state's harbour, a rival's gate, in that place's own dress and architecture, when the decision reaches another people; our own realm when it lands at home; when either would do, the place shown less lately. Never a subject or composition already among the pictures painted. ${PICTURE_CRAFT} ${DECISION_CAPTION}`,
+    `${ageLine(seat.civ, await eraOf(seat.civ))}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nThe ruler's recorded wishes:\n${seat.will || "(nothing recorded yet)"}\n\nThe advisor's plan:\n${seat.plan || "(none)"}\n\nThe audience that just ended (its last exchanges):\n${seat.chat.slice(-6).map((message) => `${message.from === "ruler" ? "Ruler" : "Advisor"}: ${message.text}`).join("\n\n")}`,
     Picture,
     { seat, readOnly: true },
   );
@@ -838,7 +881,8 @@ export type ChapterContext = {
   cast: string[];
 };
 
-export const heraldNewspaper = (round: RoundResult, { earlier, lastChapters, proclamations, campaigns, cast }: ChapterContext) => {
+export const heraldNewspaper = async (round: RoundResult, { earlier, lastChapters, proclamations, campaigns, cast }: ChapterContext) => {
+  const ages = peoplesAges((await host.state().catch(() => undefined))?.majorCivs ?? []);
   const [, winner, victory] = /^(.+?) has won an? (.+?) victory/.exec(round.stoppedEarly ?? "") ?? [];
   const section = (title: string, lines: string[]) => `${title}:\n${lines.join("\n") || "-"}`;
   return runStructured(
@@ -852,7 +896,7 @@ How the great powers are accounted against one another is said when it has chang
 The realms are known by their peoples - "the ruler of Denmark" - and that is how you mostly name them. The names of those who rule are below: a name may stand once in a chapter where the person is the story, never as a habit.
 Report only the events listed - these are things the whole world could witness. An army on the march, a battle, a company lost in the field, a city that fell and a ship on a far sea are witnessed too: "What the armies and ships did" below is the world's account of them, and a chapter with a war in it tells where the host went and where it fought, not only that war was declared. A wandering company seen far from home is colour, at most once in a chapter and only where it tells something - the first word of an unknown shore, armour of another century among the rice fields; the rest of those sightings are yours to leave out. Never speculate about any realm's plans, treasury, research or the armies nobody saw.
 You may allow yourself one touch that no record holds - the weather on a day, a face in a crowd, what the old men said - so long as it bends no fact: which realms, who fought whom, what rose and fell and to whom, and the years stay as they were, for the rulers learn their world from this page. ${TELEGRAM_STYLE}
-With the chapter go one or two images: pictures for it, as a painter of the period would have made them. The first is a scene from its chief event; add a second only if the chapter holds another event of a different kind that is worth seeing - never two pictures of one event. Every completed wonder gets its own picture from the court painter, and so does each people's entry into a new age, so leave both out of yours; in an age of nothing but wonders, paint a moment of ordinary life in the foremost realm. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the civilizations and the year, mood, and "realistic oil painting, no text". Only public events. ${CAPTION_CRAFT}`,
+With the chapter go one or two images: pictures for it. The first is a scene from its chief event; add a second only if the chapter holds another event of a different kind that is worth seeing - never two pictures of one event. Every completed wonder gets its own picture from the court painter, and so does each people's entry into a new age, so leave both out of yours; in an age of nothing but wonders, paint a moment of ordinary life in the foremost realm. ${PICTURE_CRAFT} Only public events. ${CAPTION_CRAFT}`,
     [
       `The years ${round.fromYear} to ${round.year}.`,
       section("Events of these years", round.publicEvents.map((event) => `${event.year}: ${event.text}`)),
@@ -860,6 +904,7 @@ With the chapter go one or two images: pictures for it, as a painter of the peri
       section("Said in the courts and halls in these years", proclamations),
       section("The standing of the great powers now, foremost first", round.rankings.map((rank, index) => `${index + 1}. ${rank.civ} (${rank.cities} cities)`)),
       section("Who rules where", cast),
+      ...(ages ? [ages] : []),
       alreadyPainted(["chronicle"]),
       ...(earlier.length ? [section("Further back, before your last chapters", earlier.map((event) => `${event.year}: ${event.text}`))] : []),
       lastChapters.length ? `Your last chapters, as you wrote them:\n\n${lastChapters.map((chapter) => `[${chapter.years}]\n${chapter.text}`).join("\n\n")}` : "This is the first chapter.",
@@ -900,44 +945,72 @@ export const eraScene = (civ: string, era: string, year: string, recent: PublicE
     HERALD_MODEL,
     `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory, and not the technology that opened the age: paint the people in the age - one instant of ordinary life in which the new age shows in the everyday, the dress, the tools, the buildings, the pace of the day.
 Set it in one of their cities, named below with the lie of its land, and let the land show: a river town under mountains and a coastal town among forests are different pictures before anything else differs.
-Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year; the year of ${year} may colour only the manner of the painting and the dress. Realistic oil painting, no text. ${CAPTION_CRAFT}`,
-    `${civ} entered the ${era} in ${year}.\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
+Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year. ${CAPTION_CRAFT}`,
+    `${civ} entered the ${era} in ${year}.\n\n${ageLine(civ, era, true)}\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
     Picture,
   );
 
-/** The world is won: the moment of victory, as a painter of the winners' age would show it. The caption is only the Chronicler's sentence - the title is set above it */
+/** The world is won: the moment of victory, in a medium the winners' age allows. The caption is only the Chronicler's sentence - the title is set above it */
 export const victoryScene = (winner: string, victory: string, era: string, year: string, cities: { name: string; capital: boolean; size: number; land: string }[] = []) =>
   runStructured(
     "herald",
     HERALD_MODEL,
-    `You are the Chronicler, choosing the picture that ends the world's history: the moment ${winner} won it, a ${victory} victory, in ${year}. Paint that moment as a painter of the age would have shown it, true to how this victory was won - for a scientific victory the ship leaving the world, for a domination victory the last capital taken, for a cultural or diplomatic one whatever instant sealed it, as you judge fits. Set it among ${winner}'s own people - in one of their cities named below, with the lie of its land, or wherever the moment truly happened - in their dress and their buildings. ${PICTURE_CRAFT} Machines, tools, weapons, ships and buildings are true to the ${era}; the year may colour only the manner of the painting and the dress. Realistic oil painting, no text.
+    `You are the Chronicler, choosing the picture that ends the world's history: the moment ${winner} won it, a ${victory} victory, in ${year}. Paint that moment true to how this victory was won - for a scientific victory the ship leaving the world, for a domination victory the last capital taken, for a cultural or diplomatic one whatever instant sealed it, as you judge fits. Set it among ${winner}'s own people - in one of their cities named below, with the lie of its land, or wherever the moment truly happened - in their dress and their buildings. ${PICTURE_CRAFT} Machines, tools, weapons, ships and buildings are true to the ${era}.
 The caption is read under the picture, after a title that is set for you ("${winner} wins the world"): write only one sentence (up to 25 words) on what this moment meant for the world and its story - never describe the picture, no title, no chancery terms.`,
-    `${winner} won a ${victory} victory in ${year}, in the ${era}.\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\n${alreadyPainted(["chronicle"])}`,
+    `${winner} won a ${victory} victory in ${year}, in the ${era}.\n\n${ageLine(winner, era)}\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\n${alreadyPainted(["chronicle"])}`,
     Picture,
   );
 
 /** The oddity of the age: the strange, comic or unheard-of thing the world would still tell of - rare by instruction, and none is the usual answer.
  *  painting: captions of the pictures already going with this chapter, so the oddity is never one of them */
-export const oddityScene = (round: RoundResult, events: PublicEvent[], campaigns: string[], curiosities: string[], painting: string[] = []) =>
+export const oddityScene = async (round: RoundResult, events: PublicEvent[], campaigns: string[], curiosities: string[], painting: string[] = []) =>
   runStructured(
     "herald",
     HERALD_MODEL,
     `You are the Chronicler. Was there anything in these years the world would still tell of as strange, comic or unheard-of? Most ages have none, and then the answer is none; at most one when there is; a good chapter needs no oddity. What counts is something retold for its own sake, not for its weight in the story - the age's great events are the chapter's business, never the oddity's, however dramatic. Below are the age's events, what the armies and ships did, and the chancery's own flagged curiosities: the flags are candidates, not orders, and you may choose something none of them caught.
-If there is one, paint it as a painter of the period would have made it. ${PICTURE_CRAFT} The description is for an illustrator: subject, setting, dress and architecture true to the peoples, their age and the year - where a people's age and the calendar disagree, the age wins for everything made. Realistic oil painting, no text. ${CAPTION_CRAFT} The caption may carry a dry historian's humour.
+If there is one, paint it. ${PICTURE_CRAFT} Where a people's age and the calendar disagree, the age wins for everything made. ${CAPTION_CRAFT} The caption may carry a dry historian's humour.
 why - one line for the chancery's log: what you chose and why it is strange, or why there was nothing.`,
-    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nWhat the armies and ships did in these years:\n${campaigns.map((line) => `- ${line}`).join("\n") || "(nothing)"}\n\nThe chancery's flagged curiosities:\n${curiosities.map((line) => `- ${line}`).join("\n") || "(none flagged)"}\n\nAlready going with this chapter (never the oddity):\n${painting.map((caption) => `- ${caption}`).join("\n") || "(nothing)"}\n\n${alreadyPainted(["chronicle"])}`,
+    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nWhat the armies and ships did in these years:\n${campaigns.map((line) => `- ${line}`).join("\n") || "(nothing)"}\n\nThe chancery's flagged curiosities:\n${curiosities.map((line) => `- ${line}`).join("\n") || "(none flagged)"}\n\nAlready going with this chapter (never the oddity):\n${painting.map((caption) => `- ${caption}`).join("\n") || "(nothing)"}\n\n${peoplesAges((await host.state().catch(() => undefined))?.majorCivs ?? [])}\n\n${alreadyPainted(["chronicle"])}`,
     z.object({ oddity: Picture.nullable(), why: z.string() }),
   );
 
-/** When a people finished several wonders in one age, which one the Chronicler paints: the most worth seeing, not the first */
-export const chooseWonder = (civ: string, wonders: string[], year: string) =>
-  runStructured(
+/** A completed wonder's own short brief (picture guide D, 2026-11-02): the familiar wonder at its famous size, made theirs by where it stands - the old
+ *  template's "their forms, materials and ornament" piled up their decorations, and with no real size the Pyramids came out a hill with a house on top */
+const WONDER_CRAFT = `Write the picture of a completed wonder as a short description an illustrator paints from. Show the familiar wonder at its real, famous size, compared with a building people know if needed. Make it theirs mostly through where it stands: their city and land, their people doing something around it, the light and weather of that place, and the stone, brick or timber they build with. A change that runs through the whole wonder is welcome: their stone, their way of painting frescoes, a figure dressed as they dress. Never swap one isolated part of the famous original (new feet for the tower, a paddle in the statue's hand), never pile on their decorations, and keep strong colour shifts rare. Begin with the medium allowed for their age; a wonder is often most epic as a painting.
+Examples of good changes: Sweden's pyramid in grey granite with turf on its steps; the Sistine Chapel with frescoes in Ethiopian church colours; the Colossus as a bronze Saxon king with sword and shield; the Statue of Liberty in flowing robes holding a lantern; the Polynesian Liberty whose whole figure is Polynesian (not the real statue holding a paddle); the Forbidden Palace of desert brick with a caravan at its gate.`;
+
+type Built = { turn: number; year: string; wonder: string; site?: string };
+/** The wonder the Chronicler paints for a people this age - when they finished several, the one most worth a painting, not the first - and its
+ *  description, written in the same call: one call per people that finished any, none per wonder */
+export const chooseWonder = async (civ: string, built: Built[], year: string) => {
+  const several = built.length > 1;
+  const { wonder, description } = await runStructured(
     "herald",
     HERALD_MODEL,
-    `You are the Chronicler. ${civ} finished more than one great work in the age ending ${year}, and the court painter paints one of them. Choose the one most worth a painting: the one whose sight would stop a traveller, or whose making says most about this people in this age. Not the most useful, not the first; the picture.`,
-    `The great works: ${wonders.join("; ")}.`,
-    z.object({ wonder: z.string().describe("Exactly one of the names given") }),
-  ).then(({ wonder }) => wonders.find((name) => name.toLowerCase() === wonder.trim().toLowerCase()) ?? wonders[0]);
+    `You are the Chronicler. ${civ} finished ${several ? "more than one great work" : "a great work"} in the age ending ${year}, and the court painter paints ${several ? "one of them" : "it"}.${several ? " Choose the one most worth a painting: the one whose sight would stop a traveller, or whose making says most about this people in this age. Not the most useful, not the first; the picture." : ""}
+${WONDER_CRAFT}`,
+    `${ageLine(civ, await eraOf(civ))}\n\nThe great work${several ? "s" : ""}, with the city ${several ? "each stands" : "it stands"} in and the lie of its land:\n${built.map((each) => `- ${each.wonder}, in ${each.site ?? `one of the cities of ${civ}`}`).join("\n")}`,
+    z.object({ wonder: z.string().describe("Exactly one of the names given"), description: z.string().describe("For the illustrator: the medium first, then the wonder as it stands, where we stand to see it, the hour and the weather") }),
+  );
+  return { wonder: built.find((each) => each.wonder.toLowerCase() === wonder.trim().toLowerCase())?.wonder ?? built[0].wonder, description };
+};
+
+/** A completed wonder always gets its picture - once; one per people per age. A call that fails leaves that people's wonder unpainted (logged) */
+export const wonderPictures = async (round: RoundResult, log: (...args: unknown[]) => void = () => {}): Promise<PictureRecord[]> => {
+  const byCiv = new Map<string, Built[]>();
+  for (const event of round.publicEvents) {
+    const [, civ, wonder, site] = /^(.+?) completed the wonder (.+?)(?: in (.+?))?\.?$/.exec(event.text) ?? [];
+    if (!wonder || (state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(`${wonder},`))) continue;
+    byCiv.set(civ, [...(byCiv.get(civ) ?? []), { turn: event.turn, year: event.year, wonder, site }]);
+  }
+  return (await Promise.all([...byCiv].map(async ([civ, built]) => {
+    const scene = await chooseWonder(civ, built, round.year).catch((error) => { log(`the wonder picture for ${civ} failed:`, (error as Error).message); return null; });
+    if (!scene) return [];
+    if (built.length > 1) log(`${civ} finished ${built.map((each) => each.wonder).join(", ")}; the Chronicler paints ${scene.wonder}`);
+    const chosen = built.find((each) => each.wonder === scene.wonder)!;
+    return [{ turn: chosen.turn, year: chosen.year, for: "chronicle", caption: `${chosen.wonder}, completed by ${civ} in ${chosen.year}`, description: scene.description }];
+  }))).flat();
+};
 
 /** How long a saga or the epic may take before it is given up: Olle's Korea game lost its ending to a call that never returned */
 const CLOSING_TIMEOUT_MS = Number(process.env.CLOSING_TIMEOUT_MS ?? 10 * 60_000);
@@ -946,7 +1019,8 @@ const CLOSING_TIMEOUT_MS = Number(process.env.CLOSING_TIMEOUT_MS ?? 10 * 60_000)
 const Saga = z.object({
   text: z.string(),
   medium: z.string().describe("The medium, its palette and its border, named once so that the three plates read as one work"),
-  plates: z.array(Picture.extend({ caption: z.string().describe("A title only, as on the label beside a museum piece - three or four words") })).length(3),
+  // A plate's medium is the saga's own (its medium field), not an age's: its description keeps the painter's brief it always had
+  plates: z.array(Picture.extend({ caption: z.string().describe("A title only, as on the label beside a museum piece - three or four words"), description: z.string().describe("For the painter: subject, setting, dress and architecture, the hour and the mood") })).length(3),
 });
 
 /** The epic of the whole world: told once, when the game is over */
@@ -998,10 +1072,10 @@ dispatch - ${concernsUs ? "60-90 words. Open with the news itself, then what it 
 
 question - ${part === "declarer" ? "Empty, unless the war has already thrown up a choice that cannot wait - then that choice in 30-50 words, with your lean, ending with the question." : concernsUs ? "the one decision that cannot wait, in 40-70 words of plain talk: the ways to answer this, what each risks, and your own lean. End with the question." : "If there is a real choice for us in this - join, stand aside, profit, arm - put it in 30-60 words with your lean and end with the question. If there is none, leave it empty."}
 
-image - the moment itself as a painter of the age would show it (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ} in this year. ${PICTURE_CRAFT} Realistic oil painting, no text. ${CAPTION_CRAFT}
+image - the moment itself (the messenger arriving, the enemy at the walls, the city changing hands), true to ${seat.civ}. ${PICTURE_CRAFT} ${CAPTION_CRAFT}
 
 journal - one plain sentence: what happened and what you did.`,
-    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
+    `${memory(seat)}\n\n${alreadyPainted([seat.civ, "chronicle"])}\n\n${ageLine(seat.civ, await eraOf(seat.civ, briefing))}\n\nBriefing now:\n${JSON.stringify(briefing)}`,
     z.object({ dispatch: z.string(), question: z.string(), image: Picture.nullable(), journal: z.string() }),
   );
   return { text: summons.dispatch, strategy: "", question: summons.question.trim(), image: summons.image ?? undefined, journal: summons.journal || news };

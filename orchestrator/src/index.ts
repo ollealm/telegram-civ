@@ -1,12 +1,12 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, loadSchema, advisorReply, chooseWonder, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon } from "./agents.ts";
+import { advisorGreeting, loadSchema, advisorReply, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap } from "./images.ts";
+import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap, picturePrompt } from "./images.ts";
 import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
@@ -134,26 +134,17 @@ const PAINTED_MAPS = process.env.PAINTED_MAPS !== "off";
 /** Paints and returns the picture (or null), keeping the ledger honest either way */
 async function paintAndKeep(picture: Picture): Promise<Buffer | null> {
   recordPicture(picture);
-  const png = await generateImage(`${picture.description}\n\nThe year is ${picture.year}. Realistic oil painting of the period, no text or lettering.`).catch((error) => { log(`picture failed (${picture.caption}):`, error.message); return null; });
+  const png = await generateImage(picturePrompt(picture)).catch((error) => { log(`picture failed (${picture.caption}):`, error.message); return null; });
   if (!png) forgetPicture(picture);
   return png;
 }
 
 function paint(picture: Picture, send: (png: Buffer) => Promise<unknown>) {
   recordPicture(picture);
-  void generateImage(`${picture.description}\n\nThe year is ${picture.year}. Realistic oil painting of the period, no text or lettering.`)
+  void generateImage(picturePrompt(picture))
     .then((png) => (png ? send(png) : forgetPicture(picture)))
     .catch((error) => log(`picture failed (${picture.caption}):`, error.message));
 }
-
-/** A completed wonder always gets its picture - once */
-const wonderPictures = (round: RoundResult): Picture[] =>
-  round.publicEvents.flatMap((event) => {
-    const [, civ, wonder, site] = /^(.+?) completed the wonder (.+?)(?: in (.+?))?\.?$/.exec(event.text) ?? [];
-    if (!wonder || (state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(`${wonder},`))) return [];
-    return [{ turn: event.turn, year: event.year, for: "chronicle", caption: `${wonder}, completed by ${civ} in ${event.year}`,
-      description: `${wonder}, newly completed by the ${civ}${site ? ` in their city of ${site}` : ""}, as a painter of the period would have shown it. This is NOT the wonder of that name as it stands in our world: it is the ${civ}' own version, raised by ${civ} builders in ${civ} lands - so the great work takes their forms, materials and ornament, and stands in ${site ? `${site.split(" (")[0]} itself, among that city's houses, walls and people` : "one of their cities"}, with the land as described${site ? ` (${site.split(" (")[1]?.replace(/\)$/, "") ?? ""})` : ""}. The city must be recognisably the ${civ}' - its roofs, dress and crowds are theirs - and the wonder recognisably itself, transformed by their hands. From a vantage that shows its scale, in the light of a particular hour, with builders, priests or crowds in the dress of the age.` }];
-  });
 
 /** A people's entry into a new age always gets its picture - once; the Chronicler chooses the instant from what that people has lately done */
 const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
@@ -359,21 +350,9 @@ async function playRound() {
       notice: tell,
       chronicle: async (chapter, images, round, seen) => {
         const record = state.chapters?.at(-1); // the round has just set this chapter down
-        // One or two scenes of the Chronicler's choosing, and every wonder
-        // A wonder's picture says what the great work gives its builders
-        // One wonder picture per people per age: when a people finished several, the Chronicler chooses the one most worth a painting
-        const candidates = wonderPictures(round);
-        const byCiv = new Map<string, Picture[]>();
-        for (const picture of candidates) { const civ = /completed by (.+?) in /.exec(picture.caption)?.[1] ?? ""; byCiv.set(civ, [...(byCiv.get(civ) ?? []), picture]); }
-        const chosen = (await Promise.all([...byCiv.entries()].map(async ([civ, pictures]) => {
-          if (pictures.length <= 1) return pictures;
-          const names = pictures.map((picture) => picture.caption.split(",")[0]);
-          const pick = await chooseWonder(civ, names, round.year).catch(() => names[0]);
-          log(`${civ} finished ${names.join(", ")}; the Chronicler paints ${pick}`);
-          return pictures.filter((picture) => picture.caption.startsWith(`${pick},`)).slice(0, 1);
-        }))).flat();
-        for (const picture of candidates) if (!chosen.includes(picture)) forgetPicture(picture); // the others go unpainted
-        const wonders = await Promise.all(chosen.map(async (picture) => {
+        // One or two scenes of the Chronicler's choosing, and every wonder: one wonder picture per people per age, the Chronicler choosing among
+        // several and describing the one it paints (wonderPictures). A wonder's picture says what the great work gives its builders
+        const wonders = await Promise.all((await wonderPictures(round, log)).map(async (picture) => {
           const wonder = picture.caption.split(",")[0];
           const boon = await host.lookup(state.seats[0]?.civ ?? "", wonder).then((entry) => wonderBoon(wonder, /completed by (.+?) in /.exec(picture.caption)?.[1] ?? "its builders", entry)).catch(() => "");
           return { ...picture, note: boon.trim() };

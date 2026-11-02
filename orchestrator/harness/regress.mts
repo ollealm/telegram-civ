@@ -17,6 +17,8 @@ if (PORT === 8765 || PORT === 8790) throw new Error("REGRESS_PORT must not be a 
 const FIXTURES = resolve(process.env.FIXTURES_DIR ?? "../data/fixtures");
 const HOST_SH = resolve(process.env.HOST_SH ?? "../host.sh");
 const BASE = `http://127.0.0.1:${PORT}`;
+// Every orchestrator module a case imports talks to the case's own host, never the live one (host.ts reads this once, at its first import)
+process.env.RULER_HOST_URL = BASE;
 
 const results: { name: string; ok: boolean; detail: string }[] = [];
 const check = (name: string, ok: boolean, detail = "") => {
@@ -1034,6 +1036,68 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W16 the pantheon is founded once the reserve allows, its belief named", japan.some((line) => /^The officials founded our pantheon with the belief .+: /.test(line.text)), japan.find((line) => /pantheon/.test(line.text))?.text);
     check("W16 the faith it cost is told", japan.some((line) => /^The officials spent \d+ faith on a pantheon/.test(line.text)));
     check("W16 no faith self-check", !selfChecks(host).some((line) => /\tfaith\t/.test(line)), selfChecks(host).join(" | "));
+    await stop(host);
+  },
+  async W47() { // the picture guide (2026-11-02): the code chooses no medium, every picture writer's input holds the people's age and its media,
+    // an early era entry is a reconstruction, and a wonder is described by the Chronicler's own call, never the old template. No model is asked: a stand-in answers
+    const { readdirSync } = await import("node:fs");
+    const sources = readdirSync("src").filter((file) => file.endsWith(".ts")).map((file) => ({ file, text: readFileSync(join("src", file), "utf8") }));
+    check("W47 no 'realistic oil painting' anywhere in the orchestrator's sources", !sources.some(({ text }) => /realistic oil painting/i.test(text)), sources.filter(({ text }) => /realistic oil painting/i.test(text)).map(({ file }) => file).join(", "));
+    check("W47 the wonder template is gone", !sources.some(({ text }) => /takes their forms, materials and ornament|This is NOT the wonder of that name/.test(text)));
+    const host = await start("t100-world");
+    const agents = await import("../src/agents.ts");
+    const { picturePrompt } = await import("../src/images.ts");
+    const painted = picturePrompt({ description: "A scene.", year: "AD 100" });
+    check("W47 the painted prompt adds the year and the guardrail, no medium", painted === "A scene.\n\nThe year is AD 100. No text or lettering. No real people.", painted);
+    check("W47 an early era entry names the reconstruction alone", /The medium for this picture: Archaeological reconstruction painting in gouache and watercolour, even daylight, clear outlines\.$/.test(agents.ageLine("Japan", "Classical era", true)) && !/history painting/.test(agents.ageLine("Japan", "Medieval era", true)), agents.ageLine("Japan", "Classical era", true));
+    check("W47 an untyped early picture gets the full media line", /Media this age allows: A finished history painting; or an archaeological reconstruction/.test(agents.ageLine("Japan", "Medieval era")));
+    check("W47 a later era entry gets its age's media, not the reconstruction", /Media this age allows: A painting technique of that century/.test(agents.ageLine("Japan", "Renaissance era", true)) && /Usually a photograph/.test(agents.ageLine("Japan", "Atomic era", true)));
+    const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean; era: string }[] };
+    const civName = game.majorCivs.find((each) => each.alive)!.civ;
+    const era = game.majorCivs.find((each) => each.civ === civName)!.era;
+    const briefing = (await get(`/briefing?civ=${civ(civName)}`)).json;
+    // Every call is answered by the stand-in with every field any writer asks for; its inputs are kept
+    const calls: { role: string; systemPrompt: string; prompt: string; writer: string }[] = [];
+    let writer = "";
+    const scene = { caption: "A title. A sentence.", description: "Stand-in description of the picture." };
+    agents.standInForModels((asked) => {
+      calls.push({ ...asked, writer });
+      return { text: "Stand-in reply.", data: { ...scene, image: scene, images: [scene], oddity: scene, why: "stand-in", wonder: "Great Library", summons: "", dispatch: "", strategy: "", question: "", journal: "", chapter: "A chapter." } };
+    });
+    const seat = { civ: civName, kind: "human", rulerName: "the ruler", chat: [], journal: [], annals: [] } as any;
+    const round = { fromTurn: 88, turn: 100, fromYear: "AD 100", year: game.year, publicEvents: [{ turn: 99, year: game.year, text: `${civName} completed the wonder Great Library in Their Capital (river, hills).` }], rankings: [] } as any;
+    const writers: [string, () => Promise<unknown>][] = [
+      ["letter", () => agents.advisorReport(seat, round, [], briefing)],
+      ["urgent letter", () => agents.advisorUrgent(seat, "War is declared.", briefing)],
+      ["audience (paint_decision)", () => agents.advisorReply(seat, "Let us build the library.", 12)],
+      ["court painter", () => agents.describeDecision(seat)],
+      ["chronicle", () => agents.heraldNewspaper(round, { earlier: [], lastChapters: [], proclamations: [], campaigns: [], cast: [] })],
+      ["era entry", () => agents.eraScene(civName, era, game.year, [])],
+      ["victory", () => agents.victoryScene(civName, "Scientific", era, game.year)],
+      ["oddity", () => agents.oddityScene(round, [], [], [])],
+    ];
+    let wonders: { caption: string; description: string }[] = [];
+    try {
+      for (const [name, write] of writers) { writer = name; await write(); }
+      writer = "wonder";
+      wonders = await agents.wonderPictures(round);
+    } finally { agents.standInForModels(undefined); }
+    const named = [...writers.map(([name]) => name), "wonder"];
+    const missing = named.filter((name) => !calls.some((each) => each.writer === name));
+    check("W47 every picture writer was called", missing.length === 0, missing.join(", "));
+    const hasAge = (prompt: string) => prompt.includes(`The people's age: ${civName}, the ${era}.`) || (prompt.includes("The peoples' ages") && new RegExp(`- ${era}: [^\\n]*${civName}`).test(prompt));
+    check(`W47 the people's age (${civName}, ${era}) is in every picture writer's input`, calls.every((each) => hasAge(each.prompt)), calls.filter((each) => !hasAge(each.prompt)).map((each) => each.writer).join(", "));
+    const hasMedia = (prompt: string) => /Media this age allows: |The medium for this picture: /.test(prompt);
+    check("W47 and the media it allows, from the table", calls.every((each) => hasMedia(each.prompt)), calls.filter((each) => !hasMedia(each.prompt)).map((each) => each.writer).join(", "));
+    const early = ["Ancient", "Classical", "Medieval"].includes(era.replace(/ era$/, ""));
+    const entry = calls.find((each) => each.writer === "era entry")!;
+    check(`W47 the era entry (${era}) ${early ? "names the reconstruction alone" : "gets its age's media"}`, early ? entry.prompt.includes("The medium for this picture: Archaeological reconstruction") && !entry.prompt.includes("Media this age allows") : entry.prompt.includes("Media this age allows"));
+    check("W47 no writer's instructions or input say 'realistic oil painting'", !calls.some((each) => /realistic oil painting/i.test(each.systemPrompt + each.prompt)), calls.filter((each) => /realistic oil painting/i.test(each.systemPrompt + each.prompt)).map((each) => each.writer).join(", "));
+    // (the audience's craft is in its paint_decision tool's description, not in these instructions)
+    check("W47 the moments' writers get the one picture craft", calls.filter((each) => !["wonder", "audience (paint_decision)"].includes(each.writer)).every((each) => each.systemPrompt.includes("Write the picture as a short description an illustrator paints from")));
+    const wonderCall = calls.find((each) => each.writer === "wonder");
+    check("W47 the wonder's own brief and its examples are in the Chronicler's call", !!wonderCall && wonderCall.systemPrompt.includes("Show the familiar wonder at its real, famous size") && wonderCall.systemPrompt.includes("Sweden's pyramid in grey granite") && wonderCall.prompt.includes("- Great Library, in Their Capital (river, hills)"), wonderCall?.prompt);
+    check("W47 one call for the wonder, and its picture is described by that call", calls.filter((each) => each.writer === "wonder").length === 1 && wonders.length === 1 && wonders[0].description === scene.description && wonders[0].caption.startsWith("Great Library, completed by "), JSON.stringify(wonders));
     await stop(host);
   },
 };

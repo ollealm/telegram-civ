@@ -74,6 +74,10 @@ const providers = (): ("gemini" | "codex")[] => {
   return order.filter((provider) => provider === "codex" || process.env.GEMINI_API_KEY);
 };
 
+/** What the painter is given for a picture a writer described: the description, then the year and the general guardrail. The medium is the writer's,
+ *  chosen from what the people's age allows - the code no longer appends one (picture guide A, 2026-11-02) */
+export const picturePrompt = (picture: { description: string; year: string }) => `${picture.description}\n\nThe year is ${picture.year}. No text or lettering. No real people.`;
+
 /** One image from a prompt, optionally guided by reference images. Null when every provider fails or takes too long. */
 export async function generateImage(prompt: string, references: Reference[] = []): Promise<Buffer | null> {
   if (!ENABLED) return null;
@@ -290,7 +294,7 @@ export async function asJpeg(png: Buffer): Promise<Buffer> {
 }
 
 export async function advisorPortrait(civ: string, characterSheet: string, era: string): Promise<Buffer | null> {
-  const png = await generateImage(`A portrait of this person, as a realistic oil painting in the manner and dress of the ${era} of the ${civ} civilization, head and shoulders, natural light, no text:\n\n${characterSheet}`);
+  const png = await generateImage(`A portrait of this person, in the manner and dress of the ${era} of the ${civ} civilization, head and shoulders, natural light, no text:\n\n${characterSheet}`);
   if (png) {
     mkdirSync(PORTRAITS, { recursive: true });
     writeFileSync(portraitPath(civ), png);
