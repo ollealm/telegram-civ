@@ -956,16 +956,16 @@ const CASES: Record<string, () => Promise<void>> = {
     }
     await stop(again);
   },
-  async W44() { // the painted maps' styles: one distinct, non-empty style block for each of the eight ages, atlas and campaign, never mosaic; Future painted as Information
+  async W48() { // the painted maps' styles: one distinct, non-empty style block for each of the eight ages, atlas and campaign, never mosaic; Future painted as Information
     const { cartography, MAP_AGES } = await import("../src/images.ts");
     const blocks = MAP_AGES.map((age) => cartography(`${age} era`));
-    check("W44 a distinct style block for each of the eight ages", MAP_AGES.length === 8 && blocks.every((block) => block.length > 200) && new Set(blocks).size === 8, blocks.map((block) => block.length).join(","));
+    check("W48 a distinct style block for each of the eight ages", MAP_AGES.length === 8 && blocks.every((block) => block.length > 200) && new Set(blocks).size === 8, blocks.map((block) => block.length).join(","));
     const all = MAP_AGES.flatMap((age) => [cartography(`${age} era`), cartography(`${age} era`, "campaign")]);
-    check("W44 no style block says mosaic", !all.some((block) => /mosaic/i.test(block)), all.find((block) => /mosaic/i.test(block))?.slice(0, 120));
-    check("W44 an era the styles do not name is painted as Information", cartography("Future era") === cartography("Information era") && cartography("") === cartography("Information era"));
+    check("W48 no style block says mosaic", !all.some((block) => /mosaic/i.test(block)), all.find((block) => /mosaic/i.test(block))?.slice(0, 120));
+    check("W48 an era the styles do not name is painted as Information", cartography("Future era") === cartography("Information era") && cartography("") === cartography("Information era"));
     const { existsSync } = await import("node:fs");
     const missing = MAP_AGES.flatMap((age) => ["atlas", "campaign"].map((kind) => `assets/map-styles/${age}-${kind}.jpg`)).filter((file) => !existsSync(file));
-    check("W44 every age has its style references", missing.length === 0, missing.join(", "));
+    check("W48 every age has its style references", missing.length === 0, missing.join(", "));
   },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
