@@ -348,6 +348,17 @@ export function keepWonderPicture(wonder: string, png: Buffer) {
 }
 /** A new world keeps none of the last one's wonders */
 export const forgetWonderPictures = () => rmSync(WONDERS, { recursive: true, force: true });
+
+/** Each realm's last painted map, kept for /map (Olle, 2026-11-03: "Tried /map and got an unpainted map") */
+const MAPS = join(PORTRAITS, "..", "maps");
+const mapFile = (civ: string) => join(MAPS, `${civ.replace(/[^A-Za-z0-9-]+/g, "-")}.png`);
+export function keepMap(civ: string, png: Buffer) {
+  mkdirSync(MAPS, { recursive: true });
+  writeFileSync(mapFile(civ), png);
+}
+export const keptMap = (civ: string): Buffer | null => (existsSync(mapFile(civ)) ? readFileSync(mapFile(civ)) : null);
+/** A new world keeps none of the last one's maps */
+export const forgetMaps = () => rmSync(MAPS, { recursive: true, force: true });
 export const wonderPicture = (wonder: string): Buffer | null => (existsSync(join(WONDERS, wonderFile(wonder))) ? readFileSync(join(WONDERS, wonderFile(wonder))) : null);
 /** The kept pictures of these wonders, as painter references, and the names of those that have one (the rest are named in the writer's input only) */
 export const wonderReferences = (wonders: string[]) => {

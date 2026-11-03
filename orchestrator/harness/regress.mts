@@ -1237,6 +1237,11 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W52 a realm known only in a glimpse gets an accent by its name and no frontier", age.glimpses.includes("Colombo") && /Known only from afar: Colombo warm charcoal #4a4038 - a small accent in that colour by the town's name, and no frontier\./.test(classical), classical.match(/Known only[^\n]*/)?.[0]);
     check("W52 coasts and the unknown get no frontier, labels never cover a town or a company", /stops at the shore/.test(classical) && /no closed ring round a realm's known edge or round a far glimpse/.test(classical) && /never over a town's name or a company/.test(classical));
     check("W52 campaign arrows cross the frontiers as marches.png has them, and stay distinct", /no frontier bends to it/.test(campLater) && /distinct from roads and rivers and from the campaign arrows/.test(campLater) && !/frontier/.test(campAncient));
+    const painted = Buffer.from("a painted map");
+    images.keepMap("Japan", painted);
+    const back = images.keptMap("Japan");
+    images.forgetMaps();
+    check("W52 /map's kept map: the painted one comes back, none for a realm never painted, none after a new world", back?.equals(painted) === true && images.keptMap("Greece") === null && images.keptMap("Japan") === null);
     check("W52 one realm alone gets no key", !/A small quiet key/.test(images.frontiers("Classical era", "Japan", [realms[0]])));
     await stop(host);
   },

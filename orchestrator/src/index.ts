@@ -6,7 +6,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, forgetWonderPictures, generateImage, imagesIdle, keepWonderPicture, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
+import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, forgetMaps, forgetWonderPictures, generateImage, imagesIdle, keepMap, keepWonderPicture, keptMap, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
 import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
 import { letterOf, playRound as runRound, turnsAhead } from "./round.ts";
@@ -193,9 +193,14 @@ const oddityPictures = async (round: RoundResult, seen: { campaigns: string[]; c
   return [dated({ turn: round.turn, for: "chronicle", caption, description: answer.oddity.description, year: answer.oddity.year, note: "" }, round.year)];
 };
 
-/** /map: our own drawing at once (the painted one comes with each dispatch) */
+/** /map: the realm's last painted map, the one that came with the latest letter; before any letter has had one, a map is painted now. Never our own drawing */
 async function sendMap(bot: Bot, seat: Seat) {
-  const png = await host.map(seat.civ);
+  const kept = keptMap(seat.civ);
+  if (kept) return void (await bot.api.sendPhoto(seat.chatId!, new InputFile(kept, "map.png")));
+  await bot.api.sendMessage(seat.chatId!, "The mapmakers are at work on it, Majesty; it will come in a few minutes.");
+  const png = await paintedMap(seat.civ);
+  if (!png) return void (await bot.api.sendMessage(seat.chatId!, "The mapmakers could not finish the map this time. Ask again later."));
+  keepMap(seat.civ, png);
   await bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"));
 }
 
@@ -342,7 +347,7 @@ async function playRound() {
         const traced = host.map(seat.civ, "campaign", round.fromTurn, round.turn).catch((error) => { log("march map failed:", error.message); return null; });
         // An emergency council's letter gets the map too - the age so far, with the war's first marches on it - unless the game is over
         const painted = !PAINTED_MAPS || /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve(null)
-          : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).then((png) => { if (!png) log(`the painted map for ${seat.civ} failed: no map goes with the letter`); return png; }).catch((error) => { log("campaign map failed:", error.message); return null; });
+          : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).then((png) => { if (png) keepMap(seat.civ, png); else log(`the painted map for ${seat.civ} failed: no map goes with the letter`); return png; }).catch((error) => { log("campaign map failed:", error.message); return null; });
         // The host's own drawing goes with the letter only when asked for (MARCH_MAP=on): Olle, 2026-11-03, "turn off the bare map, so we only get the generated one"
         const marches = process.env.MARCH_MAP === "on" ? traced : Promise.resolve(null);
         letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
@@ -859,7 +864,8 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.command("usage", (ctx) => ctx.reply(usageSummary()));
 
-  bot.command("map", (ctx) => sendMap(bot, seat()).catch(() => ctx.reply("No map to show yet.")));
+  // Painting can take minutes: it waits behind nothing and holds nothing up
+  bot.command("map", (ctx) => void sendMap(bot, seat()).catch(() => ctx.reply("No map to show yet.")));
 
   // The first seat's ruler may start over: /newgame asks how many rulers, how many rival peoples, how large a world
   if (index === 0) {
@@ -945,7 +951,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       state.endingDone = [];
       state.chapters = [];
       state.pictures = []; // the last world's paintings must not steer this one's
-      state.paintedWonders = []; forgetWonderPictures(); // nor its wonders stand in this one's cities
+      state.paintedWonders = []; forgetWonderPictures(); forgetMaps(); // nor its wonders stand in this one's cities, nor its maps hang here
       state.pendingRound = undefined;
       state.mapSize = draft.size;
       state.mapType = draft.mapType ?? "Pangaea";
