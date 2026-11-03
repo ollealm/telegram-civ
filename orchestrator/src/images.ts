@@ -22,7 +22,7 @@ export type ImageLog = (message: string) => void;
 let log: ImageLog = () => {};
 export const onImageLog = (sink: ImageLog) => (log = sink);
 
-type Reference = { name: string; png: Buffer };
+export type Reference = { name: string; png: Buffer };
 const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image";
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -76,7 +76,20 @@ const providers = (): ("gemini" | "codex")[] => {
 
 /** What the painter is given for a picture a writer described: the description, then the year and the general guardrail. The medium is the writer's,
  *  chosen from what the people's age allows - the code no longer appends one (picture guide A, 2026-11-02) */
-export const picturePrompt = (picture: { description: string; year: string }) => `${picture.description}\n\nThe year is ${picture.year}. No text or lettering. No real people.`;
+export const picturePrompt = (picture: { description: string; year: string }, shown: string[] = []) =>
+  `${picture.description}\n\n${shown.length ? `${shownLine(picture.description, shown)}\n\n` : ""}The year is ${picture.year}. No text or lettering. No real people.`;
+
+/** A place picture's attached wonders (picture guide N): their look from the pictures, the style from this description's medium - its words up to the
+ *  first full stop or colon, first letter lowercased */
+const shownLine = (description: string, shown: string[]) => {
+  const medium = (/^[^.:]*/.exec(description.trim())?.[0] ?? "").trim();
+  const names = shown.map(withArticle);
+  const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `The attached ${names.length === 1 ? "picture shows" : "pictures show"} ${listed} as first painted. Take only how ${names.length === 1 ? "it looks" : "they look"}, not the style: this picture is ${medium.charAt(0).toLowerCase()}${medium.slice(1)}.`;
+};
+/** A wonder's name as English says it: "the Colossus", "the Great Library" (the game's "The Great Library"), and the proper names bare */
+const BARE_WONDERS = new Set(["Stonehenge", "Petra", "Hagia Sophia", "Chichen Itza", "Machu Picchu", "Angkor Wat", "Notre Dame", "Big Ben", "Neuschwanstein", "Himeji Castle", "Cristo Redentor"]);
+const withArticle = (wonder: string) => (/^the /i.test(wonder) ? `the ${wonder.slice(4)}` : BARE_WONDERS.has(wonder) ? wonder : `the ${wonder}`);
 
 /** One image from a prompt, optionally guided by reference images. Null when every provider fails or takes too long. */
 export async function generateImage(prompt: string, references: Reference[] = []): Promise<Buffer | null> {
@@ -276,6 +289,20 @@ export async function chroniclerEmblem(peoples: string[]): Promise<Buffer | null
 /** Portraits are kept so the advisor looks the same all game and can be a reference for later scenes */
 const PORTRAITS = join(process.env.RULER_STATE_FILE ? join(process.env.RULER_STATE_FILE, "..") : "../data/game", "portraits");
 export const portraitPath = (civ: string) => join(PORTRAITS, `${civ}.png`);
+
+/** Wonder pictures are kept beside them, so a place picture can show its wonders as they were first painted (picture guide N) */
+const WONDERS = join(PORTRAITS, "..", "wonders");
+const wonderFile = (wonder: string) => `${wonder.replace(/[^A-Za-z0-9-]+/g, "-")}.png`;
+export function keepWonderPicture(wonder: string, png: Buffer) {
+  mkdirSync(WONDERS, { recursive: true });
+  writeFileSync(join(WONDERS, wonderFile(wonder)), png);
+}
+export const wonderPicture = (wonder: string): Buffer | null => (existsSync(join(WONDERS, wonderFile(wonder))) ? readFileSync(join(WONDERS, wonderFile(wonder))) : null);
+/** The kept pictures of these wonders, as painter references, and the names of those that have one (the rest are named in the writer's input only) */
+export const wonderReferences = (wonders: string[]) => {
+  const kept = wonders.flatMap((wonder) => { const png = wonderPicture(wonder); return png ? [{ wonder, png }] : []; });
+  return { shown: kept.map((each) => each.wonder), references: kept.map(({ wonder, png }): Reference => ({ name: wonderFile(wonder), png })) };
+};
 
 /** The portrait as Telegram wants a profile photo: a JPEG, by way of the system's own converter */
 export async function asJpeg(png: Buffer): Promise<Buffer> {

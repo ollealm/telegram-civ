@@ -1,12 +1,12 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, loadSchema, advisorReply, dated, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
+import { advisorGreeting, loadSchema, advisorReply, dated, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, placePictures, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, onImageLog, paintedMap, picturePrompt } from "./images.ts";
+import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, keepWonderPicture, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
 import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
@@ -132,9 +132,9 @@ const PAINTED_MAPS = process.env.PAINTED_MAPS !== "off";
 
 /** Every picture goes through here: noted in the ledger first, so that whoever describes the next one knows not to ask for it again */
 /** Paints and returns the picture (or null), keeping the ledger honest either way */
-async function paintAndKeep(picture: Picture): Promise<Buffer | null> {
+async function paintAndKeep(picture: Picture, attached: { shown: string[]; references: Reference[] } = { shown: [], references: [] }): Promise<Buffer | null> {
   recordPicture(picture);
-  const png = await generateImage(picturePrompt(picture)).catch((error) => { log(`picture failed (${picture.caption}):`, error.message); return null; });
+  const png = await generateImage(picturePrompt(picture, attached.shown), attached.references).catch((error) => { log(`picture failed (${picture.caption}):`, error.message); return null; });
   if (!png) forgetPicture(picture);
   return png;
 }
@@ -362,13 +362,26 @@ async function playRound() {
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         // A victory's picture leads the last age's pictures, whatever the years of the others
         const victory = (await victoryPictures(round)).map((picture) => ({ ...picture, note: "" }));
+        // A place as the years have left it, rarely: chosen once the others are known (their captions go in), never in the victory's age; it joins the
+        // pictures before painting, its year the age's end, and its wonders' kept pictures go to the painter with it
+        const place = await placePictures(round, [...victory, ...pictures].map((picture) => picture.caption), log);
         // The oddity of the age, rarely: asked of the Chronicler after the rest are chosen, never in the victory's age, and sent last
         // (it is weighed while the others are being painted)
-        const paintAll = (list: (Picture & { note: string })[]) => Promise.all(list.map(async (picture) => ({ picture, png: await paintAndKeep(picture) })));
+        const paintAll = (list: (Picture & { note: string; wonders?: string[] })[]) =>
+          Promise.all(list.map(async (picture) => ({ picture, png: await paintAndKeep(picture, picture.wonders ? wonderReferences(picture.wonders) : undefined) })));
         const [painted, odd] = await Promise.all([
-          paintAll([...victory, ...pictures]),
-          /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve([]) : oddityPictures(round, seen, [...victory, ...pictures].map((picture) => picture.caption)).then(paintAll),
+          paintAll([...victory, ...pictures, ...place]),
+          /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve([]) : oddityPictures(round, seen, [...victory, ...pictures, ...place].map((picture) => picture.caption)).then(paintAll),
         ]);
+        // A wonder's picture is kept, PNG and description, for the place pictures of later ages
+        for (const { picture, png } of painted) {
+          const kept = wonders.find((each) => each === picture);
+          if (!png || !kept) continue;
+          const name = kept.caption.split(",")[0];
+          keepWonderPicture(name, png);
+          (state.paintedWonders ??= []).push({ wonder: name, civ: /completed by (.+?) in /.exec(kept.caption)?.[1] ?? "", place: kept.place, year: kept.year, description: kept.description });
+        }
+        persist();
         const first = painted.filter((entry) => entry.png && victory.includes(entry.picture));
         const middle = painted.filter((entry) => entry.png && !victory.includes(entry.picture));
         chapters.push({ chapter, record, pictures: [...first, ...middle.sort((a, b) => yearOf(a.picture) - yearOf(b.picture) || a.picture.turn - b.picture.turn), ...odd.filter((entry) => entry.png)] });

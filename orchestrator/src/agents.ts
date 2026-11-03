@@ -19,7 +19,7 @@ const CLERK_MODEL = process.env.CLERK_MODEL ?? "claude-sonnet-5";
 const HERALD_MODEL = process.env.HERALD_MODEL ?? ADVISOR_MODEL;
 /** The one picture craft for moments (picture guide C, 2026-11-02): a short description an illustrator paints from, the medium first and chosen from
  *  what the people's age allows (the age line in the writer's input). It replaced the old craft and every role's own style words */
-const PICTURE_CRAFT = `Write two or three sentences an illustrator paints from. Begin with the medium, from the media allowed for this age, in a few plain words. Then one moment: who does what, where we stand, the hour and the weather - vary them; not every picture is a sunset or a storm. A photograph is a moment a camera would catch: a posed group, a documentary shot, a tall portrait of one person, an everyday snapshot. Use colour film whenever the decade had it; black and white only rarely, even for war. When a people appears in an age later than the one it is known for, name their faces and the clothing of that age; when a place's later fame could creep in, say what is not built there yet. When the moment is odd, show someone in it who notices. No inventories of dress and props, no real people by name.
+const PICTURE_CRAFT = `Write two or three sentences an illustrator paints from. Begin with the medium, from the media allowed for this age, in a few plain words. Then one moment: who does what, where we stand, the hour and the weather - vary them; not every picture is a sunset or a storm. A photograph is a moment a camera would catch: a posed group, a documentary shot, a tall portrait of one person, an everyday snapshot. Use colour film from the decade it was sold to everyone; black and white only rarely after that, even for war. When a people appears in an age later than the one it is known for, name their faces and the clothing of that age; when a place's later fame could creep in, say what is not built there yet. When the moment is odd, show someone in it who notices. No inventories of dress and props, no real people by name.
 
 Examples of good descriptions:
 - Oil painting. About AD 1420: a Korean merchant in a white coat and black gat sits on his silk bales at a flooded gorge, staring at a rope bridge broken in two; his pack horses wait behind. Rain.
@@ -995,6 +995,72 @@ Examples of good descriptions:
 - Oil painting, bright windy morning. England's own Colossus over the harbour mouth at London: a bronze Saxon king with sword and round shield, a laden ship passing between his feet.
 - Oil painting, hot clear afternoon. Korea's own Forbidden Palace, as vast as Beijing's, on a desert hill at Daegu: its halls of sun-baked brick under dark tiled roofs, a camel caravan arriving at the gate.`;
 
+/** A place as the years have left it (picture guide N, 2026-11-03): one picture of a city showing what many years left there, like Attila's Court
+ *  in the old showcase - the tested writer text and its examples, verbatim */
+const PLACE_CRAFT = `Write two or three sentences an illustrator paints from: one picture of this place as these years have left it. Begin with the medium, from the media allowed for this age, in a few plain words. Choose the one or two things its people built, won or lost here that matter most and still show; leave the rest out. Then the view that shows them best - from the air, from far off, through a window, or close among the people - with what is happening there, the hour and the weather. Call a wonder by what it looks like as well as its name. Faces and clothing of the age; no inventories, no real people by name.
+
+Examples of good descriptions:
+- Oil painting, a bird's-eye view. Attila's Court in AD 1450, seen from high above the river: the Huns' own pyramid and a gilded palace rise out of a sea of felt tents, and herds stream in across the steppe. Clear autumn morning.
+- 1962 Kodachrome snapshot: a family eats ice cream on the harbour wall at Toledo, the breached Moorish gate the Swedes never rebuilt behind them. Bright, windy Sunday.
+- 1971 colour aerial photograph from a light plane: the old star fort of Lagos, its walls still scorched from the Zulu siege, ringed by new apartment blocks and a motorway. Hazy noon.`;
+
+/** A city that may be pictured as the years have left it: named in three public events or more over the whole game, standing now */
+export type PlaceCandidate = { name: string; civ: string; era: string; events: PublicEvent[]; wonders: { wonder: string; year: string; description: string }[] };
+const PLACE_PREFIX = (place: string) => `${place} as the years have left it`;
+const wholeWord = (name: string) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "u");
+/** The name as a place: after a preposition or a verb of taking, founding or holding it */
+const asPlace = (name: string) => new RegExp(`\\b(?:in|of|at|to|from|on|near|before|took|captured|razed|founded|sacked|besieged|liberated) ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "u");
+
+/** The cities the Chronicler may picture as a place: every living great power's cities named as a whole word in three public events or more, most named
+ *  first, six at most; a city pictured as a place while the ledger remembers it is left out. The judgement is the Chronicler's (choosePlace) */
+export const placeCandidates = async (): Promise<PlaceCandidate[]> => {
+  const [game, events] = await Promise.all([host.state(), host.events()]);
+  const peoples = new Set(game.majorCivs.map((each) => each.civ));
+  const found: PlaceCandidate[] = [];
+  for (const { civ, era = "" } of game.majorCivs.filter((each) => each.alive)) for (const city of await host.cities(civ).catch(() => [])) {
+    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(PLACE_PREFIX(city.name)))) continue;
+    // A city named as a people (Babylon, Carthage) is counted where the text names a place, not where the people act ("Babylon founded the city of Akkad")
+    const named = peoples.has(city.name) ? asPlace(city.name) : wholeWord(city.name);
+    const about = events.filter((event) => named.test(event.text));
+    if (about.length < 3) continue;
+    found.push({ name: city.name, civ, era, events: about, wonders: (state.paintedWonders ?? []).filter((kept) => kept.place === city.name).map(({ wonder, year, description }) => ({ wonder, year, description })) });
+  }
+  return found.sort((a, b) => b.events.length - a.events.length).slice(0, 6);
+};
+
+/** Each candidate as the writer reads it: what happened there, its wonders as they were painted, its owner's age now */
+export const placeBlock = (place: PlaceCandidate, year: string) =>
+  [`${place.name}, a city of ${place.civ}, as the years up to ${year} have left it. What happened there:`, ...place.events.map((event) => `- ${event.year}: ${event.text}`),
+    ...(place.wonders.length ? ["Its wonders as they were painted when finished:", ...place.wonders.map((each) => `- ${each.wonder} (${each.year}): ${each.description}`)] : []),
+    ageLine(place.civ, place.era)].filter(Boolean).join("\n");
+
+/** The Chronicler's place of the age: one at most, none most ages. painting: captions of the pictures already going with this chapter */
+export const choosePlace = (candidates: PlaceCandidate[], year: string, painting: string[] = []) =>
+  runStructured(
+    "herald",
+    HERALD_MODEL,
+    `You are the Chronicler. Of the places below, is there one these years have left so changed that one picture of it shows what happened there - a wonder beside a breached wall, a city founded, lost and won back? Most ages none, and then the answer is none; one at most. The place's events are listed so you can judge what still shows; a place whose events would not show in a picture is not the one.
+${PLACE_CRAFT}
+${CAPTION_CRAFT}
+why - one line for the chancery's log: the place and why, or why none.`,
+    `${candidates.map((place) => placeBlock(place, year)).join("\n\n")}\n\nAlready going with this chapter (never the same subject):\n${painting.map((caption) => `- ${caption}`).join("\n") || "(nothing yet)"}\n\n${alreadyPainted(["chronicle"])}`,
+    z.object({ place: z.string().nullable().describe("Exactly one of the places' names, or null"), why: z.string(), picture: Picture.nullable() }),
+  );
+
+/** The place of the age, rarely: asked after the chapter's other pictures are chosen, never in the victory's age; none when no city qualifies. The picture
+ *  carries the names of the place's wonders, so their kept pictures go to the painter as references (images.ts wonderReferences) */
+export const placePictures = async (round: RoundResult, painting: string[], log: (...args: unknown[]) => void = () => {}): Promise<(PictureRecord & { note: string; wonders: string[] })[]> => {
+  if (/has won/.test(round.stoppedEarly ?? "")) return [];
+  const candidates = await placeCandidates().catch((error) => { log("the place of the age failed:", (error as Error).message); return []; });
+  if (!candidates.length) return [];
+  const answer = await choosePlace(candidates, round.year, painting).catch((error) => { log("the place of the age failed:", (error as Error).message); return null; });
+  if (!answer) return [];
+  const place = candidates.find((each) => each.name.toLowerCase() === (answer.place ?? "").trim().toLowerCase());
+  if (!place || !answer.picture) { log(`no place picture this age (${round.fromYear} to ${round.year}): ${answer.why}`); return []; }
+  log(`the Chronicler pictures ${place.name} as the years have left it (${round.fromYear} to ${round.year}): ${answer.why}`);
+  return [{ ...dated({ turn: round.turn, for: "chronicle", note: "", caption: `${PLACE_PREFIX(place.name)}, ${round.year}. ${answer.picture.caption.trim()}`, description: answer.picture.description, year: round.year }, round.year), wonders: place.wonders.map((each) => each.wonder) }];
+};
+
 type Built = { turn: number; year: string; wonder: string; site?: string };
 /** The wonder the Chronicler paints for a people this age - when they finished several, the one most worth a painting, not the first - and its
  *  description, written in the same call: one call per people that finished any, none per wonder */
@@ -1012,7 +1078,7 @@ ${WONDER_CRAFT}`,
 };
 
 /** A completed wonder always gets its picture - once; one per people per age. A call that fails leaves that people's wonder unpainted (logged) */
-export const wonderPictures = async (round: RoundResult, log: (...args: unknown[]) => void = () => {}): Promise<PictureRecord[]> => {
+export const wonderPictures = async (round: RoundResult, log: (...args: unknown[]) => void = () => {}): Promise<(PictureRecord & { place?: string })[]> => {
   const byCiv = new Map<string, Built[]>();
   for (const event of round.publicEvents) {
     const [, civ, wonder, site] = /^(.+?) completed the wonder (.+?)(?: in (.+?))?\.?$/.exec(event.text) ?? [];
@@ -1024,7 +1090,7 @@ export const wonderPictures = async (round: RoundResult, log: (...args: unknown[
     if (!scene) return [];
     if (built.length > 1) log(`${civ} finished ${built.map((each) => each.wonder).join(", ")}; the Chronicler paints ${scene.wonder}`);
     const chosen = built.find((each) => each.wonder === scene.wonder)!;
-    return [{ turn: chosen.turn, year: chosen.year, for: "chronicle", caption: `${chosen.wonder}, completed by ${civ} in ${chosen.year}`, description: scene.description }];
+    return [{ turn: chosen.turn, year: chosen.year, for: "chronicle", caption: `${chosen.wonder}, completed by ${civ} in ${chosen.year}`, description: scene.description, place: chosen.site }];
   }))).flat();
 };
 

@@ -967,6 +967,70 @@ const CASES: Record<string, () => Promise<void>> = {
     const missing = MAP_AGES.flatMap((age) => ["atlas", "campaign"].map((kind) => `assets/map-styles/${age}-${kind}.jpg`)).filter((file) => !existsSync(file));
     check("W48 every age has its style references", missing.length === 0, missing.join(", "));
   },
+  async W50() { // picture guide N (2026-11-03): a place as the years have left it - candidates from the whole game's events, the Chronicler's choice of one
+    // or none, rare by guard - and the painted prompt with the place's wonders attached. No model is asked: a stand-in answers
+    const host = await start("t100-world");
+    const agents = await import("../src/agents.ts");
+    const images = await import("../src/images.ts");
+    const { state } = await import("../src/store.ts");
+    const game = (await get("/state")).json as { year: string; turn: number; majorCivs: { civ: string; alive: boolean; era: string }[] };
+    const events = (await get("/events?since=0")).json as { turn: number; year: string; text: string }[];
+    const living = await Promise.all(game.majorCivs.filter((each) => each.alive).map(async (each) => ({ ...each, cities: ((await get(`/cities?civ=${civ(each.civ)}`)).json as { name: string }[]).map((city) => city.name) })));
+    const word = (name: string) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "u");
+    const naming = (name: string) => events.filter((event) => word(name).test(event.text)).length;
+    const saved = { pictures: state.pictures, wonders: state.paintedWonders };
+    state.pictures = []; state.paintedWonders = [];
+    const candidates = await agents.placeCandidates();
+    check("W50 candidates: three events or more naming each, standing cities, most named first, six at most", candidates.length > 0 && candidates.length <= 6
+      && candidates.every((place) => place.events.length >= 3 && place.events.every((event) => word(place.name).test(event.text)) && living.some((each) => each.civ === place.civ && each.cities.includes(place.name)))
+      && candidates.every((place, at) => at === 0 || candidates[at - 1].events.length >= place.events.length), candidates.map((place) => `${place.name} (${place.civ}) ${place.events.length}`).join(", "));
+    // A city named as its people (Babylon) counts the events that name the place, not those where the people act ("Babylon founded the city of Akkad")
+    const peopleNamed = candidates.filter((place) => game.majorCivs.some((each) => each.civ === place.name));
+    const acting = (place: { name: string }, text: string) => text.startsWith(`${place.name} `) && !new RegExp(` (?:of|in|at|to|from) ${place.name}(?![\\p{L}])`, "u").test(text);
+    check("W50 a city named as a people counts only the events that name it as a place", peopleNamed.every((place) => !place.events.some((event) => acting(place, event.text))) && candidates.every((place) => naming(place.name) >= place.events.length),
+      peopleNamed.map((place) => `${place.name}: ${place.events.length} of ${naming(place.name)} naming it`).join(", "));
+    const top = candidates[0];
+    state.paintedWonders = [{ wonder: "Colossus", civ: top.civ, place: top.name, year: "AD 90", description: "Oil painting. The Colossus at its harbour." }];
+    const calls: { systemPrompt: string; prompt: string }[] = [];
+    let choice: string | null = top.name;
+    const scene = { caption: "A title. A sentence.", description: "Oil painting, a bird's-eye view. The place.", year: "AD 1" };
+    agents.standInForModels((asked) => { calls.push(asked); return { text: "", data: { place: choice, why: "stand-in why", picture: choice ? scene : null } }; });
+    const logged: string[] = [];
+    const round = { fromTurn: game.turn - 12, turn: game.turn, fromYear: "AD 1", year: game.year, publicEvents: [], rankings: [] } as any;
+    try {
+      const chosen = await agents.placePictures(round, ["Going already. A sentence."], (...args) => logged.push(args.join(" ")));
+      const call = calls.at(-1)!;
+      check("W50 the chooser's instructions: the opening, the tested writer text and its Attila example", call.systemPrompt.startsWith("You are the Chronicler. Of the places below, is there one these years have left so changed")
+        && call.systemPrompt.includes("Write two or three sentences an illustrator paints from: one picture of this place as these years have left it.") && call.systemPrompt.includes("Attila's Court in AD 1450, seen from high above the river"));
+      const era = game.majorCivs.find((each) => each.civ === top.civ)!.era;
+      check("W50 each candidate's block in the tested form: first line, its events, its wonders, the owner's age", candidates.every((place) => call.prompt.includes(`${place.name}, a city of ${place.civ}, as the years up to ${game.year} have left it. What happened there:\n- ${place.events[0].year}: ${place.events[0].text}`))
+        && call.prompt.includes(`Its wonders as they were painted when finished:\n- Colossus (AD 90): Oil painting. The Colossus at its harbour.\nThe people's age: ${top.civ}, the ${era}.`), call.prompt.slice(0, 400));
+      check("W50 the captions already going are in the input", call.prompt.includes("Already going with this chapter (never the same subject):\n- Going already. A sentence."));
+      check("W50 a chosen place: one picture for the chronicle, captioned by its prefix, of the age's end, with its wonders", chosen.length === 1 && chosen[0].for === "chronicle"
+        && chosen[0].caption === `${top.name} as the years have left it, ${game.year}. A title. A sentence.` && chosen[0].year === game.year && chosen[0].wonders.join() === "Colossus", JSON.stringify(chosen));
+      choice = null;
+      const none = await agents.placePictures(round, [], (...args) => logged.push(args.join(" ")));
+      check("W50 none: no picture, the why in the log", none.length === 0 && logged.some((line) => /^no place picture this age .*: stand-in why$/.test(line)), logged.join(" | "));
+      choice = "Atlantis";
+      check("W50 a place that is no candidate counts as none", (await agents.placePictures(round, [])).length === 0);
+      choice = top.name;
+      state.pictures = [{ turn: 1, year: "AD 1", for: "chronicle", caption: `${top.name} as the years have left it, AD 1. Earlier.`, description: "" }];
+      check("W50 a place pictured while the ledger remembers it is no candidate", !(await agents.placeCandidates()).some((place) => place.name === top.name));
+      const before = calls.length;
+      check("W50 in the victory's age, no call", (await agents.placePictures({ ...round, stoppedEarly: "Greece has won a Scientific victory" }, [])).length === 0 && calls.length === before);
+    } finally { agents.standInForModels(undefined); state.pictures = saved.pictures; state.paintedWonders = saved.wonders; }
+    check("W50 the painted prompt without attachments is unchanged", images.picturePrompt({ description: "A scene.", year: "AD 100" }) === "A scene.\n\nThe year is AD 100. No text or lettering. No real people.");
+    const one = images.picturePrompt({ description: "Oil painting, a bird's-eye view. The place.", year: "AD 100" }, ["Colossus"]);
+    check("W50 one wonder attached: the singular line, the medium lowercased", one === "Oil painting, a bird's-eye view. The place.\n\nThe attached picture shows the Colossus as first painted. Take only how it looks, not the style: this picture is oil painting, a bird's-eye view.\n\nThe year is AD 100. No text or lettering. No real people.", one);
+    const two = images.picturePrompt({ description: "1962 Kodachrome snapshot: a harbour.", year: "AD 1962" }, ["Terracotta Army", "Taj Mahal"]);
+    check("W50 two attached: the plural line, X and Y", two.includes("The attached pictures show the Terracotta Army and the Taj Mahal as first painted. Take only how they look, not the style: this picture is 1962 Kodachrome snapshot."), two);
+    const png = Buffer.from("not really a png");
+    images.keepWonderPicture("The Great Library", png);
+    const refs = images.wonderReferences(["The Great Library", "Petra"]);
+    check("W50 a kept wonder picture comes back, an unknown one is null, and only kept ones are attached", images.wonderPicture("The Great Library")?.equals(png) === true && images.wonderPicture("Petra") === null
+      && refs.shown.join() === "The Great Library" && refs.references[0]?.name === "The-Great-Library.png", JSON.stringify(refs.shown));
+    await stop(host);
+  },
   async W10() { // every proposal kind and demands barred: no officials' proposal or demand in ten turns; the faith reserve kept
     const host = await start("run22-t234-greece");
     const courts = ["Greece", "Inca", "Japan", "Iroquois", "The Ottomans", "Babylon"];

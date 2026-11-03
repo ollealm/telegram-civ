@@ -118,6 +118,8 @@ export type State = {
   endingDone?: string[];
   /** Pictures painted lately, so that nobody is shown the same scene twice */
   pictures?: Picture[];
+  /** Every wonder picture painted, beyond the ledger's sixty: a place picture names a city's wonders by them, and their PNGs go to its painter (picture guide N) */
+  paintedWonders?: { wonder: string; civ: string; place?: string; year: string; description: string }[];
   /** The age being played, kept on disk as it goes: after urgent news (urgent) the rest of it is played once the councils have risen; after a restart, the rest of it is played on.
    *  Cleared once every turn of it is played. remaining is an older file's way of saying where it ends. */
   pendingRound?: {
