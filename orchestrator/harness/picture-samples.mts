@@ -68,7 +68,7 @@ for (const job of jobs) {
     const pictured = kind === "place" ? await agents.choosePlace(candidates, game.year).then((answer) => {
       const place = candidates.find((each) => each.name.toLowerCase() === (answer.place ?? "").trim().toLowerCase());
       if (!place || !answer.picture) { say(`no place picture: ${answer.why}`); return []; }
-      return [{ caption: `${place.name} as the years have left it, ${game.year}. ${answer.picture.caption}`, description: answer.picture.description, year: game.year, wonders: place.wonders.map((each) => each.wonder) }];
+      return [{ caption: `${place.name} as the years have left it, ${game.year}. ${answer.picture.caption}`, description: answer.picture.description, year: game.year, wonders: place.wonders.filter((each) => answer.picture!.description.toLowerCase().includes(each.wonder.toLowerCase())).map((each) => each.wonder) }];
     }) : await agents.placePictures(placeRound, [], say);
     for (const picture of pictured) samples.push({ name: `place-${picture.caption.split(" as the years")[0]}`, writer: `the Chronicler's place (choosePlace, of ${candidates.map((each) => `${each.name} ${each.events.length}`).join(", ")})`, age: ageOfLast(), caption: picture.caption, description: picture.description, year: picture.year, wonders: picture.wonders });
   } else if (kind === "wonders") {

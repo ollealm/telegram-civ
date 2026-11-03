@@ -990,10 +990,11 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W50 a city named as a people counts only the events that name it as a place", peopleNamed.every((place) => !place.events.some((event) => acting(place, event.text))) && candidates.every((place) => naming(place.name) >= place.events.length),
       peopleNamed.map((place) => `${place.name}: ${place.events.length} of ${naming(place.name)} naming it`).join(", "));
     const top = candidates[0];
-    state.paintedWonders = [{ wonder: "Colossus", civ: top.civ, place: top.name, year: "AD 90", description: "Oil painting. The Colossus at its harbour." }];
+    state.paintedWonders = [{ wonder: "Colossus", civ: top.civ, place: top.name, year: "AD 90", description: "Oil painting. The Colossus at its harbour." },
+      { wonder: "Petra", civ: top.civ, place: top.name, year: "AD 95", description: "Oil painting. Petra in its gorge." }];
     const calls: { systemPrompt: string; prompt: string }[] = [];
     let choice: string | null = top.name;
-    const scene = { caption: "A title. A sentence.", description: "Oil painting, a bird's-eye view. The place.", year: "AD 1" };
+    const scene = { caption: "A title. A sentence.", description: "Oil painting, a bird's-eye view. The colossus over the place.", year: "AD 1" };
     agents.standInForModels((asked) => { calls.push(asked); return { text: "", data: { place: choice, why: "stand-in why", picture: choice ? scene : null } }; });
     const logged: string[] = [];
     const round = { fromTurn: game.turn - 12, turn: game.turn, fromYear: "AD 1", year: game.year, publicEvents: [], rankings: [] } as any;
@@ -1004,9 +1005,9 @@ const CASES: Record<string, () => Promise<void>> = {
         && call.systemPrompt.includes("Write two or three sentences an illustrator paints from: one picture of this place as these years have left it.") && call.systemPrompt.includes("Attila's Court in AD 1450, seen from high above the river"));
       const era = game.majorCivs.find((each) => each.civ === top.civ)!.era;
       check("W50 each candidate's block in the tested form: first line, its events, its wonders, the owner's age", candidates.every((place) => call.prompt.includes(`${place.name}, a city of ${place.civ}, as the years up to ${game.year} have left it. What happened there:\n- ${place.events[0].year}: ${place.events[0].text}`))
-        && call.prompt.includes(`Its wonders as they were painted when finished:\n- Colossus (AD 90): Oil painting. The Colossus at its harbour.\nThe people's age: ${top.civ}, the ${era}.`), call.prompt.slice(0, 400));
+        && call.prompt.includes(`Its wonders as they were painted when finished:\n- Colossus (AD 90): Oil painting. The Colossus at its harbour.\n- Petra (AD 95): Oil painting. Petra in its gorge.\nThe people's age: ${top.civ}, the ${era}.`), call.prompt.slice(0, 400));
       check("W50 the captions already going are in the input", call.prompt.includes("Already going with this chapter (never the same subject):\n- Going already. A sentence."));
-      check("W50 a chosen place: one picture for the chronicle, captioned by its prefix, of the age's end, with its wonders", chosen.length === 1 && chosen[0].for === "chronicle"
+      check("W50 a chosen place: one picture for the chronicle, captioned by its prefix, of the age's end, with the wonders its description names (Petra is left out)", chosen.length === 1 && chosen[0].for === "chronicle"
         && chosen[0].caption === `${top.name} as the years have left it, ${game.year}. A title. A sentence.` && chosen[0].year === game.year && chosen[0].wonders.join() === "Colossus", JSON.stringify(chosen));
       choice = null;
       const none = await agents.placePictures(round, [], (...args) => logged.push(args.join(" ")));

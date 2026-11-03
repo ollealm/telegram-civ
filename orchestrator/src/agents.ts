@@ -1058,7 +1058,10 @@ export const placePictures = async (round: RoundResult, painting: string[], log:
   const place = candidates.find((each) => each.name.toLowerCase() === (answer.place ?? "").trim().toLowerCase());
   if (!place || !answer.picture) { log(`no place picture this age (${round.fromYear} to ${round.year}): ${answer.why}`); return []; }
   log(`the Chronicler pictures ${place.name} as the years have left it (${round.fromYear} to ${round.year}): ${answer.why}`);
-  return [{ ...dated({ turn: round.turn, for: "chronicle", note: "", caption: `${PLACE_PREFIX(place.name)}, ${round.year}. ${answer.picture.caption.trim()}`, description: answer.picture.description, year: round.year }, round.year), wonders: place.wonders.map((each) => each.wonder) }];
+  // A reference goes along only for a wonder the description names: the writer chooses what still shows, and an attached picture of a wonder it left out
+  // could put that wonder in (the first samples attached London's Djenne to a picture of its Great Wall and Taj Mahal)
+  const shown = place.wonders.filter((each) => answer.picture!.description.toLowerCase().includes(each.wonder.toLowerCase())).map((each) => each.wonder);
+  return [{ ...dated({ turn: round.turn, for: "chronicle", note: "", caption: `${PLACE_PREFIX(place.name)}, ${round.year}. ${answer.picture.caption.trim()}`, description: answer.picture.description, year: round.year }, round.year), wonders: shown }];
 };
 
 type Built = { turn: number; year: string; wonder: string; site?: string };
