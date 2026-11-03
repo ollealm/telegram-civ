@@ -1024,6 +1024,13 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W50 one wonder attached: the singular line, the medium lowercased", one === "Oil painting, a bird's-eye view. The place.\n\nThe attached picture shows the Colossus as first painted. Take only how it looks, not the style: this picture is oil painting, a bird's-eye view.\n\nThe year is AD 100. No text or lettering. No real people.", one);
     const two = images.picturePrompt({ description: "1962 Kodachrome snapshot: a harbour.", year: "AD 1962" }, ["Terracotta Army", "Taj Mahal"]);
     check("W50 two attached: the plural line, X and Y", two.includes("The attached pictures show the Terracotta Army and the Taj Mahal as first painted. Take only how they look, not the style: this picture is 1962 Kodachrome snapshot."), two);
+    // The wonder event names its site with the lie of the land in brackets; the kept record's place is the bare city name, or no place picture ever finds its wonders
+    // (the first sample run on run32-t216-peace: London's Djenne kept as "London (the capital, on the coast, ...)", "references: none kept")
+    agents.standInForModels(() => ({ text: "", data: { wonder: "Great Library", description: "Oil painting. The library." } }));
+    try {
+      const kept = await agents.wonderPictures({ ...round, publicEvents: [{ turn: game.turn, year: game.year, text: `${top.civ} completed the wonder Great Library in ${top.name} (river, hills).` }] });
+      check("W50 a kept wonder's place is the city's name alone, without the lie of the land the event adds", kept.length === 1 && kept[0].place === top.name, JSON.stringify(kept.map((each) => each.place)));
+    } finally { agents.standInForModels(undefined); }
     const png = Buffer.from("not really a png");
     images.keepWonderPicture("The Great Library", png);
     const refs = images.wonderReferences(["The Great Library", "Petra"]);

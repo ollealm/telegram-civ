@@ -1090,7 +1090,8 @@ export const wonderPictures = async (round: RoundResult, log: (...args: unknown[
     if (!scene) return [];
     if (built.length > 1) log(`${civ} finished ${built.map((each) => each.wonder).join(", ")}; the Chronicler paints ${scene.wonder}`);
     const chosen = built.find((each) => each.wonder === scene.wonder)!;
-    return [{ turn: chosen.turn, year: chosen.year, for: "chronicle", caption: `${chosen.wonder}, completed by ${civ} in ${chosen.year}`, description: scene.description, place: chosen.site }];
+    // The event names the site with the lie of its land, "London (the capital, on the coast, ...)": the place kept is the city's name alone, as its candidates are
+    return [{ turn: chosen.turn, year: chosen.year, for: "chronicle", caption: `${chosen.wonder}, completed by ${civ} in ${chosen.year}`, description: scene.description, place: chosen.site?.replace(/\s*\(.*\)\s*$/, "") }];
   }))).flat();
 };
 
