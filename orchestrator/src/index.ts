@@ -657,14 +657,23 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().ready) return reply("The court has already risen, Majesty; the years wait only on the other rulers.");
     // Dismissed without answering the advisor's last question: silence is assent to what it recommended
     const last = seat().chat.at(-1);
-    // A question left unanswered, or smaller matters left to the advisor: either needs the closing pass, or the leans are never applied
+    // The fixed phrase goes out as soon as nothing the ruler should read comes before it; once only
+    let told = false;
+    const tellDismissed = async () => {
+      if (told) return;
+      told = true;
+      await reply("The court is dismissed. Until next time.").catch((error) => log(`telling ${seat().civ} of the dismissal failed:`, error.message));
+    };
+    // A question left unanswered, or loose ends left to the advisor: either needs the closing pass, or the leans are never applied
     if (silently && last?.from === "advisor" && (/\?/.test(last.text) || seat().matters?.length)) {
-      // A question unanswered needs a word on which way the advisor went; matters alone do not: the ruler has read the leans and needs no retelling
+      // A question unanswered needs a word on which way the advisor went; loose ends alone do not: the ruler has read what will be done and needs no retelling
       const message = /\?/.test(last.text) && !last.closing
-        ? "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to" + (seat().matters?.length ? ", and settle the smaller matters you listed as you see fit" : "") + ". Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]"
-        : "[The ruler dismisses the court without another word, leaving the smaller matters to you. Settle each by your lean and update your plan. Nothing you write here reaches the ruler, who has read your leans; if one had to go another way, your plan carries it to your next dispatch.]";
-      // A question left open earns a word; a closing's own question marks (the matters' invitations) do not: the ruler read the leans under it
+        ? "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to" + (seat().matters?.length ? ", and settle the loose ends you listed as you see fit" : "") + ". Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]"
+        : "[The ruler dismisses the court without another word, leaving the loose ends to you. Settle each as you said it would be done and update your plan. Nothing you write here reaches the ruler, who has read what you will do; if one had to go another way, your plan carries it to your next dispatch.]";
+      // A question left open earns a word; a closing's own question marks (the loose ends' invitations) do not: the ruler read what will be done under it
       const shown = /\?/.test(last.text) && !last.closing;
+      // A silent pass has nothing for the ruler: the dismissal is told before it, not after its 20-60 s; the round still waits for its orders
+      if (!shown) await tellDismissed();
       try {
         const answer = (await (shown ? whileTyping(bot, seat().chatId!, advisorReply(seat(), message, turnsAhead((await host.state()).turn))) : advisorReply(seat(), message, turnsAhead((await host.state()).turn)))).replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "").trim();
         if (shown && answer) {
@@ -702,7 +711,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().dismissed = false; // a closing pass above may have called dismiss_court again
     persist();
     // The same words whether the other rulers are done or not: what the wait is for is not the ruler's concern
-    await reply("The court is dismissed. Until next time.").catch((error) => log(`telling ${seat().civ} of the dismissal failed:`, error.message));
+    await tellDismissed();
     await maybeStartRound();
   };
 
@@ -784,11 +793,12 @@ function setUpAdvisor(bot: Bot, index: number) {
         seat().forCouncil = undefined; // what was left with the clerk was before the advisor in this reply
         persist();
         await ctx.reply(reply);
-        // A closing that never weighed its smaller matters is asked once: list them, or say there are none (an empty list counts as considered)
-        const closed = seat().dismissed || new RegExp(`/(${LEAVE.join("|")})\\s*$`, "i").test(reply);
+        // A closing that never weighed its loose ends is asked once: list them, or say there are none (an empty list counts as considered).
+        // A court the advisor dismissed by its own call is not asked: it settled them by lean in its orders, and the dismissal follows at once
+        const closed = !seat().dismissed && new RegExp(`/(${LEAVE.join("|")})\\s*$`, "i").test(reply);
         if (closed && seat().matters === undefined && !thenGo && !state.pendingRound?.urgent) {
-          const listed = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the smaller matters. If there are calls you would settle alone once it rises, list them now - numbered, one line each with your lean, checked - and give them to smaller_matters, ending with \"Name any you want to raise; otherwise\" and the /onward line. If there are truly none, call smaller_matters with an empty list and say in one line that nothing small waits. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
-            .catch((error) => { log(`${seat().civ}: the smaller-matters follow-up failed:`, error.message); return ""; });
+          const listed = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the loose ends. If there are calls you would settle alone once it rises, list them now - numbered, one line each with what will be done, checked - and give them to loose_ends, ending with \"Name any you want to raise; otherwise\" and the /onward line. If there are truly none, call loose_ends with an empty list and say in one line that nothing is left loose. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
+            .catch((error) => { log(`${seat().civ}: the loose-ends follow-up failed:`, error.message); return ""; });
           if (listed.trim()) {
             const shown = seat().dismissed ? listed.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "") : listed;
             remember(seat(), { from: "advisor", text: shown });

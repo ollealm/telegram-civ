@@ -19,6 +19,8 @@ const HOST_SH = resolve(process.env.HOST_SH ?? "../host.sh");
 const BASE = `http://127.0.0.1:${PORT}`;
 // Every orchestrator module a case imports talks to the case's own host, never the live one (host.ts reads this once, at its first import)
 process.env.RULER_HOST_URL = BASE;
+// No case paints: one that reaches a painter (W51's dismissal) gets no picture, and no image is ever asked of a provider (images.ts reads this once)
+process.env.IMAGES = "off";
 
 const results: { name: string; ok: boolean; detail: string }[] = [];
 const check = (name: string, ok: boolean, detail = "") => {
@@ -1207,6 +1209,102 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W49 the painted prompt stamps that year", picturePrompt(agents.dated({ description: "A scene.", year: named }, game.year)).includes(`The year is ${named}.`));
     check("W49 a writer that named no year gets the year it was given", agents.dated({ description: "A scene.", year: " " }, game.year).year === game.year && agents.dated({ description: "A scene." }, game.year).year === game.year);
     await stop(host);
+  },
+  async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
+    // dismissed by its own call gets no loose-ends follow-up (a 600 BC list came after the closing, and the dismissal fired under it); a silent closing
+    // pass tells the dismissal before it, the round waiting on the pass; a pass with a word for the ruler keeps the word first. Last: the bots poll on
+    const host = await start("t100-world");
+    const agents = await import("../src/agents.ts");
+    const { state, remember } = await import("../src/store.ts");
+    const { createServer } = await import("node:http");
+    const game = (await get("/state")).json as { year: string; turn: number; majorCivs: { civ: string; alive: boolean }[] };
+    const [ours, other] = game.majorCivs.filter((each) => each.alive).map((each) => each.civ);
+    // The stand-in for Telegram, as probe-ending's: every message sent is kept, and an update waits for the advisor bot's next poll
+    const sent: string[] = [];
+    const queued: unknown[] = [];
+    let updateId = 1;
+    const telegram = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => (body += chunk));
+      request.on("end", async () => {
+        const [, token, method] = (request.url ?? "").match(/^\/bot([^/]+)\/(\w+)/) ?? [];
+        let params: Record<string, unknown> = {};
+        try { params = body ? JSON.parse(body) : {}; } catch { /* a photo upload is multipart */ }
+        const reply = (result: unknown) => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ ok: true, result })); };
+        if (method === "getMe") return reply({ id: Number(token.split(":")[0]), is_bot: true, first_name: `bot ${token}`, username: `bot_${token.split(":")[1]}` });
+        if (method === "getUpdates") {
+          if (token === "2:advisor" && queued.length) return reply(queued.splice(0));
+          await sleep(200);
+          return reply([]);
+        }
+        if (method === "sendMessage") sent.push(String(params.text ?? ""));
+        if (method.startsWith("send")) return reply({ message_id: sent.length, date: Math.floor(Date.now() / 1000), chat: { id: Number(params.chat_id), type: "private" } });
+        return reply(true);
+      });
+    });
+    const tgPort = PORT + 1;
+    await new Promise<void>((done) => telegram.listen(tgPort, "127.0.0.1", done));
+    const say = (text: string) => queued.push({ update_id: updateId++, message: { message_id: updateId, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, from: { id: 7, is_bot: false, first_name: "Ruler" }, text,
+      ...(text.startsWith("/") && { entities: [{ type: "bot_command", offset: 0, length: text.split(" ")[0].length }] }) } });
+    const until = async (done: () => boolean, ms = 30_000) => { for (let waited = 0; !done() && waited < ms; waited += 100) await sleep(100); return done(); };
+    const DISMISSED = "The court is dismissed. Until next time.";
+    // Our seat, and another ruler's still in council, so that no round starts behind the dismissals
+    const character = { name: "Adiega", title: "Steward", pronouns: "she/her", sheet: "A careful steward who says little." };
+    state.phase = "audience";
+    state.seats = [
+      { civ: ours, bot: 0, chatId: 4242, rulerName: "the ruler", will: "", journal: [], chat: [], ready: false, character } as any,
+      { civ: other, chatId: 4343, will: "", journal: [], chat: [], ready: false, character } as any,
+    ];
+    const seat = state.seats[0];
+    const plant = (text: string, closing = false) => { seat.closing = closing || undefined; remember(seat, { from: "advisor", text }); };
+    // The stand-in advisor: what a dismiss_court or loose_ends call would do, it does to the seat; each call notes what the ruler had been sent by then
+    const calls: { said: string; sentBefore: number; ready: boolean; dismissedTold: boolean }[] = [];
+    agents.standInForModels((asked) => {
+      if (asked.outputSchema) return { text: "", data: { caption: "The granary. Grain comes in.", description: "Oil painting. A granary.", year: game.year } }; // the decision's picture
+      const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
+      calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED) });
+      if (/Sounds good, do that/.test(said)) { seat.dismissed = true; return { text: "Then the granary first and the walls after; Kyoto grows before it arms." }; }
+      if (/Carry on then/.test(said)) return { text: "The granary first, then the walls.\n\nName any you want to raise; otherwise\n/onward" };
+      if (/without weighing the loose ends/.test(said)) { seat.matters = []; return { text: "Nothing is left loose.\n/onward" }; }
+      if (/dismisses the court without another word/.test(said)) return { text: /leaving the loose ends to you/.test(said) ? "Settled as listed." : "I went with the granary, for the winter." };
+      return { text: "Granary or walls, Majesty?" };
+    });
+    Object.assign(process.env, { HERALD_BOT_TOKEN: "1:herald", ADVISOR_1_BOT_TOKEN: "2:advisor", TELEGRAM_API_ROOT: `http://127.0.0.1:${tgPort}`, PAINTED_MAPS: "off" });
+    try {
+      await import("../src/index.ts");
+      // A: closed with the /onward line and no list weighed: the follow-up is asked, once, in the new name
+      plant("Granary or walls, Majesty?");
+      say("Carry on then.");
+      check("W51 a closing with the /onward line and no list weighed gets the loose-ends follow-up", await until(() => calls.some((each) => /without weighing the loose ends/.test(each.said)) && sent.includes("Nothing is left loose.\n/onward")), calls.map((each) => each.said.slice(20, 80)).join(" | "));
+      // B: the advisor dismisses by its own call: no follow-up, the reply and then the dismissal
+      seat.matters = undefined;
+      const beforeB = { calls: calls.length, sent: sent.length };
+      say("Sounds good, do that.");
+      await until(() => sent.slice(beforeB.sent).includes(DISMISSED));
+      const afterB = calls.slice(beforeB.calls).filter((each) => !/Sounds good/.test(each.said));
+      check("W51 a court the advisor dismissed by its own call gets no follow-up: the closing, then the dismissal", afterB.length === 0 && JSON.stringify(sent.slice(beforeB.sent)) === JSON.stringify(["Then the granary first and the walls after; Kyoto grows before it arms.", DISMISSED]) && seat.ready,
+        `calls after: ${afterB.map((each) => each.said.slice(20, 90)).join(" | ")}; sent: ${JSON.stringify(sent.slice(beforeB.sent))}`);
+      // C: a bare /onward under a closing with loose ends: the dismissal goes out before the silent pass, and the court rises only after it
+      Object.assign(seat, { ready: false, dismissed: false, matters: [{ item: "An idle Great Scientist", lean: "settles in Kyoto's academy" }, { item: "Spare gold", lean: "goes to the walls" }] });
+      plant("The granary first.\n\nLeft loose:\n1. An idle Great Scientist: he settles in Kyoto's academy\n2. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward", true);
+      const beforeC = { calls: calls.length, sent: sent.length };
+      say("/onward");
+      await until(() => seat.ready);
+      const pass = calls.slice(beforeC.calls).find((each) => /leaving the loose ends to you/.test(each.said));
+      check("W51 a silent closing pass: the dismissal is told before it begins, and the court has not risen while it runs", !!pass && pass.dismissedTold && !pass.ready && pass.sentBefore === beforeC.sent + 1, JSON.stringify(pass));
+      check("W51 the silent pass's answer is not sent, and the dismissal is told once", seat.ready && JSON.stringify(sent.slice(beforeC.sent)) === JSON.stringify([DISMISSED]), JSON.stringify(sent.slice(beforeC.sent)));
+      // D: a bare /onward under an unanswered question: the advisor's word first, then the dismissal
+      Object.assign(seat, { ready: false, dismissed: false, matters: undefined });
+      plant("Granary or walls, Majesty?");
+      const beforeD = sent.length;
+      say("/onward");
+      await until(() => seat.ready && sent.slice(beforeD).includes(DISMISSED));
+      check("W51 a pass with a word for the ruler: the word, then the dismissal", JSON.stringify(sent.slice(beforeD)) === JSON.stringify(["I went with the granary, for the winter.", DISMISSED]), JSON.stringify(sent.slice(beforeD)));
+      check("W51 no round started: the other ruler is still in council", state.phase === "audience" && !state.seats[1].ready);
+    } finally {
+      agents.standInForModels(undefined);
+      await stop(host);
+    }
   },
 };
 

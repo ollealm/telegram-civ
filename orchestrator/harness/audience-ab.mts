@@ -20,8 +20,8 @@ const SCENARIOS: Record<string, Record<string, string[]>> = {
     Denmark: ["All to the stars. Japan can wait.", "Can we buy more aluminium from anyone?", "Sounds good, do that."],
     Celts: ["Yes, buy it. Stand down the batteries at Moscow.", "What would you do with the rest of the gold?", "Good. Carry on."],
   },
-  // The smaller matters: asked for, one taken up, one struck and the rest left to the advisor
-  matters: {
+  // The loose ends: asked for, one taken up, one struck and the rest left to be done as listed
+  "loose-ends": {
     Denmark: ["All to the stars. Japan can wait. What small things are left?", "Take up the first one.", "Fine. Skip the last one, the rest as you like."],
     Celts: ["Yes, buy it. Stand down the batteries at Moscow.", "What small things are left before we finish?", "Not the first one. The rest as you like."],
   },
@@ -42,7 +42,7 @@ onTrace((trace) => traces.push(trace));
 /** What a tool call carried, short enough to read beside the reply */
 const shown = (call: Trace["toolCalls"][number]) => {
   const input = call.input as Record<string, unknown>;
-  if (call.name === "smaller_matters") return `smaller_matters: ${(Array.isArray(input.matters) ? (input.matters as { matter: string; lean: string }[]) : []).map((m, i) => `${i + 1}. ${m.matter} -> ${m.lean}`).join(" | ") || "(none)"}`;
+  if (call.name === "loose_ends") return `loose_ends: ${(Array.isArray(input.loose_ends) ? (input.loose_ends as { item: string; lean: string }[]) : []).map((end, i) => `${i + 1}. ${end.item} -> ${end.lean}`).join(" | ") || "(none)"}`;
   if (call.name === "paint_decision") return `paint_decision: ${input.caption}`;
   if (call.name === "proclaim") return `proclaim: ${input.words}`;
   if (call.name === "set_orders") return `set_orders: ${JSON.stringify(input).slice(0, 400)}`;

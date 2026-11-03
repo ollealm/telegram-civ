@@ -6,7 +6,7 @@ import type { Refusal } from "./refusals.ts";
 
 const FILE = resolve(process.env.RULER_STATE_FILE ?? "../data/game/orchestrator.json");
 
-export type ChatMessage = { from: "ruler" | "advisor"; text: string; /** an advisor's closing: its question marks are the matters' invitations, not a question left open */ closing?: boolean; /** the dispatch that opens an audience */ letter?: boolean };
+export type ChatMessage = { from: "ruler" | "advisor"; text: string; /** an advisor's closing: its question marks are the loose ends' invitations, not a question left open */ closing?: boolean; /** the dispatch that opens an audience */ letter?: boolean };
 
 /** Who the advisor is this game - made from the ruler's answers in the setup round, stable until /newgame */
 export type Character = {
@@ -32,9 +32,9 @@ export type Seat = {
   formerAdvisors?: { name: string; title?: string; pronouns?: string; until: string }[];
   /** The keeper of the rolls: answers questions of fact while time passes (and on /clerk). One per realm per game. */
   clerk?: { name: string; title: string; sheet: string; pronouns?: string };
-  /** The smaller matters the advisor would settle alone once the court rises, offered at the closing for the ruler to take up or leave */
-  matters?: { matter: string; lean: string; opening?: string }[];
-  /** Set by the smaller_matters tool while the reply is being written; remember() turns it into closedAt once that reply is stored */
+  /** The loose ends the advisor would settle alone once the court rises, offered at the closing for the ruler to take up or leave (the field keeps its old name, so a state written before the rename still reads) */
+  matters?: { item: string; lean: string; opening?: string }[];
+  /** Set by the loose_ends tool while the reply is being written; remember() turns it into closedAt once that reply is stored */
   closing?: boolean;
   /** Who has the floor in the audience: the clerk, once called with /clerk or by name, until the advisor is called back with /advisor or by name; unset = the advisor */
   floor?: "clerk";
@@ -197,7 +197,7 @@ const CHAT_CEILING = 40;
 /** The chat the advisor is shown is the audience in progress - from the letter that opened it - and, before that, only its own last closing:
  *  what it promised last time. Older talk lives on in the will record, the plan, the journal and the letters, each with its own rule */
 export function remember(seat: Seat, message: ChatMessage) {
-  if (message.from === "advisor" && seat.closing) { message.closing = true; seat.closing = undefined; } // the reply that listed the smaller matters
+  if (message.from === "advisor" && seat.closing) { message.closing = true; seat.closing = undefined; } // the reply that listed the loose ends
   seat.chat.push(message);
   const opened = seat.chat.findLastIndex((entry) => entry.letter);
   if (opened >= 0) {
