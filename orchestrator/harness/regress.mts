@@ -1210,6 +1210,36 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W49 a writer that named no year gets the year it was given", agents.dated({ description: "A scene.", year: " " }, game.year).year === game.year && agents.dated({ description: "A scene." }, game.year).year === game.year);
     await stop(host);
   },
+  async W52() { // the map's frontiers (map border tests, 2026-11-03): from Classical on, a firm land frontier per realm in a colour chosen from the game's pair,
+    // city-states their own, no frontier for a far glimpse, a key; Ancient keeps its soft tint word for word; campaign arrows owe the frontiers nothing
+    const host = await start("t100-world");
+    const images = await import("../src/images.ts");
+    const age = (await get(`/age?civ=Japan&from=90`)).json as any;
+    const realms = age.realms as { name: string; cityState: boolean; outer: string; inner: string; cities: string[]; meets: string[] }[];
+    check("W52 the host's realms: ours first, great powers before city-states, the game's colour pair, Kyoto Japan's", realms[0].name === "Japan" && realms[0].cities.includes("Kyoto")
+      && realms.findIndex((each) => each.cityState) > realms.findLastIndex((each) => !each.cityState) && realms.every((each) => /^#[0-9a-f]{6}$/.test(each.outer) && /^#[0-9a-f]{6}$/.test(each.inner)), JSON.stringify(realms.map((each) => each.name)));
+    check("W52 who meets whom on known land is told both ways", realms.every((each) => each.meets.every((other) => realms.find((r) => r.name === other)?.meets.includes(each.name))) && realms.some((each) => each.meets.length > 0));
+    const pair = (name: string, outer: string, inner: string) => ({ name, cityState: false, outer, inner, cities: [], meets: [] });
+    const chosen = images.frontierColours([pair("Carthage", "#cdcdcd", "#510089"), pair("India", "#0e7104", "#ffa347"), pair("Ethiopia", "#124216", "#ff3838"), pair("Korea", "#1b2160", "#ff0000"), pair("The Maya", "#c68d63", "#183f42")]);
+    check("W52 the tested palette from the game's pairs: Carthage's pale grey gives way to its purple, Ethiopia's green (India's twin) to its red, the rest their outer", JSON.stringify([...chosen.values()]) === JSON.stringify(["#510089", "#0e7104", "#ff3838", "#1b2160", "#c68d63"]), JSON.stringify([...chosen]));
+    const ancient = images.paintedMapPrompt("Japan", "Ancient era", "3000 BC", age), classical = images.paintedMapPrompt("Japan", "Classical era", "AD 100", age);
+    const marching = { ...age, marches: [{ whose: "Japan", what: "a company", from: "Kyoto", to: "Argos", outcome: "took", size: 3, fell: 0, sea: false, told: "", fromXY: [0, 0], toXY: [1, 1], route: [] }], enemyMarches: [] };
+    const campAncient = images.campaignMapPrompt("Japan", "Ancient era", marching), campLater = images.campaignMapPrompt("Japan", "Industrial era", marching);
+    check("W52 Ancient keeps the soft tint as it was, atlas and campaign, and no frontier rule", ancient.includes('a small banner). Show each realm\'s territory with a soft tinted border in its colour. ') && campAncient.includes("a small banner); each realm's territory with a soft tinted border in its colour.\n")
+      && !/COUNTRY FRONTIERS|frontier/i.test(ancient + campAncient));
+    check("W52 from Classical on the soft tint is gone and the frontier rule is there, in the age's hand, atlas and campaign", !/soft tinted border/.test(classical + campLater) && classical.includes("COUNTRY FRONTIERS") && classical.includes("reed-pen") && campLater.includes("COUNTRY FRONTIERS") && campLater.includes("crisp printed boundary"));
+    check("W52 each realm with its towns, its colour named and given, where its frontier runs, and the key", classical.includes(`Japan - ${realms[0].cities.slice(0, 5).join(", ")} - ${images.colourName(images.frontierColours(realms).get("Japan")!)} ${images.frontierColours(realms).get("Japan")}`) && classical.includes(`, its frontier only toward ${realms[0].meets[0]}`) && /A small quiet key/.test(classical) && classical.includes("small Roman capitals"));
+    const cityStates = realms.filter((each) => each.cityState && !age.glimpses.includes(each.cities[0]));
+    check("W52 the city-states each their own realm in the city-state ink, whatever their alliances", cityStates.length > 0 && cityStates.every((each) => classical.includes(each.name)) && /each its own small realm, its frontier in warm charcoal #4a4038 on its landward sides only, whatever its alliances/.test(classical));
+    const island = images.frontiers("Classical era", "Japan", [{ ...pair("Japan", "#ffffff", "#b80000"), cities: ["Kyoto"] }, { ...pair("England", "#6d0200", "#ffffff"), cities: ["London"] }]);
+    check("W52 a realm with no land frontier gets no line round its coasts; one by unclaimed land runs toward it", /England - London - [^;]*, with no frontier line at all: its edges are coast and the unknown/.test(island) && !/England[^;]*frontier only toward/.test(island)
+      && /toward the unclaimed land beside it/.test(images.frontiers("Classical era", "Japan", [{ ...pair("Japan", "#ffffff", "#b80000"), open: true }])), island);
+    check("W52 a realm known only in a glimpse gets an accent by its name and no frontier", age.glimpses.includes("Colombo") && /Known only from afar: Colombo warm charcoal #4a4038 - a small accent in that colour by the town's name, and no frontier\./.test(classical), classical.match(/Known only[^\n]*/)?.[0]);
+    check("W52 coasts and the unknown get no frontier, labels never cover a town or a company", /stops at the shore/.test(classical) && /no closed ring round a realm's known edge or round a far glimpse/.test(classical) && /never over a town's name or a company/.test(classical));
+    check("W52 campaign arrows cross the frontiers as marches.png has them, and stay distinct", /no frontier bends to it/.test(campLater) && /distinct from roads and rivers and from the campaign arrows/.test(campLater) && !/frontier/.test(campAncient));
+    check("W52 one realm alone gets no key", !/A small quiet key/.test(images.frontiers("Classical era", "Japan", [realms[0]])));
+    await stop(host);
+  },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
     // dismissed by its own call gets no loose-ends follow-up (a 600 BC list came after the closing, and the dismissal fired under it); a silent closing
     // pass tells the dismissal before it, the round waiting on the pass; a pass with a word for the ruler keeps the word first. Last: the bots poll on

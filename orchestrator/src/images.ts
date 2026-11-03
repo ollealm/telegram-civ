@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { host, type AgeSummary } from "./host.ts";
+import { host, type AgeSummary, type Realm } from "./host.ts";
 
 const ENABLED = process.env.IMAGES !== "off";
 const TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS ?? 240_000);
@@ -239,15 +239,18 @@ function companies(civ: string, inSight: AgeSummary["inSight"] | undefined): str
 export async function paintedMap(civ: string): Promise<Buffer> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
   const now = await host.age(civ, Number(briefing.turn ?? 0)).catch(() => undefined);
-  const inSight = now?.inSight;
   const era = String(briefing.era ?? "");
-  const prompt = `Two attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${briefing.year ?? "this age"}. ${STYLE_NOTE}
+  return (await generateImage(paintedMapPrompt(civ, era, briefing.year as string | undefined, now), [{ name: "map.png", png: atlas }, styleReference(era, "atlas")])) ?? atlas;
+}
+
+export function paintedMapPrompt(civ: string, era: string, year: string | undefined, now: Pick<AgeSummary, "inSight" | "glimpses" | "realms"> | undefined): string {
+  const ancient = mapAge(era) === "Ancient";
+  return `Two attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${year ?? "this age"}. ${STYLE_NOTE}
 Make the world of map.png into a map of its age, something a ruler would hang in the throne room.
 ${cartography(era)}
 ${MAP_RULES}
-Every city stands where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner). Show each realm's territory with a soft tinted border in its colour. ${companies(civ, inSight)} ${UNKNOWN_COUNTRY(civ, now?.glimpses)}
-Title it "The Known World of ${civ}, ${briefing.year ?? ""}", modestly.`;
-  return (await generateImage(prompt, [{ name: "map.png", png: atlas }, styleReference(era, "atlas")])) ?? atlas;
+Every city stands where the schematic has it, with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner).${ancient ? " Show each realm's territory with a soft tinted border in its colour." : ""} ${companies(civ, now?.inSight)} ${UNKNOWN_COUNTRY(civ, now?.glimpses)}${ancient ? "" : `\n${frontiers(era, civ, now?.realms, now?.glimpses)}`}
+Title it "The Known World of ${civ}, ${year ?? ""}", modestly.`;
 }
 
 /** Nothing but blank ground beyond what the realm has seen: how a painter is to treat it */
@@ -256,8 +259,13 @@ const UNKNOWN_COUNTRY = (civ: string, glimpses: string[] = []) => `Where the sch
 /** An age's campaigns on the painted map, as a history atlas prints them: the host reckons the forces and draws their arrows; the painter only repaints them */
 export async function campaignMap(civ: string, age: AgeSummary, marches: Buffer): Promise<Buffer> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
-  const title = `The Marches of ${civ}, ${age.fromYear} to ${age.toYear}`;
   const era = String(briefing.era ?? "");
+  return (await generateImage(campaignMapPrompt(civ, era, age), [{ name: "map.png", png: atlas }, { name: "marches.png", png: marches }, styleReference(era, "campaign")])) ?? marches;
+}
+
+export function campaignMapPrompt(civ: string, era: string, age: AgeSummary): string {
+  const title = `The Marches of ${civ}, ${age.fromYear} to ${age.toYear}`;
+  const ancient = mapAge(era) === "Ancient";
   const campaigns = [...age.marches, ...age.enemyMarches];
   // Only the endings this map has: a painter told of a way home draws one
   const endings = [
@@ -267,18 +275,108 @@ export async function campaignMap(civ: string, age: AgeSummary, marches: Buffer)
   ].filter(Boolean);
   const arrows = campaigns.length
     ? `marches.png is the same map with the campaigns of these years already drawn on it as a history atlas draws them: one broad arrow for each force that went somewhere, in its realm's colour, broader for a larger force.${endings.length ? ` How an arrow ends tells how the campaign ended: ${endings.join("; ")}.` : ""}
-Paint exactly the ${campaigns.length} arrow${campaigns.length === 1 ? "" : "s"} marches.png has, over the painted world: each from where it starts to where it ends, along the same curve, in the same colour, with the same ending - broad, bold arrows that read at a glance, as a history atlas prints them, painted in the manner of the age. The arrows come from marches.png alone, not from the places the words below name: add no other arrow, route, trail or battle mark, and leave none out. Each arrow has one head, where marches.png puts it.`
+Paint exactly the ${campaigns.length} arrow${campaigns.length === 1 ? "" : "s"} marches.png has, over the painted world: each from where it starts to where it ends, along the same curve, in the same colour, with the same ending - broad, bold arrows that read at a glance, as a history atlas prints them, painted in the manner of the age. The arrows come from marches.png alone, not from the places the words below name: add no other arrow, route, trail or battle mark, and leave none out. Each arrow has one head, where marches.png puts it.${ancient ? "" : " The arrows lie over the frontiers and owe them nothing: an arrow crosses every frontier on its way as marches.png has it, no frontier bends to it, and an arrow stays far broader than any frontier line. An arrow of a realm whose frontier colour is given above may take that colour where marches.png's is paler."}`
     : "marches.png has no arrows: no force went anywhere worth an arrow in these years. Draw none.";
-  const prompt = `Three attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${age.toYear}; marches.png is the same map with the campaigns of these years drawn on it. ${STYLE_NOTE}
+  return `Three attachments. map.png is an accurate schematic of the world as the ${civ} know it in ${age.toYear}; marches.png is the same map with the campaigns of these years drawn on it. ${STYLE_NOTE}
 Paint the world first as a map of its age, something a ruler would hang in the throne room, and then, over it, the campaigns of the age.
 ${cartography(era, "campaign")}
 ${MAP_RULES}
-Every city stands where the schematic has it, drawn as the age draws towns (the capital larger), with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner); each realm's territory with a soft tinted border in its colour.
+Every city stands where the schematic has it, drawn as the age draws towns (the capital larger), with its name lettered beside it (copy the names exactly; "Name · Nation" means a foreign city - letter just the name and show whose it is by colour or a small banner)${ancient ? "; each realm's territory with a soft tinted border in its colour." : "."}
 ${companies(civ, age.inSight)}
-${UNKNOWN_COUNTRY(civ, age.glimpses)} Use no real-world coat of arms or flag.
+${UNKNOWN_COUNTRY(civ, age.glimpses)} Use no real-world coat of arms or flag.${ancient ? "" : `\n${frontiers(era, civ, age.realms, age.glimpses, true)}`}
 ${arrows}
 Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age, keeping to what the chancery's words say - no figures, no "tiles", no names in brackets: "A company of pikemen wandered from the Russian marches to the walls of Genoa; ships found new waters to the south-east." A quiet age says so in one line. What happened in these years, in the chancery's words: ${age.lines.join(" ")}`;
-  return (await generateImage(prompt, [{ name: "map.png", png: atlas }, { name: "marches.png", png: marches }, styleReference(era, "campaign")])) ?? marches;
+}
+
+/** How each later age draws a frontier and letters its key (data/harness/map-border-tests-2026-11-03, the selected passes); Ancient keeps its soft tint */
+const FRONTIER_HANDS: Record<Exclude<MapAge, "Ancient">, { line: string; key: string }> = {
+  Classical: { line: "a firm, flowing reed-pen line in the realm's colour, slightly irregular, with a short inner feather of its pigment", key: "small Roman capitals" },
+  Medieval: { line: "an assured painted line of the realm's pigment with short inward hatching, never a heavy modern band", key: "restrained manuscript lettering" },
+  Renaissance: { line: "an engraved line with a restrained hand-coloured edge of the realm's colour on its inner side", key: "small engraved italic" },
+  Industrial: { line: "a crisp printed boundary edged in the realm's colour, with a very light inner tint", key: "quiet engraved serif" },
+  Modern: { line: "a confident lithographic stroke in the realm's colour", key: "the heading's period typography, small" },
+  Atomic: { line: "a clean printed line of firm coloured ink with a very subtle inward feather", key: "small geometric sans-serif" },
+  Information: { line: "a precise contemporary cartographic line in the realm's colour with a dark edge and a very restrained inward accent", key: "clean quiet sans-serif" },
+};
+/** Every city-state's frontier: one colour for all, each still its own realm */
+const CITY_STATE_INK = "#4a4038";
+
+/**
+ *  The realms' frontiers from Classical on, as a firm line where a realm's land meets known land outside it (map border tests,
+ *  2026-11-03): the soft tint alone was lost under terrain at phone size. The colours are the game's, chosen per game.
+ */
+export function frontiers(era: string, civ: string, realms: Realm[] = [], glimpses: string[] = [], campaign = false): string {
+  const hand = FRONTIER_HANDS[mapAge(era) as Exclude<MapAge, "Ancient">] ?? FRONTIER_HANDS.Information;
+  const colours = frontierColours(realms);
+  const far = (realm: Realm) => !realm.meets.length && realm.cities.length > 0 && realm.cities.every((city) => glimpses.includes(city));
+  const told = (realm: Realm) => {
+    const hex = realm.cityState ? CITY_STATE_INK : colours.get(realm.name)!;
+    // its towns tie the colour to the schematic's labels, where a colour the schematic tints otherwise would leave the painter guessing whose land is whose
+    const towns = realm.cityState || !realm.cities.length ? "" : ` - ${realm.cities.slice(0, 5).join(", ")}${realm.cities.length > 5 ? " and more" : ""} -`;
+    return `${realm.name}${towns} ${realm.cityState ? "warm charcoal" : colourName(hex)} ${hex}${luminance(hex) > 0.35 ? ", edged in dark ink" : ""}`;
+  };
+  // where its line runs, from the game: a realm whose every edge is coast or the unknown has none, and a painter told only "not along coasts" outlines it anyway
+  const runs = (realm: Realm) => {
+    const toward = [...realm.meets, ...(realm.open ? ["the unclaimed land beside it"] : [])];
+    return toward.length ? `, its frontier only toward ${toward.length === 1 ? toward[0] : `${toward.slice(0, -1).join(", ")} and ${toward.at(-1)}`}` : ", with no frontier line at all: its edges are coast and the unknown, so its colour shows only in the key and a small accent by its towns";
+  };
+  const powers = realms.filter((realm) => !realm.cityState && !far(realm));
+  const cityStates = realms.filter((realm) => realm.cityState && !far(realm));
+  const distant = realms.filter(far);
+  const named = cityStates.slice(0, 10).map((realm) => realm.name);
+  return [
+    `COUNTRY FRONTIERS: the schematic's coloured edges are the realms as they are - draw them where it has them, never from alliances or as a tidy outline round each land. A frontier runs only across land, where a realm's land meets known land outside it, and is drawn as ${hand.line}: continuous, firmer than rivers, roads and relief, and readable when the whole map is seen on a phone, with a narrow clearance of the map's own ground behind it where the terrain is busy. A natural flowing line, never a cell trace, and no flat political fill; where two realms meet, one division, not parallel lines. A frontier that reaches the sea stops at the shore: a realm's coasts are no frontier and keep their ordinary drawing, with no coloured line, stripe or halo along them, so a realm on the sea is never outlined all round. Where known country fades into the unexplored, the frontier fades out with it: no closed ring round a realm's known edge or round a far glimpse. Frontiers stay distinct from roads and rivers${campaign ? " and from the campaign arrows" : ""}.`,
+    powers.length ? `The realms, their towns, the colour each frontier is drawn in (the schematic may tint it otherwise; the towns tell whose land is whose) and where it runs: ${powers.map((realm) => told(realm) + runs(realm)).join("; ")}.` : "",
+    cityStates.length ? `The city-state${cityStates.length === 1 ? "" : "s"} ${named.join(", ")}${cityStates.length > named.length ? ` and ${cityStates.length - named.length} more` : ""}: each its own small realm, its frontier in warm charcoal ${CITY_STATE_INK} on its landward sides only, whatever its alliances.` : "",
+    distant.length ? `Known only from afar: ${distant.map(told).join("; ")} - a small accent in that colour by the town's name, and no frontier.` : "",
+    realms.length >= 2 ? `A small quiet key - a short line sample beside each realm's name${cityStates.length ? ", and one for the city-states" : ""}, in ${hand.key} - stands in open margin, never over the land. A realm's name may also be lettered small on its own land, among its own towns, where there is room - never over a town's name or a company, and never where its towns are not. The key and those names are the only words the map adds.` : "",
+  ].filter(Boolean).join("\n");
+}
+
+const channels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+const linear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const luminance = (hex: string) => { const [r, g, b] = channels(hex).map(linear); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+/** CIE Lab, for telling two colours apart as the eye does */
+function lab(hex: string): [number, number, number] {
+  const [r, g, b] = channels(hex).map(linear);
+  const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  const [x, y, z] = [(0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047, 0.2126 * r + 0.7152 * g + 0.0722 * b, (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883].map(f);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+const apart = (a: string, b: string) => { const [p, q] = [lab(a), lab(b)]; return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]); };
+/** Two frontier colours a reader tells apart in a thin line: a clear difference of hue, lightness or strength, or one a grey and the other not */
+function distinct(a: string, b: string): boolean {
+  const [p, q] = [lab(a), lab(b)];
+  const [cp, cq] = [Math.hypot(p[1], p[2]), Math.hypot(q[1], q[2])];
+  if ((cp < 12) !== (cq < 12)) return true;
+  const turn = Math.abs(Math.atan2(p[2], p[1]) - Math.atan2(q[2], q[1])) * 180 / Math.PI;
+  return (cp >= 12 && Math.min(turn, 360 - turn) >= 30) || Math.abs(p[0] - q[0]) >= 30 || Math.abs(cp - cq) >= 35;
+}
+const chroma = (hex: string) => { const c = channels(hex); return Math.max(...c) - Math.min(...c); };
+
+/** Each great power's frontier colour: the member of its game pair that reads as a firm line on a light map - dark enough and not a grey,
+ *  the outer one when both will do - and above all one no near twin of a colour already given (a pale one is then edged in dark ink) */
+export function frontierColours(realms: Realm[]): Map<string, string> {
+  const fit = (hex: string) => (luminance(hex) <= 0.35 ? 1 : 0) + Math.min(1, chroma(hex) * 2.5);
+  const chosen = new Map<string, string>();
+  for (const realm of realms.filter((each) => !each.cityState)) {
+    const taken = [...chosen.values(), ...(realms.some((each) => each.cityState) ? [CITY_STATE_INK] : [])];
+    const score = (hex: string) => fit(hex) + (hex === realm.outer ? 0.3 : 0) + (taken.every((other) => distinct(hex, other)) ? 2.5 : 0) + Math.min(0.5, ...taken.map((other) => apart(hex, other) / 100));
+    chosen.set(realm.name, score(realm.inner) > score(realm.outer) ? realm.inner : realm.outer);
+  }
+  return chosen;
+}
+
+/** A colour in a painter's words: "deep red", "muted teal", "charcoal" */
+export function colourName(hex: string): string {
+  const [r, g, b] = channels(hex);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+  const s = max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
+  if (s < 0.15 || max - min < 0.08) return l < 0.1 ? "black" : l < 0.25 ? "charcoal" : l < 0.6 ? "slate grey" : l < 0.92 ? "pale grey" : "white";
+  const h = max === r ? (60 * ((g - b) / (max - min)) + 360) % 360 : max === g ? 60 * ((b - r) / (max - min)) + 120 : 60 * ((r - g) / (max - min)) + 240;
+  const hue = ([[15, "red"], [40, "orange"], [55, "amber"], [70, l < 0.45 ? "ochre" : "yellow"], [95, "olive"], [150, "green"], [200, "teal"], [265, "blue"], [320, "purple"], [345, "crimson"], [360, "red"]] as const).find(([top]) => h < top)![1];
+  if (hue === "blue" && l < 0.25) return "navy";
+  return `${l < 0.25 ? "deep " : l > 0.7 ? "pale " : s < 0.5 ? "muted " : ""}${hue}`;
 }
 
 /** The Chronicler's emblem: one plate per world, painted at its making, in the medium of a later age remembering it; no face, since the Chronicler has no person */
