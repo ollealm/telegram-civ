@@ -2,7 +2,7 @@
 // paintedMap and campaignMap on one world with the era overridden - the age's look on the fixture's geography and campaigns.
 // Needs its own host on a COPY of a fixture or a league backup with campaigns in it (never the live host):
 //   cp -R ../data/fixtures/run32-t259-munich /tmp/maps && ../host.sh /tmp/maps 8816
-// Run:  RULER_HOST_URL=http://127.0.0.1:8816 IMAGE_PROVIDER=codex npx tsx harness/map-samples.mts <civ> [ages back=1] [age ...]
+// Run:  RULER_HOST_URL=http://127.0.0.1:8816 npx tsx harness/map-samples.mts <civ> [ages back=1] [age ...]
 // Results: ../data/harness/map-samples-<stamp>/ - <Age>-atlas.png, <Age>-campaign.png, the host's schematic and marches drawing, and index.md.
 // Sixteen images at about 30k tokens each through Codex; they are painted three at a time.
 

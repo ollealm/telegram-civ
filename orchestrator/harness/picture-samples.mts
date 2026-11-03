@@ -1,6 +1,6 @@
 // Sample pictures through the game's own writers (Claude) and painter, for a look before a change to the picture prompts goes live (picture guide, 2026-11-02).
 // Needs its own host on a COPY of a fixture (never the live one):  ../host.sh /tmp/pics 8768
-// Run:  RULER_HOST_URL=http://127.0.0.1:8768 RULER_STATE_FILE=/tmp/pics/state.json IMAGE_PROVIDER=codex ADVISOR_MODEL=claude-opus-5-5 LETTER_EFFORT=high \
+// Run:  RULER_HOST_URL=http://127.0.0.1:8768 RULER_STATE_FILE=/tmp/pics/state.json ADVISOR_MODEL=claude-opus-5-5 LETTER_EFFORT=high \
 //       HERALD_MODEL=claude-opus-5-5 HERALD_EFFORT=high npx tsx harness/picture-samples.mts <out dir> <job ...>
 // Jobs, over the host's last twelve turns as one age: letter:<civ> (the advisor's letter scene), chronicle (the Chronicler's pictures for the chapter),
 // era:<civ> (that people's last entry into an age), wonders (every wonder completed in the age, as the game chooses and describes them - kept, PNG and
@@ -83,7 +83,7 @@ for (const job of jobs) {
 
 mkdirSync(out, { recursive: true });
 const index = join(out, "index.md");
-if (!existsSync(index)) writeFileSync(index, `# Picture samples (picture guide, 2026-11-02)\n\nWritten by the game's own writers (Claude) and painted through the game's own prompt (picturePrompt) with ${process.env.IMAGE_PROVIDER ?? "the default provider"}, on throwaway copies of fixtures.\n\n`);
+if (!existsSync(index)) writeFileSync(index, `# Picture samples (picture guide, 2026-11-02)\n\nWritten by the game's own writers (Claude) and painted through the game's own prompt (picturePrompt) with codex, on throwaway copies of fixtures.\n\n`);
 appendFileSync(index, `## ${game.year} (turn ${game.turn}), from the host at ${process.env.RULER_HOST_URL}\n\n`);
 // At most three at a time: images.ts holds the rest in its queue. Place pictures last, once this run's wonders are kept
 const paint = async (sample: Sample) => {
