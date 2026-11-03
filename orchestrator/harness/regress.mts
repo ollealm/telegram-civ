@@ -1136,7 +1136,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const scene = { caption: "A title. A sentence.", description: "Stand-in description of the picture.", year: game.year };
     agents.standInForModels((asked) => {
       calls.push({ ...asked, writer });
-      return { text: "Stand-in reply.", data: { ...scene, image: scene, images: [scene], oddity: scene, why: "stand-in", wonder: "Great Library", summons: "", dispatch: "", strategy: "", question: "", journal: "", chapter: "A chapter." } };
+      return { text: "Stand-in reply.", data: { ...scene, image: scene, images: [scene], oddity: scene, why: "stand-in", wonder: "Great Library", summons: "", dispatch: "", strategy: "", agenda: [], question: "", journal: "", chapter: "A chapter." } };
     });
     const seat = { civ: civName, kind: "human", rulerName: "the ruler", chat: [], journal: [], annals: [] } as any;
     const round = { fromTurn: 88, turn: 100, fromYear: "AD 100", year: game.year, publicEvents: [{ turn: 99, year: game.year, text: `${civName} completed the wonder Great Library in Their Capital (river, hills).` }], rankings: [] } as any;
@@ -1189,7 +1189,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const scene = () => ({ caption: "A title. A sentence.", description: "Stand-in description of the picture.", year: named });
     agents.standInForModels((asked) => {
       schemas.push({ writer, schema: asked.outputSchema });
-      return { text: "Stand-in reply.", data: { ...scene(), image: scene(), images: [scene()], oddity: scene(), why: "stand-in", summons: "", dispatch: "", strategy: "", question: "", journal: "", chapter: "A chapter." } };
+      return { text: "Stand-in reply.", data: { ...scene(), image: scene(), images: [scene()], oddity: scene(), why: "stand-in", summons: "", dispatch: "", strategy: "", agenda: [], question: "", journal: "", chapter: "A chapter." } };
     });
     const seat = { civ: civName, kind: "human", rulerName: "the ruler", chat: [], journal: [], annals: [] } as any;
     const round = { fromTurn: 88, turn: 100, fromYear: "AD 100", year: game.year, publicEvents: [], rankings: [] } as any;
@@ -1239,6 +1239,51 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W52 campaign arrows cross the frontiers as marches.png has them, and stay distinct", /no frontier bends to it/.test(campLater) && /distinct from roads and rivers and from the campaign arrows/.test(campLater) && !/frontier/.test(campAncient));
     check("W52 one realm alone gets no key", !/A small quiet key/.test(images.frontiers("Classical era", "Japan", [realms[0]])));
     await stop(host);
+  },
+  async W53() { // the open court (2026-11-03, Olle: "So the court starts with an overview then the matters to handle"): the letter is summons, story and
+    // longer view, and its agenda is written in the same call but kept back; the ruler's first word is answered with the agenda in the advisor's input, once
+    const host = await start("t100-world");
+    const agents = await import("../src/agents.ts");
+    const { fileLetter, letterOf } = await import("../src/round.ts");
+    const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean }[] };
+    const civName = game.majorCivs.find((each) => each.alive)!.civ;
+    const briefing = (await get(`/briefing?civ=${civ(civName)}`)).json;
+    const agenda = ["The lone warrior at Kyoto has nothing to do: I mean to walk him to the eastern hills, unless you want him home.", "I am proud of the harbour at Osaka and would like to talk about what it could become; only talk."];
+    const asked: { role: string; systemPrompt: string; prompt: string }[] = [];
+    agents.standInForModels((call) => {
+      asked.push(call);
+      if (call.outputSchema) return { text: "", data: { summons: "AD 800 - come to court.", dispatch: "The story of the age.", strategy: "The longer view.", agenda, image: null, journal: "A journal line." } };
+      return { text: "As you wish, Majesty." };
+    });
+    try {
+      const seat = { civ: civName, kind: "human", rulerName: "the ruler", chat: [], journal: [], annals: [], will: "", character: { name: "Adiega", sheet: "A careful steward." } } as any;
+      const round = { fromTurn: 88, turn: 100, fromYear: "AD 440", year: game.year, publicEvents: [], rankings: [] } as any;
+      const dispatch = await agents.advisorReport(seat, round, [], briefing);
+      const report = asked.find((each) => each.role === "report")!;
+      check("W53 the letter writer is asked for an agenda and no question", /\nagenda - what you mean to bring to the audience/.test(report.systemPrompt) && !/\nquestion - /.test(report.systemPrompt) && /A thing is said once across the dispatch, the longer view and the agenda/.test(report.systemPrompt));
+      check("W53 the dispatch carries the agenda and no question", JSON.stringify(dispatch.agenda) === JSON.stringify(agenda) && dispatch.question === undefined);
+      fileLetter(seat, dispatch, "AD 440 to AD 800");
+      const sent = letterOf(dispatch);
+      check("W53 the letter sent is heading, story and longer view, and no agenda", sent === "AD 800 - come to court.\n\nThe story of the age.\n\nThe longer view." && !agenda.some((item) => sent.includes(item.slice(0, 30))), sent);
+      check("W53 the agenda is kept on the annal and the seat, and the transcript's letter is without it", JSON.stringify(seat.annals.at(-1).agenda) === JSON.stringify(agenda) && JSON.stringify(seat.agenda) === JSON.stringify(agenda)
+        && seat.chat.at(-1).letter && !agenda.some((item) => seat.chat.at(-1).text.includes(item.slice(0, 30))));
+      asked.length = 0;
+      await agents.advisorReply(seat, "Go on.", 12);
+      const first = asked.find((each) => each.role === "advisor")!;
+      check("W53 the ruler's first word puts the agenda in the advisor's input, numbered, to be adjusted to what they said", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Answer what the ruler said first") && first.prompt.includes(`1. ${agenda[0]}`) && first.prompt.includes(`2. ${agenda[1]}`));
+      check("W53 the advisor's reply clears it", seat.agenda === undefined);
+      seat.chat.push({ from: "ruler", text: "Go on." }, { from: "advisor", text: "As you wish, Majesty." });
+      asked.length = 0;
+      await agents.advisorReply(seat, "And the harbour?", 12);
+      check("W53 a second word does not carry it", !asked.find((each) => each.role === "advisor")!.prompt.includes("What you meant to bring to this audience"));
+      check("W53 the audience is a conversation, the letter has read: no broad question, the court rises when the ruler closes it", !/asked the broad question/.test(first.systemPrompt) && /a conversation and not a form/.test(first.systemPrompt) && /The court rises when the ruler closes it, not when your matters are done/.test(first.systemPrompt) && /They have read your letter/.test(first.systemPrompt));
+      check("W53 the house rules: the letter opens the court, the matters come on the ruler's first word", /The court opens with the advisor's letter; on the ruler's first word the advisor brings its matters/.test(agents.HOUSE_RULES));
+      const last = await agents.advisorReport(seat, round, [], briefing, "Greece has won a Scientific victory");
+      check("W53 the last letter keeps no agenda", Array.isArray(last.agenda) && last.agenda.length === 0);
+    } finally {
+      agents.standInForModels(undefined);
+      await stop(host);
+    }
   },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
     // dismissed by its own call gets no loose-ends follow-up (a 600 BC list came after the closing, and the dismissal fired under it); a silent closing
@@ -1331,6 +1376,16 @@ const CASES: Record<string, () => Promise<void>> = {
       await until(() => seat.ready && sent.slice(beforeD).includes(DISMISSED));
       check("W51 a pass with a word for the ruler: the word, then the dismissal", JSON.stringify(sent.slice(beforeD)) === JSON.stringify(["I went with the granary, for the winter.", DISMISSED]), JSON.stringify(sent.slice(beforeD)));
       check("W51 no round started: the other ruler is still in council", state.phase === "audience" && !state.seats[1].ready);
+      // E: a bare /onward straight after the letter (the open court, 2026-11-03): the matters were never asked for and the letter puts no question,
+      // so no pass; the court rises, the agenda is cleared, and its defaults go to the journal for the look-ins
+      Object.assign(seat, { ready: false, dismissed: false, matters: undefined, agenda: ["The lone warrior walks to the eastern hills, unless you want him home."] });
+      (seat.annals ??= []).push({ years: "AD 440 to AD 800", story: "The story of the age, a question in it? Perhaps.", agenda: seat.agenda });
+      remember(seat, { from: "advisor", text: "The story of the age, a question in it? Perhaps.", letter: true });
+      const beforeE = { calls: calls.length, sent: sent.length };
+      say("/onward");
+      await until(() => seat.ready && sent.slice(beforeE.sent).includes(DISMISSED));
+      check("W51 a bare /onward straight after the letter: dismissed, no closing pass, the agenda cleared and its defaults in the journal", calls.length === beforeE.calls && JSON.stringify(sent.slice(beforeE.sent)) === JSON.stringify([DISMISSED])
+        && seat.agenda === undefined && /the ruler rose before hearing my matters; I do as I meant to with each: The lone warrior walks to the eastern hills/.test(seat.journal.at(-1) ?? ""), `calls ${calls.length - beforeE.calls}; sent ${JSON.stringify(sent.slice(beforeE.sent))}; journal ${seat.journal.at(-1)}`);
     } finally {
       agents.standInForModels(undefined);
       await stop(host);

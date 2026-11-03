@@ -9,7 +9,7 @@ import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, forgetWonderPictures, generateImage, imagesIdle, keepWonderPicture, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
 import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
-import { playRound as runRound, turnsAhead } from "./round.ts";
+import { letterOf, playRound as runRound, turnsAhead } from "./round.ts";
 import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
 
 /** Rival realms played by the game itself, chosen at random; 0 for an all-human world */
@@ -333,7 +333,7 @@ async function playRound() {
         const annal = seat.annals?.at(-1); // the round has just set this letter down
         const bot = botOf(seat);
         if (!bot || !seat.chatId) return;
-        const letter = [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
+        const letter = letterOf(dispatch);
         const game = await host.state();
         const scene = dispatch.image ? paintAndKeep(dated({ turn: game.turn, for: seat.civ, ...dispatch.image }, game.year)) : Promise.resolve(null);
         // The map of the age, always in one style: the painted world with the age's movements drawn as an atlas would - or with none, in a quiet age.
@@ -664,8 +664,13 @@ function setUpAdvisor(bot: Bot, index: number) {
       told = true;
       await reply("The court is dismissed. Until next time.").catch((error) => log(`telling ${seat().civ} of the dismissal failed:`, error.message));
     };
+    // Dismissed straight after the letter, before the advisor's matters were asked for: the letter puts no question, so no closing pass is owed; the matters'
+    // defaults are the advisor's to do while governing, as when the ruler is away - its journal carries them to the look-ins (an emergency council's letter still asks)
+    const letterOnly = !!last?.letter && !seat().annals?.at(-1)?.urgent;
+    if (letterOnly && seat().agenda?.length) seat().journal.push(`${seat().annals?.at(-1)?.years ?? "This age"}: the ruler rose before hearing my matters; I do as I meant to with each: ${seat().agenda!.join(" ")}`);
+    seat().agenda = undefined;
     // A question left unanswered, or loose ends left to the advisor: either needs the closing pass, or the leans are never applied
-    if (silently && last?.from === "advisor" && (/\?/.test(last.text) || seat().matters?.length)) {
+    if (silently && !letterOnly && last?.from === "advisor" && (/\?/.test(last.text) || seat().matters?.length)) {
       // A question unanswered needs a word on which way the advisor went; loose ends alone do not: the ruler has read what will be done and needs no retelling
       const message = /\?/.test(last.text) && !last.closing
         ? "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to" + (seat().matters?.length ? ", and settle the loose ends you listed as you see fit" : "") + ". Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]"

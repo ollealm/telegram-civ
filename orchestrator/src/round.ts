@@ -42,6 +42,18 @@ export const turnsAhead = (turn: number) => {
 };
 
 /** Where a round's words go: Telegram in play, the console in the harness */
+/** The letter as the ruler reads it: the summons, the story and the longer view - an emergency council's question with it; never the agenda */
+export const letterOf = (dispatch: Dispatch) => [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
+
+/** An age's letter set down: the annal for the saga, the agenda kept back until the ruler's first word (the advisor answers it with these matters,
+ *  adjusted to what they said), and the letter in the audience's transcript */
+export function fileLetter(seat: Seat, dispatch: Dispatch, years: string) {
+  const agenda = dispatch.agenda?.length ? dispatch.agenda : undefined;
+  (seat.annals ??= []).push({ years, heading: dispatch.heading, story: dispatch.text, course: dispatch.strategy || undefined, agenda, undelivered: true });
+  seat.agenda = agenda;
+  remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy].filter(Boolean).join("\n\n"), letter: true });
+}
+
 export type RoundIO = {
   /** Wraps slow work for one seat, e.g. to show "typing…" */
   working: <T>(seat: Seat, work: Promise<T>) => Promise<T>;
@@ -225,9 +237,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         // The letter opens with the advisor's own summons, so the ruler knows at a glance that a new court has begun and when - or, in the last letter, that the game is over
         dispatch.heading ||= ending ? `The game is over: ${ending}.` : `You are called to court, ${finished.year}.`;
         seat.journal.push(`${finished.fromYear} to ${finished.year}: ${dispatch.journal}`);
-        (seat.annals ??= []).push({ years: `${finished.fromYear} to ${finished.year}`, heading: dispatch.heading, story: dispatch.text, course: dispatch.strategy || undefined, question: dispatch.question, undelivered: true });
+        fileLetter(seat, dispatch, `${finished.fromYear} to ${finished.year}`);
         seat.forCouncil = undefined; // what was left with the clerk has now been answered
-        remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n"), letter: true });
         await io.dispatch(seat, dispatch, finished);
       }),
       // Earlier chapters come from the host, so a restart does not make the Chronicler forget
