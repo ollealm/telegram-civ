@@ -1270,13 +1270,13 @@ const CASES: Record<string, () => Promise<void>> = {
       asked.length = 0;
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
-      check("W53 the ruler's first word puts the agenda in the advisor's input, numbered, to be adjusted to what they said", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Answer what the ruler said first") && first.prompt.includes(`1. ${agenda[0]}`) && first.prompt.includes(`2. ${agenda[1]}`));
+      check("W53 the ruler's first word puts the agenda in the advisor's input, numbered, to be adjusted to what they said", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Answer what the ruler said first; then bring all of these in this same reply") && first.prompt.includes(`1. ${agenda[0]}`) && first.prompt.includes(`2. ${agenda[1]}`));
       check("W53 the advisor's reply clears it", seat.agenda === undefined);
       seat.chat.push({ from: "ruler", text: "Go on." }, { from: "advisor", text: "As you wish, Majesty." });
       asked.length = 0;
       await agents.advisorReply(seat, "And the harbour?", 12);
       check("W53 a second word does not carry it", !asked.find((each) => each.role === "advisor")!.prompt.includes("What you meant to bring to this audience"));
-      check("W53 the audience is a conversation, the letter has read: no broad question, the court rises when the ruler closes it", !/asked the broad question/.test(first.systemPrompt) && /a conversation and not a form/.test(first.systemPrompt) && /The court rises when the ruler closes it, not when your matters are done/.test(first.systemPrompt) && /They have read your letter/.test(first.systemPrompt));
+      check("W53 the audience is a conversation, the letter has read: no broad question, the court rises when the ruler closes it", !/asked the broad question/.test(first.systemPrompt) && /a conversation and not a form/.test(first.systemPrompt) && /The reply that brings your matters brings them all at once/.test(first.systemPrompt) && /The court rises when the ruler closes it, not when your matters are done/.test(first.systemPrompt) && /They have read your letter/.test(first.systemPrompt));
       check("W53 the house rules: the letter opens the court, the matters come on the ruler's first word", /The court opens with the advisor's letter; on the ruler's first word the advisor brings its matters/.test(agents.HOUSE_RULES));
       const last = await agents.advisorReport(seat, round, [], briefing, "Greece has won a Scientific victory");
       check("W53 the last letter keeps no agenda", Array.isArray(last.agenda) && last.agenda.length === 0);
