@@ -28,7 +28,7 @@ Examples of good descriptions:
 - 1890 albumen group photograph: Austrian officials in frock coats pose stiffly beside the Vatican gate under their newly hung eagle crest, two Swiss Guards standing aside.
 - Archaeological reconstruction painting in gouache and watercolour, even daylight, clear outlines. The founding of Kaesong, AD 470: Korean workers raise a rammed-earth ring wall and the first timber gatehouse in a pine valley; nothing else is built yet. Overcast autumn afternoon.`;
 /** The media each age allows a picture (picture guide B): the people's age decides, never the calendar, whose year runs behind the game's learning */
-const EARLY_MEDIA = "A finished history painting; or an archaeological reconstruction in gouache and watercolour with even daylight and clear outlines, for a founding, a building work or a workshop";
+const EARLY_MEDIA = "A finished history painting; a broad romantic landscape painting, the land large and the people small, when the land is the subject; now and then an archaeological reconstruction in gouache and watercolour with even daylight and clear outlines, for a founding, a building work or a workshop";
 const LATE_MEDIA = "Usually a photograph: the process of that decade plus a camera moment. Sometimes a painting made in that decade and country, its technique described";
 export const ALLOWED_MEDIA: Record<string, string> = {
   Ancient: EARLY_MEDIA, Classical: EARLY_MEDIA, Medieval: EARLY_MEDIA,
@@ -36,17 +36,12 @@ export const ALLOWED_MEDIA: Record<string, string> = {
   Industrial: "A painting of the period - oil on canvas, a broad atmospheric oil landscape, or watercolour over pencil - never a border or frame; an early photograph (daguerreotype, albumen print) only rarely",
   Modern: LATE_MEDIA, Atomic: LATE_MEDIA, Information: LATE_MEDIA, Future: LATE_MEDIA,
 };
-/** Picture guide E: an early age's founding, building work or workshop is a reconstruction, chosen here - offered as one option among others the writer
- *  almost never took it, asked for outright it gave a fresh look. Not "every tool and garment explained": that drew a museum chart of tools */
-const RECONSTRUCTION = "Archaeological reconstruction painting in gouache and watercolour, even daylight, clear outlines.";
 const ageOf = (era?: string) => (era ?? "").replace(/ era$/i, "").trim();
-/** The people's age and the media it allows, one line for a picture writer's input. reconstruction: the picture is a founding, a building work or a
- *  workshop (an era entry is typed so in code) - in the three early ages its line names the reconstruction alone. Empty when the age is unknown */
-export const ageLine = (civ: string, era?: string, reconstruction = false) => {
+/** The people's age and the media it allows, one line for a picture writer's input. Empty when the age is unknown */
+export const ageLine = (civ: string, era?: string) => {
   const media = ALLOWED_MEDIA[ageOf(era)];
   if (!media) return "";
-  const early = reconstruction && media === EARLY_MEDIA;
-  return `The people's age: ${civ}, the ${era}. ${early ? `The medium for this picture: ${RECONSTRUCTION}` : `Media this age allows: ${media}.`}`;
+  return `The people's age: ${civ}, the ${era}. Media this age allows: ${media}.`;
 };
 /** Every great power's age, for a picture that may show any of them (the Chronicler's): the peoples grouped by age, each age's media once */
 export const peoplesAges = (civs: { civ: string; alive?: boolean; era?: string }[]) => {
@@ -956,7 +951,7 @@ export const eraScene = (civ: string, era: string, year: string, recent: PublicE
     `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory, and not the technology that opened the age: paint the people in the age - one instant of ordinary life in which the new age shows in the everyday, the dress, the tools, the buildings, the pace of the day.
 Set it in one of their cities, named below with the lie of its land, and let the land show: a river town under mountains and a coastal town among forests are different pictures before anything else differs.
 Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year. ${CAPTION_CRAFT}`,
-    `${civ} entered the ${era} in ${year}.\n\n${ageLine(civ, era, true)}\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
+    `${civ} entered the ${era} in ${year}.\n\n${ageLine(civ, era)}\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
     Picture,
   );
 
@@ -989,6 +984,7 @@ why - one line for the chancery's log: what you chose and why it is strange, or 
 const WONDER_CRAFT = `Write two or three sentences an illustrator paints from. Begin with the medium allowed for their age, in a few plain words; a wonder is a broad, finished painting until the decade has colour film. Paint the famous wonder whole and recognisable by its shape at a glance, at its real, famous size. Name in a few words what makes it recognisable, and keep that: its shape stays; what it is built of and what it depicts are theirs - its colour and surface are whatever their material gives, a statue shows their own figure in the famous pose, a painted vault their own story - and the city, land and people around it are theirs, not their ornament. In front, their people doing something with the wonder that we read first: building it, arriving at it, celebrating it. Name the hour and the weather.
 
 Examples of good descriptions:
+- Archaeological reconstruction in gouache and watercolour, even daylight, clear outlines. Greece's own pyramid, as vast as Giza, of white marble on the hill above Athens, its top courses still being laid: workers in short tunics haul a block up an earthen ramp on rollers. Overcast noon.
 - A romantic oil landscape painting. Sweden's own pyramid, as vast as Giza, of grey granite with turf on its steps, beside a frozen lake in pine forest at dusk; a line of torches climbs its stairs.
 - Oil painting, cold window light. Ethiopia's own Sistine Chapel in a snowbound coastal city: priests in white process beneath the vault, painted in Ethiopian church style with the Creation; frost on the windows.
 - 1920s photograph. Arabia's own Statue of Liberty in a desert city: a colossal copper figure in flowing robes holding a lantern, a caravan passing at her feet.

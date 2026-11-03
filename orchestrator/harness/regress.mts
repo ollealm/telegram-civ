@@ -1123,9 +1123,9 @@ const CASES: Record<string, () => Promise<void>> = {
     const { picturePrompt } = await import("../src/images.ts");
     const painted = picturePrompt({ description: "A scene.", year: "AD 100" });
     check("W47 the painted prompt adds the year and the guardrail, no medium", painted === "A scene.\n\nThe year is AD 100. No text or lettering. No real people.", painted);
-    check("W47 an early era entry names the reconstruction alone", /The medium for this picture: Archaeological reconstruction painting in gouache and watercolour, even daylight, clear outlines\.$/.test(agents.ageLine("Japan", "Classical era", true)) && !/history painting/.test(agents.ageLine("Japan", "Medieval era", true)), agents.ageLine("Japan", "Classical era", true));
-    check("W47 an untyped early picture gets the full media line", /Media this age allows: A finished history painting; or an archaeological reconstruction/.test(agents.ageLine("Japan", "Medieval era")));
-    check("W47 a later era entry gets its age's media, not the reconstruction", /Media this age allows: Oil painting, one of: oil on oak panel/.test(agents.ageLine("Japan", "Renaissance era", true)) && /Usually a photograph/.test(agents.ageLine("Japan", "Atomic era", true)));
+    check("W47 an early age line gives the age's media, never a medium chosen for the picture (picture guide O)", agents.ageLine("Japan", "Classical era") === `The people's age: Japan, the Classical era. Media this age allows: ${agents.ALLOWED_MEDIA.Classical}.` && !/The medium for this picture/.test(agents.ageLine("Japan", "Classical era")), agents.ageLine("Japan", "Classical era"));
+    check("W47 an untyped early picture gets the full media line", /Media this age allows: A finished history painting; a broad romantic landscape/.test(agents.ageLine("Japan", "Medieval era")));
+    check("W47 a later age line gets its age's media", /Media this age allows: Oil painting, one of: oil on oak panel/.test(agents.ageLine("Japan", "Renaissance era")) && /Usually a photograph/.test(agents.ageLine("Japan", "Atomic era")));
     const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean; era: string }[] };
     const civName = game.majorCivs.find((each) => each.alive)!.civ;
     const era = game.majorCivs.find((each) => each.civ === civName)!.era;
@@ -1161,11 +1161,11 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W47 every picture writer was called", missing.length === 0, missing.join(", "));
     const hasAge = (prompt: string) => prompt.includes(`The people's age: ${civName}, the ${era}.`) || (prompt.includes("The peoples' ages") && new RegExp(`- ${era}: [^\\n]*${civName}`).test(prompt));
     check(`W47 the people's age (${civName}, ${era}) is in every picture writer's input`, calls.every((each) => hasAge(each.prompt)), calls.filter((each) => !hasAge(each.prompt)).map((each) => each.writer).join(", "));
-    const hasMedia = (prompt: string) => /Media this age allows: |The medium for this picture: /.test(prompt);
+    const hasMedia = (prompt: string) => /Media this age allows: /.test(prompt);
     check("W47 and the media it allows, from the table", calls.every((each) => hasMedia(each.prompt)), calls.filter((each) => !hasMedia(each.prompt)).map((each) => each.writer).join(", "));
-    const early = ["Ancient", "Classical", "Medieval"].includes(era.replace(/ era$/, ""));
     const entry = calls.find((each) => each.writer === "era entry")!;
-    check(`W47 the era entry (${era}) ${early ? "names the reconstruction alone" : "gets its age's media"}`, early ? entry.prompt.includes("The medium for this picture: Archaeological reconstruction") && !entry.prompt.includes("Media this age allows") : entry.prompt.includes("Media this age allows"));
+    check(`W47 the era entry (${era}) gets its age's media like every picture, never a medium chosen for it`, entry.prompt.includes(`Media this age allows: ${agents.ALLOWED_MEDIA[era.replace(/ era$/, "")]}.`) && !entry.prompt.includes("The medium for this picture"));
+    check("W47 no picture writer's input names a medium chosen for the picture", !calls.some((each) => each.prompt.includes("The medium for this picture:")), calls.filter((each) => each.prompt.includes("The medium for this picture:")).map((each) => each.writer).join(", "));
     check("W47 no writer's instructions or input say 'realistic oil painting'", !calls.some((each) => /realistic oil painting/i.test(each.systemPrompt + each.prompt)), calls.filter((each) => /realistic oil painting/i.test(each.systemPrompt + each.prompt)).map((each) => each.writer).join(", "));
     // (the audience's craft is in its paint_decision tool's description, not in these instructions)
     check("W47 the moments' writers get the one picture craft", calls.filter((each) => !["wonder", "audience (paint_decision)"].includes(each.writer)).every((each) => each.systemPrompt.includes("Write two or three sentences an illustrator paints from. Begin with the medium")));
