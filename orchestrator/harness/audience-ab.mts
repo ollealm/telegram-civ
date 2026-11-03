@@ -88,7 +88,7 @@ if (age === "age") {
   const ruled = new Set(state.seats.filter((seat) => seat.kind !== "agent").map((seat) => seat.civ));
   await playRound(state.seats, {
     working: (_seat, work) => work,
-    dispatch: async (seat, dispatch) => say(`## Letter - ${seat.civ}\n\n${[dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n")}\n\nImage: ${dispatch.image?.caption ?? "(none)"}\n\nJournal: ${dispatch.journal}\n`),
+    dispatch: async (seat, dispatch) => say(`## Letter - ${seat.civ}\n\n${[dispatch.heading, dispatch.text, dispatch.door, dispatch.question].filter(Boolean).join("\n\n")}\n\nImage: ${dispatch.image?.caption ?? "(none)"}\n\nJournal: ${dispatch.journal}\n`),
     notice: async (seat, text) => say(`(notice to ${seat.civ}) ${text}\n`),
     chronicle: async () => {},
     log: (...args) => console.log("(round)", ...args),

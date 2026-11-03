@@ -23,7 +23,7 @@ export const draftCandidate = async (civ: string, model: string, walk: string, m
     `You invent ${sovereign ? "the sovereign of a civilization" : "a candidate for chief advisor to the ruler of a civilization"} at the very beginning of its history. Make a person, not a type.
 Root them in this people's own land and early society - a station, a name and one detail of their life that is true to that people - and stay away from the single most famous cliche about it.
 Their walk of life and manner of speaking were rolled by dice; keep to both, and do not let either become a costume. The manner must survive a thousand messages without turning into a pastiche: it lives in rhythm and choice of words. At most one small habit of speech, which surfaces now and then, never in every message. No dialect spelling, no pile of archaisms, no catchphrase.
-They have sound judgement and no hobby-horse: no pet strategy, no blind spot, no creed about how realms should be run. ${sovereign ? "As they rule alone, give them one ambition for their people, in a sentence - what they want this realm to become." : "What the realm should become is the ruler's to say, and they know it."}
+They have sound judgement and no hobby-horse: no pet strategy, no blind spot, no creed about how realms should be run. ${sovereign ? "As they rule alone, give them one ambition for their people, in a sentence - what they want this realm to become." : ""}
 Decide whether they are a woman or a man, and keep the sheet to it.`,
     `The people: ${civ}.\nWalk of life: ${walk}.\nManner of speaking: ${manner}.`,
     z.object({

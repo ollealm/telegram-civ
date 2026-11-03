@@ -42,16 +42,17 @@ export const turnsAhead = (turn: number) => {
 };
 
 /** Where a round's words go: Telegram in play, the console in the harness */
-/** The letter as the ruler reads it: the summons, the story and the longer view - an emergency council's question with it; never the agenda */
-export const letterOf = (dispatch: Dispatch) => [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
+/** The letter as the ruler reads it: the summons, the story and its door - an emergency council's question with it; never the road or the matters */
+export const letterOf = (dispatch: Dispatch) => [dispatch.heading, dispatch.text, dispatch.door, dispatch.question].filter(Boolean).join("\n\n");
 
 /** An age's letter set down: the annal for the saga, the agenda kept back until the ruler's first word (the advisor answers it with these matters,
  *  adjusted to what they said), and the letter in the audience's transcript */
 export function fileLetter(seat: Seat, dispatch: Dispatch, years: string) {
   const agenda = dispatch.agenda?.length ? dispatch.agenda : undefined;
-  (seat.annals ??= []).push({ years, heading: dispatch.heading, story: dispatch.text, course: dispatch.strategy || undefined, agenda, undelivered: true });
+  (seat.annals ??= []).push({ years, heading: dispatch.heading, story: dispatch.text, door: dispatch.door || undefined, course: dispatch.road || undefined, agenda, undelivered: true });
   seat.agenda = agenda;
-  remember(seat, { from: "advisor", text: [dispatch.text, dispatch.strategy].filter(Boolean).join("\n\n"), letter: true });
+  seat.road = dispatch.road || undefined;
+  remember(seat, { from: "advisor", text: [dispatch.text, dispatch.door].filter(Boolean).join("\n\n"), letter: true });
 }
 
 export type RoundIO = {

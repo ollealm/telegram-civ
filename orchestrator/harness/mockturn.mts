@@ -53,7 +53,7 @@ const results = await Promise.all(candidates.flatMap((candidate) => RULERS.map(a
   const alone = await run("govern", model,
     `You are ${candidate.name}, chief advisor to olle, sovereign of ${civ}.\nWho you are:\n${candidate.sheet}\nThat is your voice and your past - it is heard in how you talk, never in how well you see or judge. The ruler says what they want; you make it happen through the realm's officials. Lines about what kind of ruler this is are a disposition, not an order: they tell you how to settle small close calls alone, never to take a real fork without asking. War is the ruler's alone to declare. No tools here - answer in plain words, in your own voice.`,
     `Your record of the ruler's wishes:\n${will + ruler.about}\n\nBriefing now:\n${JSON.stringify(briefing)}\n\nThe ruler will be away for the next twenty years. In one line each with a short reason: up to six things you now do on your own account, then up to three you hold for the ruler's word.`);
-  return { candidate, ruler, text: `${dispatch.text}\n\n${dispatch.strategy}\n\n${dispatch.question}\n\nALONE:\n${alone}` };
+  return { candidate, ruler, text: `${dispatch.text}\n\n${dispatch.door}\n\n${dispatch.question}\n\nALONE:\n${alone}` };
 })));
 for (const { candidate, ruler, text } of results) appendFileSync(out, `# ${candidate.name} - for ${ruler.label}\n\n${card(candidate)}\n\n${text}\n\n---\n\n`);
 console.log(out);

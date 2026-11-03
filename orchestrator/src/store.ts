@@ -21,7 +21,7 @@ export type Character = {
 
 /** One age of a reign as it was lived: the advisor's telling, the fork put to the ruler, what the ruler said and what was settled. The saga is written from these. */
 export type Annal = { years: string; heading?: string; story: string; course?: string; /** an emergency council's question */ question?: string;
-  /** What the advisor meant to bring to the audience, written with the letter */ agenda?: string[]; rulerSaid?: string[]; settled?: string; urgent?: boolean;
+  /** The letter's last line */ door?: string; /** What the advisor meant to bring to the audience, written with the letter (course holds its road) */ agenda?: string[]; rulerSaid?: string[]; settled?: string; urgent?: boolean;
   /** Written but not yet sent: a restart in between sends it at startup rather than let the advisor believe the ruler read it */
   undelivered?: boolean };
 
@@ -35,6 +35,8 @@ export type Seat = {
   clerk?: { name: string; title: string; sheet: string; pronouns?: string };
   /** What the advisor means to bring to this audience, written with the letter and kept back until the ruler's first word: pending until the advisor's first reply */
   agenda?: string[];
+  /** The advisor's road, opening those matters: pending with them */
+  road?: string;
   /** The loose ends the advisor would settle alone once the court rises, offered at the closing for the ruler to take up or leave (the field keeps its old name, so a state written before the rename still reads) */
   matters?: { item: string; lean: string; opening?: string }[];
   /** Set by the loose_ends tool while the reply is being written; remember() turns it into closedAt once that reply is stored */

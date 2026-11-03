@@ -1136,7 +1136,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const scene = { caption: "A title. A sentence.", description: "Stand-in description of the picture.", year: game.year };
     agents.standInForModels((asked) => {
       calls.push({ ...asked, writer });
-      return { text: "Stand-in reply.", data: { ...scene, image: scene, images: [scene], oddity: scene, why: "stand-in", wonder: "Great Library", summons: "", dispatch: "", strategy: "", agenda: [], question: "", journal: "", chapter: "A chapter." } };
+      return { text: "Stand-in reply.", data: { ...scene, image: scene, images: [scene], oddity: scene, why: "stand-in", wonder: "Great Library", summons: "", dispatch: "", door: "", road: "", agenda: [], question: "", journal: "", chapter: "A chapter." } };
     });
     const seat = { civ: civName, kind: "human", rulerName: "the ruler", chat: [], journal: [], annals: [] } as any;
     const round = { fromTurn: 88, turn: 100, fromYear: "AD 100", year: game.year, publicEvents: [{ turn: 99, year: game.year, text: `${civName} completed the wonder Great Library in Their Capital (river, hills).` }], rankings: [] } as any;
@@ -1189,7 +1189,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const scene = () => ({ caption: "A title. A sentence.", description: "Stand-in description of the picture.", year: named });
     agents.standInForModels((asked) => {
       schemas.push({ writer, schema: asked.outputSchema });
-      return { text: "Stand-in reply.", data: { ...scene(), image: scene(), images: [scene()], oddity: scene(), why: "stand-in", summons: "", dispatch: "", strategy: "", agenda: [], question: "", journal: "", chapter: "A chapter." } };
+      return { text: "Stand-in reply.", data: { ...scene(), image: scene(), images: [scene()], oddity: scene(), why: "stand-in", summons: "", dispatch: "", door: "", road: "", agenda: [], question: "", journal: "", chapter: "A chapter." } };
     });
     const seat = { civ: civName, kind: "human", rulerName: "the ruler", chat: [], journal: [], annals: [] } as any;
     const round = { fromTurn: 88, turn: 100, fromYear: "AD 100", year: game.year, publicEvents: [], rankings: [] } as any;
@@ -1248,11 +1248,12 @@ const CASES: Record<string, () => Promise<void>> = {
     const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean }[] };
     const civName = game.majorCivs.find((each) => each.alive)!.civ;
     const briefing = (await get(`/briefing?civ=${civ(civName)}`)).json;
+    const road = "Learning is our road: we lead Greece by three discoveries; the case for faith is Kyoto's shrines, but the Great Prophet went to Babylon.";
     const agenda = ["The lone warrior at Kyoto has nothing to do: I mean to walk him to the eastern hills, unless you want him home.", "I am proud of the harbour at Osaka and would like to talk about what it could become; only talk."];
     const asked: { role: string; systemPrompt: string; prompt: string }[] = [];
     agents.standInForModels((call) => {
       asked.push(call);
-      if (call.outputSchema) return { text: "", data: { summons: "AD 800 - come to court.", dispatch: "The story of the age.", strategy: "The longer view.", agenda, image: null, journal: "A journal line." } };
+      if (call.outputSchema) return { text: "", data: { summons: "AD 800 - come to court.", dispatch: "The story of the age.", door: "Shall I bring you what I have?", road: road, agenda, image: null, journal: "A journal line." } };
       return { text: "As you wish, Majesty." };
     });
     try {
@@ -1260,26 +1261,33 @@ const CASES: Record<string, () => Promise<void>> = {
       const round = { fromTurn: 88, turn: 100, fromYear: "AD 440", year: game.year, publicEvents: [], rankings: [] } as any;
       const dispatch = await agents.advisorReport(seat, round, [], briefing);
       const report = asked.find((each) => each.role === "report")!;
-      check("W53 the letter writer is asked for an agenda and no question", /\nagenda - what you mean to bring to the audience/.test(report.systemPrompt) && !/\nquestion - /.test(report.systemPrompt) && /A thing is said once across the dispatch, the longer view and the agenda/.test(report.systemPrompt));
-      check("W53 the dispatch carries the agenda and no question", JSON.stringify(dispatch.agenda) === JSON.stringify(agenda) && dispatch.question === undefined);
+      check("W53 the letter writer is asked for the door, the road and the matters, and no longer view or question (the expert court)", /\ndoor - the letter's last line/.test(report.systemPrompt) && /\nroad - your read of how this realm wins/.test(report.systemPrompt) && /the best case for the road you would not take/.test(report.systemPrompt)
+        && /\nagenda - your matters after the road/.test(report.systemPrompt) && !/\n(question|strategy) - /.test(report.systemPrompt) && /A thing is said once across the dispatch, the road and the matters/.test(report.systemPrompt) && /The road and the matters are your own words/.test(report.systemPrompt));
+      check("W53 the letter writer has what can be done now, and is told to look through it before the matters", /\n\nWhat can be done right now - every city's buildable items/.test(report.prompt) && /Before you write the matters, look through what can be done now \(below\) for what the ruler would not think to ask about/.test(report.systemPrompt));
+      check("W53 the dispatch carries the door, the road and the matters, and no question", JSON.stringify(dispatch.agenda) === JSON.stringify(agenda) && dispatch.road === road && dispatch.door === "Shall I bring you what I have?" && dispatch.question === undefined);
       fileLetter(seat, dispatch, "AD 440 to AD 800");
       const sent = letterOf(dispatch);
-      check("W53 the letter sent is heading, story and longer view, and no agenda", sent === "AD 800 - come to court.\n\nThe story of the age.\n\nThe longer view." && !agenda.some((item) => sent.includes(item.slice(0, 30))), sent);
-      check("W53 the agenda is kept on the annal and the seat, and the transcript's letter is without it", JSON.stringify(seat.annals.at(-1).agenda) === JSON.stringify(agenda) && JSON.stringify(seat.agenda) === JSON.stringify(agenda)
-        && seat.chat.at(-1).letter && !agenda.some((item) => seat.chat.at(-1).text.includes(item.slice(0, 30))));
+      check("W53 the letter sent is heading, story and door: no road, no matters", sent === "AD 800 - come to court.\n\nThe story of the age.\n\nShall I bring you what I have?" && !sent.includes(road.slice(0, 30)) && !agenda.some((item) => sent.includes(item.slice(0, 30))), sent);
+      check("W53 the annal keeps the road as its course and the matters; the seat holds both until the first word; the transcript's letter is story and door", JSON.stringify(seat.annals.at(-1).agenda) === JSON.stringify(agenda) && seat.annals.at(-1).course === road && JSON.stringify(seat.agenda) === JSON.stringify(agenda) && seat.road === road
+        && seat.chat.at(-1).letter && seat.chat.at(-1).text === "The story of the age.\n\nShall I bring you what I have?");
       asked.length = 0;
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
-      check("W53 the ruler's first word puts the agenda in the advisor's input, numbered, to be adjusted to what they said", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Answer what the ruler said first; then bring all of these in this same reply") && first.prompt.includes(`1. ${agenda[0]}`) && first.prompt.includes(`2. ${agenda[1]}`));
-      check("W53 the advisor's reply clears it", seat.agenda === undefined);
+      check("W53 the ruler's first word puts the road and then the matters in the advisor's input, to be brought in their shape", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Answer what the ruler said first; then bring all of it in this same reply")
+        && first.prompt.includes("the road first, then the matters as lines, the case for one only where the ruler opened it") && first.prompt.includes(`The road:\n${road}\nThe matters:\n1. ${agenda[0]}\n2. ${agenda[1]}`));
+      check("W53 the advisor's reply clears them", seat.agenda === undefined && seat.road === undefined);
       seat.chat.push({ from: "ruler", text: "Go on." }, { from: "advisor", text: "As you wish, Majesty." });
       asked.length = 0;
       await agents.advisorReply(seat, "And the harbour?", 12);
-      check("W53 a second word does not carry it", !asked.find((each) => each.role === "advisor")!.prompt.includes("What you meant to bring to this audience"));
+      check("W53 a second word does not carry them", !asked.find((each) => each.role === "advisor")!.prompt.includes("What you meant to bring to this audience"));
+      check("W53 the expert at the table, and the guard: only the ruler's words change the course", first.systemPrompt.includes("Be that for the ruler. At this table you are the one who knows the game, and the ruler sets the course") && first.systemPrompt.includes("Only their words change the realm's course: a word that takes no road leaves it as it stands."));
+      check("W53 told once: a matter once an audience, the closing says what changed, the loose ends never relist a matter brought", /and a matter is told once: after that, only what has changed about it/.test(first.systemPrompt) && /say what this audience changed and what you now set in motion, not the whole course again/.test(first.systemPrompt) && !/the only place you sum up/.test(first.systemPrompt)
+        && /nor a matter you brought: what the closing sets in motion is no loose end/.test(first.systemPrompt));
+      check("W53 the character writer no longer holds the advisor back from the realm's course", !(await import("node:fs")).readFileSync("src/characters.ts", "utf8").includes("What the realm should become is the ruler's to say"));
       check("W53 the audience is a conversation, the letter has read: no broad question, the court rises when the ruler closes it", !/asked the broad question/.test(first.systemPrompt) && /a conversation and not a form/.test(first.systemPrompt) && /The reply that brings your matters brings them all at once/.test(first.systemPrompt) && /The court rises when the ruler closes it, not when your matters are done/.test(first.systemPrompt) && /They have read your letter/.test(first.systemPrompt));
       check("W53 the house rules: the letter opens the court, the matters come on the ruler's first word", /The court opens with the advisor's letter; on the ruler's first word the advisor brings its matters/.test(agents.HOUSE_RULES));
       const last = await agents.advisorReport(seat, round, [], briefing, "Greece has won a Scientific victory");
-      check("W53 the last letter keeps no agenda", Array.isArray(last.agenda) && last.agenda.length === 0);
+      check("W53 the last letter keeps no door, road or matters", Array.isArray(last.agenda) && last.agenda.length === 0 && last.road === "" && last.door === "");
     } finally {
       agents.standInForModels(undefined);
       await stop(host);

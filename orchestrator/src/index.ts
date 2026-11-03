@@ -669,6 +669,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     const letterOnly = !!last?.letter && !seat().annals?.at(-1)?.urgent;
     if (letterOnly && seat().agenda?.length) seat().journal.push(`${seat().annals?.at(-1)?.years ?? "This age"}: the ruler rose before hearing my matters; I do as I meant to with each: ${seat().agenda!.join(" ")}`);
     seat().agenda = undefined;
+    seat().road = undefined; // a road unanswered leaves the course as it stands
     // A question left unanswered, or loose ends left to the advisor: either needs the closing pass, or the leans are never applied
     if (silently && !letterOnly && last?.from === "advisor" && (/\?/.test(last.text) || seat().matters?.length)) {
       // A question unanswered needs a word on which way the advisor went; loose ends alone do not: the ruler has read what will be done and needs no retelling
@@ -1050,7 +1051,7 @@ async function recover() {
   for (const seat of state.seats)
     for (const annal of seat.annals ?? [])
       if (annal.undelivered) {
-        await tell(seat, [annal.heading, annal.story, annal.course, annal.question].filter(Boolean).join("\n\n"));
+        await tell(seat, [annal.heading, annal.story, annal.door, annal.question].filter(Boolean).join("\n\n"));
         annal.undelivered = undefined;
         resent.add(seat);
       }

@@ -62,7 +62,7 @@ const started = Date.now();
 await playRound([seat], {
   working: (_seat, work) => work,
   dispatch: async (_seat, dispatch) => {
-    say(`### Letter (${((Date.now() - started) / 1000).toFixed(0)}s after the court rose)\n\n${[dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n")}\n`);
+    say(`### Letter (${((Date.now() - started) / 1000).toFixed(0)}s after the court rose)\n\n${[dispatch.heading, dispatch.text, dispatch.door, dispatch.question].filter(Boolean).join("\n\n")}\n`);
     say(`Journal line: ${dispatch.journal}\n`);
   },
   notice: async (_seat, text) => say(`(notice) ${text}`),
