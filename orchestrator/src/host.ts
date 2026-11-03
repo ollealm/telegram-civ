@@ -65,11 +65,16 @@ export type AgeSummary = {
   inSight: { whose: string; what: string; where: string; at: string; sea: boolean }[];
   /** Cities that stand in a patch of known country apart from the rest of the known world */
   glimpses?: string[];
+  /** The realms whose land the map shows (ours first, then great powers, then city-states), their game colours and the realms each meets on known land */
+  realms?: Realm[];
   /** The same, told in sentences */
   lines: string[];
   /** Candidates for the Chronicler's oddity of the age: the world's own lines, and ours (they begin "Our"); empty most ages */
   curiosities?: string[];
 };
+
+/** meets: the realms it shares a known land frontier with; open: it borders known land nobody holds */
+export type Realm = { name: string; cityState: boolean; outer: string; inner: string; cities: string[]; meets: string[]; open?: boolean };
 
 /** A force's march in an age. outcome: took the city it marched on, broken there (half or more fell), turned back, or still out */
 export type Campaign = {
