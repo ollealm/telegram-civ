@@ -285,7 +285,7 @@ Every city stands where the schematic has it, drawn as the age draws towns (the 
 ${companies(civ, age.inSight)}
 ${UNKNOWN_COUNTRY(civ, age.glimpses)} Use no real-world coat of arms or flag.${ancient ? "" : `\n${frontiers(era, civ, age.realms, age.glimpses, true)}`}
 ${arrows}
-Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age, keeping to what the chancery's words say - no figures, no "tiles", no names in brackets: "A company of pikemen wandered from the Russian marches to the walls of Genoa; ships found new waters to the south-east." A quiet age says so in one line. What happened in these years, in the chancery's words: ${age.lines.join(" ")}`;
+Title it "${title}" in a cartouche, and beneath the title, in small script, tell what happened in two or three lines of plain prose of the age, keeping to what the chancery's words say - no figures, no "tiles", no names in brackets. A quiet age says so in one line. What happened in these years, in the chancery's words: ${age.lines.join(" ")}`;
 }
 
 /** How each later age draws a frontier and letters its key (data/harness/map-border-tests-2026-11-03, the selected passes); Ancient keeps its soft tint */
