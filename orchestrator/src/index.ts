@@ -337,14 +337,14 @@ async function playRound() {
         const game = await host.state();
         const scene = dispatch.image ? paintAndKeep(dated({ turn: game.turn, for: seat.civ, ...dispatch.image }, game.year)) : Promise.resolve(null);
         // The map of the age, always in one style: the painted world with the age's movements drawn as an atlas would - or with none, in a quiet age.
-        // The host draws the age's campaigns as arrows; the painter repaints exactly those, and the host's own drawing comes with the letter beside the painted one
+        // The host draws the age's campaigns as arrows and the painter repaints exactly those; only the painted map is sent, none when it fails
         const age = dispatch.age;
         const traced = host.map(seat.civ, "campaign", round.fromTurn, round.turn).catch((error) => { log("march map failed:", error.message); return null; });
         // An emergency council's letter gets the map too - the age so far, with the war's first marches on it - unless the game is over
         const painted = !PAINTED_MAPS || /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve(null)
-          : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).catch((error) => { log("campaign map failed:", error.message); return null; });
-        // The host's campaign map comes with every letter as well, beside the painted one, while the painted maps are still being judged (MARCH_MAP=off stops it)
-        const marches = process.env.MARCH_MAP === "off" ? Promise.resolve(null) : traced;
+          : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).then((png) => { if (!png) log(`the painted map for ${seat.civ} failed: no map goes with the letter`); return png; }).catch((error) => { log("campaign map failed:", error.message); return null; });
+        // The host's own drawing goes with the letter only when asked for (MARCH_MAP=on): Olle, 2026-11-03, "turn off the bare map, so we only get the generated one"
+        const marches = process.env.MARCH_MAP === "on" ? traced : Promise.resolve(null);
         letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
       notice: tell,

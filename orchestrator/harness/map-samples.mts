@@ -42,10 +42,9 @@ for (const name of ages) {
   era = name;
   // Both of an age at once, each read the era as it starts (the briefing is the first thing each awaits)
   const [atlas, campaign] = await Promise.all([paintedMap(civ), campaignMap(civ, age, marches)]);
-  const failed = (png: Buffer, fallback: Buffer) => png.equals(fallback);
-  writeFileSync(join(out, `${name}-atlas.png`), atlas);
-  writeFileSync(join(out, `${name}-campaign.png`), campaign);
-  rows.push(`| ${name} | ${failed(atlas, schematic) ? "FAILED (the schematic)" : `![](${name}-atlas.png)`} | ${failed(campaign, marches) ? "FAILED (the host's drawing)" : `![](${name}-campaign.png)`} |`);
+  if (atlas) writeFileSync(join(out, `${name}-atlas.png`), atlas);
+  if (campaign) writeFileSync(join(out, `${name}-campaign.png`), campaign);
+  rows.push(`| ${name} | ${atlas ? `![](${name}-atlas.png)` : "FAILED"} | ${campaign ? `![](${name}-campaign.png)` : "FAILED"} |`);
   say(`${name} done`);
 }
 writeFileSync(join(out, "index.md"), `# Map samples: ${civ}, turn ${game.turn}\n\nOne atlas and one campaign map per age through paintedMap and campaignMap, the era overridden; campaigns since turn ${fromTurn} (${age.marches.length} of ours, ${age.enemyMarches.length} of others). The host's own drawings: [schematic](schematic.png), [marches](marches.png).\n\n| Age | Atlas | Campaign |\n|---|---|---|\n${rows.join("\n")}\n`);

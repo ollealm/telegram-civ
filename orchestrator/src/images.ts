@@ -11,6 +11,9 @@ import { host, type AgeSummary, type Realm } from "./host.ts";
 
 const ENABLED = process.env.IMAGES !== "off";
 const TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS ?? 240_000);
+/** A painted map takes longer than a scene: three attachments and a long prompt, 110-240 s in the map-borders samples, and the slow ones hit the
+ *  scene's 240 s (two of the 2026-11-03 game's maps timed out at AD 960 and AD 1200) */
+const MAP_TIMEOUT_MS = Number(process.env.MAP_IMAGE_TIMEOUT_MS ?? 600_000);
 const MAX_PARALLEL = 3;
 let running = 0;
 const waiting: (() => void)[] = [];
@@ -39,10 +42,10 @@ function findImage(node: unknown): string | null {
   return null;
 }
 
-async function viaGemini(prompt: string, references: Reference[]): Promise<Buffer> {
+async function viaGemini(prompt: string, references: Reference[], timeoutMs: number): Promise<Buffer> {
   const headers = { "x-goog-api-key": process.env.GEMINI_API_KEY!, "content-type": "application/json" };
   const post = async (url: string, body: unknown) => {
-    const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
     const json = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(`${response.status} ${JSON.stringify((json as any).error?.message ?? json).slice(0, 200)}`), { status: response.status });
     return json;
@@ -91,8 +94,8 @@ const shownLine = (description: string, shown: string[]) => {
 const BARE_WONDERS = new Set(["Stonehenge", "Petra", "Hagia Sophia", "Chichen Itza", "Machu Picchu", "Angkor Wat", "Notre Dame", "Big Ben", "Neuschwanstein", "Himeji Castle", "Cristo Redentor"]);
 const withArticle = (wonder: string) => (/^the /i.test(wonder) ? `the ${wonder.slice(4)}` : BARE_WONDERS.has(wonder) ? wonder : `the ${wonder}`);
 
-/** One image from a prompt, optionally guided by reference images. Null when every provider fails or takes too long. */
-export async function generateImage(prompt: string, references: Reference[] = []): Promise<Buffer | null> {
+/** One image from a prompt, optionally guided by reference images. Null when every provider fails or takes too long (timeoutMs, per provider). */
+export async function generateImage(prompt: string, references: Reference[] = [], timeoutMs = TIMEOUT_MS): Promise<Buffer | null> {
   if (!ENABLED) return null;
   if (running >= MAX_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve));
   running++;
@@ -100,7 +103,7 @@ export async function generateImage(prompt: string, references: Reference[] = []
     for (const provider of providers()) {
       const started = Date.now();
       try {
-        const png = provider === "gemini" ? await viaGemini(prompt, references) : await viaCodex(prompt, references);
+        const png = provider === "gemini" ? await viaGemini(prompt, references, timeoutMs) : await viaCodex(prompt, references, timeoutMs);
         log(`image ok via ${provider} in ${Math.round((Date.now() - started) / 1000)}s: ${prompt.slice(0, 70)}…`);
         return png;
       } catch (error) {
@@ -119,17 +122,17 @@ export async function generateImage(prompt: string, references: Reference[] = []
 // imagegen skill, looks at the reference, and copies the result about - six model calls on a context full of the user's
 // plugins. So: no user config, low effort, the reference by path (not attached), the one tool call written out for it,
 // and we fetch the file from Codex's own output folder instead of asking for a copy. ~28k tokens an image, from ~140k.
-async function viaCodex(prompt: string, references: Reference[]): Promise<Buffer> {
+async function viaCodex(prompt: string, references: Reference[], timeoutMs: number): Promise<Buffer> {
   const dir = mkdtempSync(join(tmpdir(), "ruler-image-"));
   for (const reference of references) writeFileSync(join(dir, reference.name), reference.png);
   const call = JSON.stringify({ prompt, ...(references.length ? { referenced_image_paths: references.map((reference) => join(dir, reference.name)) } : {}) });
-  const instruction = `Your first and only tool call is your exec tool with exactly this script (if you have no such tool, call the image generation tool once directly with the same arguments). Do not read the imagegen skill or any file, and do not view or copy any image - the script is complete.\n\n// @exec: {"yield_time_ms": 300000, "max_output_tokens": 100}\nawait tools.image_gen__imagegen(${call});\ntext("DONE");\n\nThen reply only DONE or FAILED: reason.`;
+  const instruction = `Your first and only tool call is your exec tool with exactly this script (if you have no such tool, call the image generation tool once directly with the same arguments). Do not read the imagegen skill or any file, and do not view or copy any image - the script is complete.\n\n// @exec: {"yield_time_ms": ${timeoutMs}, "max_output_tokens": 100}\nawait tools.image_gen__imagegen(${call});\ntext("DONE");\n\nThen reply only DONE or FAILED: reason.`;
   const args = ["exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "workspace-write", "-c", 'model_reasoning_effort="low"', ...(process.env.CODEX_IMAGE_MODEL ? ["-m", process.env.CODEX_IMAGE_MODEL] : []), "--json", "-"];
   let events = "";
   await new Promise<void>((resolve, reject) => {
     // Its own process group: `codex` is a Node wrapper around the native binary, and killing the wrapper alone left the binary running
     const child = spawn("codex", args, { cwd: dir, stdio: ["pipe", "pipe", "ignore"], detached: true });
-    const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGTERM"); } catch { child.kill(); } reject(new Error("timed out")); }, TIMEOUT_MS);
+    const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGTERM"); } catch { child.kill(); } reject(new Error("timed out")); }, timeoutMs);
     child.stdout.on("data", (chunk) => (events += chunk));
     child.on("error", reject);
     child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`codex exited ${code}`)); });
@@ -234,13 +237,13 @@ function companies(civ: string, inSight: AgeSummary["inSight"] | undefined): str
 /**
  *  The civ's known world as a mapmaker of its age would have made it. The image model paints the whole thing - land,
  *  names, borders, armies - from our accurate drawing; a name slightly off matters less than a map worth looking at.
- *  Falls back to our own atlas drawing.
+ *  Null when the painting fails: our own drawing is not sent in its place (Olle, 2026-11-03: "so we only get the generated one").
  */
-export async function paintedMap(civ: string): Promise<Buffer> {
+export async function paintedMap(civ: string): Promise<Buffer | null> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
   const now = await host.age(civ, Number(briefing.turn ?? 0)).catch(() => undefined);
   const era = String(briefing.era ?? "");
-  return (await generateImage(paintedMapPrompt(civ, era, briefing.year as string | undefined, now), [{ name: "map.png", png: atlas }, styleReference(era, "atlas")])) ?? atlas;
+  return generateImage(paintedMapPrompt(civ, era, briefing.year as string | undefined, now), [{ name: "map.png", png: atlas }, styleReference(era, "atlas")], MAP_TIMEOUT_MS);
 }
 
 export function paintedMapPrompt(civ: string, era: string, year: string | undefined, now: Pick<AgeSummary, "inSight" | "glimpses" | "realms"> | undefined): string {
@@ -256,11 +259,12 @@ Title it "The Known World of ${civ}, ${year ?? ""}", modestly.`;
 /** Nothing but blank ground beyond what the realm has seen: how a painter is to treat it */
 const UNKNOWN_COUNTRY = (civ: string, glimpses: string[] = []) => `Where the schematic's colours fade out into its bare light ground, the ${civ}'s knowledge ends. That ground is unexplored - not sea, not shore, not land: leave it as the map's own plain blank ground. Nothing runs along its edge: known land that fades into it does not end there but runs on unseen, so never close it with a coastline or ring it with water, and known sea fading into it gets no shore or shallows either - both simply thin out into the blank.${glimpses.length ? ` ${glimpses.join(", ")} ${glimpses.length === 1 ? "stands" : "stand"} in a glimpse of country seen from afar, not on an island: paint the land round ${glimpses.length === 1 ? "it" : "each"} as a small vignette that thins out into the blank on every side, with no coast and no water round it.` : ""} A city that stands on the blank ground is known to exist: draw it where the schematic gives it, on a little land that thins out into the blank. Paint all of the known world the schematic shows, out to its farthest seas and shores; crop nothing.`;
 
-/** An age's campaigns on the painted map, as a history atlas prints them: the host reckons the forces and draws their arrows; the painter only repaints them */
-export async function campaignMap(civ: string, age: AgeSummary, marches: Buffer): Promise<Buffer> {
+/** An age's campaigns on the painted map, as a history atlas prints them: the host reckons the forces and draws their arrows; the painter only repaints them.
+ *  Null when the painting fails, as paintedMap's */
+export async function campaignMap(civ: string, age: AgeSummary, marches: Buffer): Promise<Buffer | null> {
   const [atlas, briefing] = await Promise.all([host.map(civ), host.briefing(civ).catch(() => ({}) as Record<string, unknown>)]);
   const era = String(briefing.era ?? "");
-  return (await generateImage(campaignMapPrompt(civ, era, age), [{ name: "map.png", png: atlas }, { name: "marches.png", png: marches }, styleReference(era, "campaign")])) ?? marches;
+  return generateImage(campaignMapPrompt(civ, era, age), [{ name: "map.png", png: atlas }, { name: "marches.png", png: marches }, styleReference(era, "campaign")], MAP_TIMEOUT_MS);
 }
 
 export function campaignMapPrompt(civ: string, era: string, age: AgeSummary): string {
