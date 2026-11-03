@@ -1096,7 +1096,7 @@ const CASES: Record<string, () => Promise<void>> = {
     // (the audience's craft is in its paint_decision tool's description, not in these instructions)
     check("W47 the moments' writers get the one picture craft", calls.filter((each) => !["wonder", "audience (paint_decision)"].includes(each.writer)).every((each) => each.systemPrompt.includes("Write two or three sentences an illustrator paints from. Begin with the medium")));
     const wonderCall = calls.find((each) => each.writer === "wonder");
-    check("W47 the wonder's own brief and its examples are in the Chronicler's call", !!wonderCall && wonderCall.systemPrompt.includes("Show the familiar wonder at its real, famous size") && wonderCall.systemPrompt.includes("Sweden's own pyramid, as vast as Giza, of grey granite") && wonderCall.prompt.includes("- Great Library, in Their Capital (river, hills)"), wonderCall?.prompt);
+    check("W47 the wonder's own brief and its examples are in the Chronicler's call", !!wonderCall && wonderCall.systemPrompt.includes("Paint the famous wonder whole and recognisable by its shape at a glance") && wonderCall.systemPrompt.includes("Sweden's own pyramid, as vast as Giza, of grey granite") && wonderCall.prompt.includes("- Great Library, in Their Capital (river, hills)"), wonderCall?.prompt);
     check("W47 one call for the wonder, and its picture is described by that call", calls.filter((each) => each.writer === "wonder").length === 1 && wonders.length === 1 && wonders[0].description === scene.description && wonders[0].caption.startsWith("Great Library, completed by "), JSON.stringify(wonders));
     await stop(host);
   },
