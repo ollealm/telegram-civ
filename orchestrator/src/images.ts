@@ -297,6 +297,8 @@ export function keepWonderPicture(wonder: string, png: Buffer) {
   mkdirSync(WONDERS, { recursive: true });
   writeFileSync(join(WONDERS, wonderFile(wonder)), png);
 }
+/** A new world keeps none of the last one's wonders */
+export const forgetWonderPictures = () => rmSync(WONDERS, { recursive: true, force: true });
 export const wonderPicture = (wonder: string): Buffer | null => (existsSync(join(WONDERS, wonderFile(wonder))) ? readFileSync(join(WONDERS, wonderFile(wonder))) : null);
 /** The kept pictures of these wonders, as painter references, and the names of those that have one (the rest are named in the writer's input only) */
 export const wonderReferences = (wonders: string[]) => {

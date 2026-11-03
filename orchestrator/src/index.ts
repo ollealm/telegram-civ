@@ -6,7 +6,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
-import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, generateImage, imagesIdle, keepWonderPicture, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
+import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, forgetWonderPictures, generateImage, imagesIdle, keepWonderPicture, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
 import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
 import { playRound as runRound, turnsAhead } from "./round.ts";
@@ -929,6 +929,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       state.endingDone = [];
       state.chapters = [];
       state.pictures = []; // the last world's paintings must not steer this one's
+      state.paintedWonders = []; forgetWonderPictures(); // nor its wonders stand in this one's cities
       state.pendingRound = undefined;
       state.mapSize = draft.size;
       state.mapType = draft.mapType ?? "Pangaea";
