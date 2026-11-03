@@ -45,18 +45,18 @@ for (const job of jobs) {
     const briefing = await host.briefing(civ, fromTurn);
     const deeds = (await host.age(civ, fromTurn).catch(() => ({ lines: [] as string[] }))).lines;
     const dispatch = await agents.advisorReport(seat, round, [], briefing, undefined, deeds);
-    if (dispatch.image) samples.push({ name: `letter-${civ}`, writer: `the advisor's letter (${civ})`, age: ageOfLast(), year: game.year, ...dispatch.image });
+    if (dispatch.image) samples.push(agents.dated({ name: `letter-${civ}`, writer: `the advisor's letter (${civ})`, age: ageOfLast(), ...dispatch.image }, game.year));
     else say(`${civ}'s advisor chose no picture`);
   } else if (kind === "chronicle") {
     const { images } = await agents.heraldNewspaper(round, { earlier: [], lastChapters: [], proclamations: [], campaigns: [], cast: [] });
-    images.forEach((image, index) => samples.push({ name: `chronicle-${index + 1}`, writer: "the Chronicler's chapter", age: ageOfLast(), year: game.year, ...image }));
+    images.forEach((image, index) => samples.push(agents.dated({ name: `chronicle-${index + 1}`, writer: "the Chronicler's chapter", age: ageOfLast(), ...image }, game.year)));
   } else if (kind === "era") {
     const entry = all.filter((event) => event.text.startsWith(`${civ} entered the `)).at(-1);
     const era = /entered the (.+?)(?: with the learning of .+?)?\.?$/.exec(entry?.text ?? "")?.[1];
     if (!entry || !era) { say(`no age entry for ${civ}`); continue; }
     const recent = all.filter((event) => event.turn <= entry.turn && event.text.startsWith(civ)).slice(-12);
     const scene = await agents.eraScene(civ, era, entry.year, recent, await host.cities(civ).catch(() => []));
-    samples.push({ name: `era-${civ}-${era.replace(/ era$/, "")}`, writer: `the Chronicler's era entry (${civ} enter the ${era}, ${entry.year})`, age: ageOfLast(), year: entry.year, caption: scene.caption, description: scene.description });
+    samples.push(agents.dated({ name: `era-${civ}-${era.replace(/ era$/, "")}`, writer: `the Chronicler's era entry (${civ} enter the ${era}, ${entry.year})`, age: ageOfLast(), caption: scene.caption, description: scene.description, year: scene.year }, entry.year));
   } else if (kind === "wonders") {
     for (const picture of await agents.wonderPictures(round, say))
       samples.push({ name: `wonder-${picture.caption.split(",")[0]}`, writer: "the Chronicler's wonder (chooseWonder)", age: ageGiven.find((line) => line.startsWith(`The people's age: ${/completed by (.+?) in /.exec(picture.caption)?.[1]},`)) ?? "(none found)", year: picture.year, caption: picture.caption, description: picture.description });

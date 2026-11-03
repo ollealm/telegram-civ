@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, loadSchema, advisorReply, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
+import { advisorGreeting, loadSchema, advisorReply, dated, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -162,7 +162,7 @@ const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
     const recent = all.filter((entry) => entry.turn <= event.turn && entry.text.startsWith(civ)).slice(-12);
     const cities = await host.cities(civ).catch(() => []);
     const scene = await eraScene(civ, era, event.year, recent, cities, pictures.map((picture) => `${picture.caption} - ${picture.description.slice(0, 200)}`)).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
-    if (scene) pictures.push({ turn: event.turn, year: event.year, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description });
+    if (scene) pictures.push(dated({ turn: event.turn, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description, year: scene.year }, event.year));
   }
   return pictures;
 };
@@ -178,7 +178,7 @@ const victoryPictures = async (round: RoundResult): Promise<Picture[]> => {
   const cities = await host.cities(game.winner).catch(() => []);
   const scene = await victoryScene(game.winner, game.victoryType ?? "", era, round.year, cities).catch((error) => { log("victory picture failed:", error.message); return null; });
   if (!scene) return [];
-  return [{ turn: round.turn, year: round.year, for: "chronicle", caption: `${title}. ${scene.caption.trim()}`, description: scene.description }];
+  return [dated({ turn: round.turn, for: "chronicle", caption: `${title}. ${scene.caption.trim()}`, description: scene.description, year: scene.year }, round.year)];
 };
 
 /** The oddity of the age: none most ages, by the Chronicler's own judgement. Every decision is logged, so a game's worth can be counted */
@@ -190,7 +190,7 @@ const oddityPictures = async (round: RoundResult, seen: { campaigns: string[]; c
   const caption = answer.oddity.caption.trim();
   if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.replace(/^The oddity of the age\. /, "") === caption)) { log(`the Chronicler's oddity was painted before: ${answer.why}`); return []; }
   log(`the Chronicler found an oddity (${round.fromYear} to ${round.year}): ${answer.why}`);
-  return [{ turn: round.turn, year: round.year, for: "chronicle", caption, description: answer.oddity.description, note: "" }];
+  return [dated({ turn: round.turn, for: "chronicle", caption, description: answer.oddity.description, year: answer.oddity.year, note: "" }, round.year)];
 };
 
 /** /map: our own drawing at once (the painted one comes with each dispatch) */
@@ -335,7 +335,7 @@ async function playRound() {
         if (!bot || !seat.chatId) return;
         const letter = [dispatch.heading, dispatch.text, dispatch.strategy, dispatch.question].filter(Boolean).join("\n\n");
         const game = await host.state();
-        const scene = dispatch.image ? paintAndKeep({ turn: game.turn, year: game.year, for: seat.civ, ...dispatch.image }) : Promise.resolve(null);
+        const scene = dispatch.image ? paintAndKeep(dated({ turn: game.turn, for: seat.civ, ...dispatch.image }, game.year)) : Promise.resolve(null);
         // The map of the age, always in one style: the painted world with the age's movements drawn as an atlas would - or with none, in a quiet age.
         // The host draws the age's campaigns as arrows; the painter repaints exactly those, and the host's own drawing comes with the letter beside the painted one
         const age = dispatch.age;
@@ -358,7 +358,7 @@ async function playRound() {
           return { ...picture, note: boon.trim() };
         }));
         // All of the age's pictures are painted together and then sent in the order of the years they show
-        const pictures = [...images.map((image) => ({ turn: round.turn, year: round.year, for: "chronicle", note: "", ...image })), ...wonders, ...(await eraPictures(round)).map((picture) => ({ ...picture, note: "" }))];
+        const pictures = [...images.map((image) => dated({ turn: round.turn, for: "chronicle", note: "", ...image }, round.year)), ...wonders, ...(await eraPictures(round)).map((picture) => ({ ...picture, note: "" }))];
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         // A victory's picture leads the last age's pictures, whatever the years of the others
         const victory = (await victoryPictures(round)).map((picture) => ({ ...picture, note: "" }));
@@ -678,7 +678,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       const civ = seat().civ;
       void (async () => {
         const game = await host.state();
-        const decided: Picture = asked ? { ...asked, for: civ } : { turn: game.turn, year: game.year, for: civ, ...(await describeDecision(seat())) };
+        const decided: Picture = asked ? { ...asked, for: civ } : dated({ turn: game.turn, for: civ, ...(await describeDecision(seat())) }, game.year);
         // A court reopened and dismissed again has a newer decision, and its own picture: this one is overtaken
         paint(decided, async (png) => { if (court === courtsRisen) await bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }); else forgetPicture(decided); });
       })().catch((error) => log("decision picture failed:", error.message));

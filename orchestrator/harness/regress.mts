@@ -1059,7 +1059,7 @@ const CASES: Record<string, () => Promise<void>> = {
     // Every call is answered by the stand-in with every field any writer asks for; its inputs are kept
     const calls: { role: string; systemPrompt: string; prompt: string; writer: string }[] = [];
     let writer = "";
-    const scene = { caption: "A title. A sentence.", description: "Stand-in description of the picture." };
+    const scene = { caption: "A title. A sentence.", description: "Stand-in description of the picture.", year: game.year };
     agents.standInForModels((asked) => {
       calls.push({ ...asked, writer });
       return { text: "Stand-in reply.", data: { ...scene, image: scene, images: [scene], oddity: scene, why: "stand-in", wonder: "Great Library", summons: "", dispatch: "", strategy: "", question: "", journal: "", chapter: "A chapter." } };
@@ -1098,6 +1098,42 @@ const CASES: Record<string, () => Promise<void>> = {
     const wonderCall = calls.find((each) => each.writer === "wonder");
     check("W47 the wonder's own brief and its examples are in the Chronicler's call", !!wonderCall && wonderCall.systemPrompt.includes("Paint the famous wonder whole and recognisable by its shape at a glance") && wonderCall.systemPrompt.includes("Sweden's own pyramid, as vast as Giza, of grey granite") && wonderCall.prompt.includes("- Great Library, in Their Capital (river, hills)"), wonderCall?.prompt);
     check("W47 one call for the wonder, and its picture is described by that call", calls.filter((each) => each.writer === "wonder").length === 1 && wonders.length === 1 && wonders[0].description === scene.description && wonders[0].caption.startsWith("Great Library, completed by "), JSON.stringify(wonders));
+    await stop(host);
+  },
+  async W49() { // the year stamp (2026-11-03, Olle: "fix the year as well"): a picture carries the year its moment is set in, as its writer named it - a chapter
+    // picture of an 1878 founding says 1878, not the age's last year - and every picture writer is asked for that year; a writer that names none gets the year it was given
+    const host = await start("t100-world");
+    const agents = await import("../src/agents.ts");
+    const { picturePrompt } = await import("../src/images.ts");
+    const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean; era: string }[] };
+    const civName = game.majorCivs.find((each) => each.alive)!.civ;
+    const era = game.majorCivs.find((each) => each.civ === civName)!.era;
+    const briefing = (await get(`/briefing?civ=${civ(civName)}`)).json;
+    const schemas: { writer: string; schema: Record<string, unknown> | undefined }[] = [];
+    let writer = "";
+    let named = "AD 712";
+    const scene = () => ({ caption: "A title. A sentence.", description: "Stand-in description of the picture.", year: named });
+    agents.standInForModels((asked) => {
+      schemas.push({ writer, schema: asked.outputSchema });
+      return { text: "Stand-in reply.", data: { ...scene(), image: scene(), images: [scene()], oddity: scene(), why: "stand-in", summons: "", dispatch: "", strategy: "", question: "", journal: "", chapter: "A chapter." } };
+    });
+    const seat = { civ: civName, kind: "human", rulerName: "the ruler", chat: [], journal: [], annals: [] } as any;
+    const round = { fromTurn: 88, turn: 100, fromYear: "AD 100", year: game.year, publicEvents: [], rankings: [] } as any;
+    const years: Record<string, string | undefined> = {};
+    try {
+      writer = "letter"; years.letter = (await agents.advisorReport(seat, round, [], briefing)).image?.year;
+      writer = "urgent letter"; years.urgent = (await agents.advisorUrgent(seat, "War is declared.", briefing)).image?.year;
+      writer = "court painter"; years.decision = (await agents.describeDecision(seat)).year;
+      writer = "chronicle"; years.chronicle = (await agents.heraldNewspaper(round, { earlier: [], lastChapters: [], proclamations: [], campaigns: [], cast: [] })).images[0]?.year;
+      writer = "era entry"; years.era = (await agents.eraScene(civName, era, game.year, [])).year;
+      writer = "victory"; years.victory = (await agents.victoryScene(civName, "Scientific", era, game.year)).year;
+      writer = "oddity"; years.oddity = (await agents.oddityScene(round, [], [], [])).oddity?.year;
+    } finally { agents.standInForModels(undefined); }
+    const asksYear = (schema: Record<string, unknown> | undefined) => JSON.stringify(schema ?? {}).includes('"year"');
+    check("W49 every picture writer is asked for the year its moment is set in", schemas.length === 7 && schemas.every(({ schema }) => asksYear(schema)), schemas.filter(({ schema }) => !asksYear(schema)).map(({ writer }) => writer).join(", "));
+    check(`W49 each writer's picture carries the year it named (${named}), not the age's last (${game.year})`, Object.values(years).every((year) => year === named), JSON.stringify(years));
+    check("W49 the painted prompt stamps that year", picturePrompt(agents.dated({ description: "A scene.", year: named }, game.year)).includes(`The year is ${named}.`));
+    check("W49 a writer that named no year gets the year it was given", agents.dated({ description: "A scene.", year: " " }, game.year).year === game.year && agents.dated({ description: "A scene." }, game.year).year === game.year);
     await stop(host);
   },
 };

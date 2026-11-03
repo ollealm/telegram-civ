@@ -66,7 +66,10 @@ const CAPTION_CRAFT = `The caption is read under the picture, and the reader can
 const Picture = z.object({
   caption: z.string().describe("Read under the picture, which the reader can see - so never describe it; a short title, a full stop, then one sentence (up to 25 words) on what happened and what came of it, in the world's words"),
   description: z.string().describe("For the illustrator: the medium first, then the moment, where we stand to see it, the hour and the weather"),
+  year: z.string().describe("The year the moment shown is set in, as the chronicle writes it (AD 1878, 400 BC): the moment's own year, which may lie earlier than this one"),
 });
+/** A picture carries the year its moment is set in, as its writer named it; a writer that named none gets the year it was given (year stamp, 2026-11-03) */
+export const dated = <T extends object>(picture: T & { year?: string }, fallback: string): T & { year: string } => ({ ...picture, year: picture.year?.trim() || fallback });
 /** Under the picture the ruler carries off from an audience: not what happened, but what now begins */
 const DECISION_CAPTION = `The caption is read under the picture as the ruler leaves, and it speaks of what this audience set in motion: a short title, a full stop, then one sentence (up to 25 words) in the present of what now begins - the order given, the road taken, the work started - as a chronicle would note it ("The gem coast. Two families and a warrior leave Edinburgh for the south-western hills, as the court decided."). Never describe the picture itself.`;
 const alreadyPainted = (viewers: string[]) => `Pictures already painted in recent years (never the same subject or composition again):\n${recentPictures(viewers)}`;
@@ -362,9 +365,9 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
       "paint_decision",
       `Give the court painter the one picture the ruler carries off from this audience, with every closing: what this audience decided (a war or a peace, a founding, a great work begun, an envoy sent off), or, when nothing new was decided, the realm's next step under the standing plan - the settlers on the road, the smiths at the new forge, the warrior on the ridge watching the neighbours. Show the consequence where it lands, never the council table: when the decision reaches another people - gold to a city-state, an envoy to a rival's court, a gift of soldiers, a march on a foreign wall, ships on a far coast - paint it there, in that place's own dress and architecture, with ours as the visitors; our own realm, in the dress and architecture of ${seat.civ} in this year, when it lands at home. When either place would do, prefer the one the pictures already painted (listed in your prompt) have shown less lately. Never a subject or composition already among them. ${PICTURE_CRAFT} ${DECISION_CAPTION} It is painted once the court is dismissed; a later call replaces an earlier one.`,
       strict(Picture.shape),
-      async ({ caption, description }) => {
+      async ({ caption, description, year }) => {
         const game = await host.state();
-        seat.decisionPicture = { turn: game.turn, year: game.year, caption, description };
+        seat.decisionPicture = dated({ turn: game.turn, caption, description, year }, game.year);
         persist();
         return text("The painter has it.");
       },
@@ -468,13 +471,13 @@ type RunOptions = Moment & {
 };
 
 /** A stand-in for the models, for the regress cases: while one is set, every call is answered by it and no model is asked */
-type StandIn = (call: { role: string; systemPrompt: string; prompt: string; civ?: string }) => { text: string; data?: unknown };
+type StandIn = (call: { role: string; systemPrompt: string; prompt: string; civ?: string; outputSchema?: Record<string, unknown> }) => { text: string; data?: unknown };
 let standIn: StandIn | undefined;
 export const standInForModels = (answer: StandIn | undefined) => (standIn = answer);
 
 /** One model call; the answer is prose, or data in the shape of outputSchema when one is given */
 async function call(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }, attempt = 1): Promise<{ text: string; data?: unknown }> {
-  if (standIn) return standIn({ role, systemPrompt, prompt, civ: options.seat?.civ });
+  if (standIn) return standIn({ role, systemPrompt, prompt, civ: options.seat?.civ, outputSchema: options.outputSchema });
   // A model named gpt-* runs through the Codex CLI on the ChatGPT subscription (codex.ts), with the same tools, trace, usage and failure shape
   if (model.startsWith("gpt-")) return callCodex(role, model, systemPrompt, prompt, options);
   const { seat, onText, outputSchema, timeoutMs } = options;
