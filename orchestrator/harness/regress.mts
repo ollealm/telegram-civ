@@ -1051,7 +1051,7 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W47 the painted prompt adds the year and the guardrail, no medium", painted === "A scene.\n\nThe year is AD 100. No text or lettering. No real people.", painted);
     check("W47 an early era entry names the reconstruction alone", /The medium for this picture: Archaeological reconstruction painting in gouache and watercolour, even daylight, clear outlines\.$/.test(agents.ageLine("Japan", "Classical era", true)) && !/history painting/.test(agents.ageLine("Japan", "Medieval era", true)), agents.ageLine("Japan", "Classical era", true));
     check("W47 an untyped early picture gets the full media line", /Media this age allows: A finished history painting; or an archaeological reconstruction/.test(agents.ageLine("Japan", "Medieval era")));
-    check("W47 a later era entry gets its age's media, not the reconstruction", /Media this age allows: A painting technique of that century/.test(agents.ageLine("Japan", "Renaissance era", true)) && /Usually a photograph/.test(agents.ageLine("Japan", "Atomic era", true)));
+    check("W47 a later era entry gets its age's media, not the reconstruction", /Media this age allows: Oil painting, one of: oil on oak panel/.test(agents.ageLine("Japan", "Renaissance era", true)) && /Usually a photograph/.test(agents.ageLine("Japan", "Atomic era", true)));
     const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean; era: string }[] };
     const civName = game.majorCivs.find((each) => each.alive)!.civ;
     const era = game.majorCivs.find((each) => each.civ === civName)!.era;
@@ -1094,9 +1094,9 @@ const CASES: Record<string, () => Promise<void>> = {
     check(`W47 the era entry (${era}) ${early ? "names the reconstruction alone" : "gets its age's media"}`, early ? entry.prompt.includes("The medium for this picture: Archaeological reconstruction") && !entry.prompt.includes("Media this age allows") : entry.prompt.includes("Media this age allows"));
     check("W47 no writer's instructions or input say 'realistic oil painting'", !calls.some((each) => /realistic oil painting/i.test(each.systemPrompt + each.prompt)), calls.filter((each) => /realistic oil painting/i.test(each.systemPrompt + each.prompt)).map((each) => each.writer).join(", "));
     // (the audience's craft is in its paint_decision tool's description, not in these instructions)
-    check("W47 the moments' writers get the one picture craft", calls.filter((each) => !["wonder", "audience (paint_decision)"].includes(each.writer)).every((each) => each.systemPrompt.includes("Write the picture as a short description an illustrator paints from")));
+    check("W47 the moments' writers get the one picture craft", calls.filter((each) => !["wonder", "audience (paint_decision)"].includes(each.writer)).every((each) => each.systemPrompt.includes("Write two or three sentences an illustrator paints from. Begin with the medium")));
     const wonderCall = calls.find((each) => each.writer === "wonder");
-    check("W47 the wonder's own brief and its examples are in the Chronicler's call", !!wonderCall && wonderCall.systemPrompt.includes("Show the familiar wonder at its real, famous size") && wonderCall.systemPrompt.includes("Sweden's pyramid in grey granite") && wonderCall.prompt.includes("- Great Library, in Their Capital (river, hills)"), wonderCall?.prompt);
+    check("W47 the wonder's own brief and its examples are in the Chronicler's call", !!wonderCall && wonderCall.systemPrompt.includes("Show the familiar wonder at its real, famous size") && wonderCall.systemPrompt.includes("Sweden's own pyramid, as vast as Giza, of grey granite") && wonderCall.prompt.includes("- Great Library, in Their Capital (river, hills)"), wonderCall?.prompt);
     check("W47 one call for the wonder, and its picture is described by that call", calls.filter((each) => each.writer === "wonder").length === 1 && wonders.length === 1 && wonders[0].description === scene.description && wonders[0].caption.startsWith("Great Library, completed by "), JSON.stringify(wonders));
     await stop(host);
   },
