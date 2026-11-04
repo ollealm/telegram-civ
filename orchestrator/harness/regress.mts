@@ -1255,7 +1255,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const briefing = (await get(`/briefing?civ=${civ(civName)}`)).json;
     const road = "Learning is our road: we lead Greece by three discoveries; the case for faith is Kyoto's shrines, but the Great Prophet went to Babylon.";
     const agenda = ["The lone warrior at Kyoto has nothing to do: I mean to walk him to the eastern hills, unless you want him home.", "I am proud of the harbour at Osaka and would like to talk about what it could become; only talk."];
-    const asked: { role: string; systemPrompt: string; prompt: string }[] = [];
+    const asked: { role: string; systemPrompt: string; prompt: string; served?: string[] }[] = [];
     agents.standInForModels((call) => {
       asked.push(call);
       if (call.outputSchema) return { text: "", data: { summons: "AD 800 - come to court.", dispatch: "The story of the age.", door: "Shall I bring you what I have?", road: road, agenda, image: null, journal: "A journal line." } };
@@ -1275,9 +1275,16 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W53 the letter sent is heading, story and door: no road, no matters", sent === "AD 800 - come to court.\n\nThe story of the age.\n\nShall I bring you what I have?" && !sent.includes(road.slice(0, 30)) && !agenda.some((item) => sent.includes(item.slice(0, 30))), sent);
       check("W53 the annal keeps the road as its course and the matters; the seat holds both until the first word; the transcript's letter is story and door", JSON.stringify(seat.annals.at(-1).agenda) === JSON.stringify(agenda) && seat.annals.at(-1).course === road && JSON.stringify(seat.agenda) === JSON.stringify(agenda) && seat.road === road
         && seat.chat.at(-1).letter && seat.chat.at(-1).text === "The story of the age.\n\nShall I bring you what I have?");
+      // The first word never closes the court (2026-11-04, Olle: "Let's only allow hard command closes after the first message?"): while the road and the matters
+      // wait, dismiss_court is not served and a call to it cannot dismiss; only the ruler's /onward closes that audience
+      const schema = (await get("/schema")).json as any;
+      const unserved = await agents.callRealmTool(seat, { canRecordWill: true }, schema, "dismiss_court", {}).catch((error: Error) => error.message);
+      check("W53 while the road and the matters wait, a dismiss_court call cannot dismiss the court", !seat.dismissed, unserved);
       asked.length = 0;
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
+      check("W53 the reply to the first word is not served dismiss_court, and is told that only /onward ends this audience", !!first.served?.includes("record_rulers_will") && !first.served.includes("dismiss_court")
+        && first.systemPrompt.includes('a thumbs-up to your closing) - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience. Read it as a person would.'), JSON.stringify(first.served));
       check("W53 the ruler's first word puts the road and then the matters in the advisor's input, to be brought in their shape", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Their first word opens the audience, it does not close it: the road and the matters come before anything of yours is settled or the court closes. Answer what the ruler said first; then bring all of it in this same reply")
         && first.prompt.includes("opening with the road, then the matters, each in a sentence or two in the flow of talk - what it is and what you will do about it, or that it is only talk - with no heading or list of their own, the case for one only where the ruler opened it; that all of it goes ahead if they say nothing you say once, after the matters, not with each.") && !first.prompt.includes("as lines") && first.prompt.includes(`not with each. When their word changes nothing, bring it as prepared.\n\n${road}\n\n${agenda[0]}\n\n${agenda[1]}\n\n`)
         && !/The road:|The matters:|\n1\. /.test(first.prompt), first.prompt.slice(first.prompt.indexOf("What you meant"), first.prompt.indexOf("What you meant") + 1200));
@@ -1290,7 +1297,14 @@ const CASES: Record<string, () => Promise<void>> = {
       seat.chat.push({ from: "ruler", text: "Go on." }, { from: "advisor", text: "As you wish, Majesty." });
       asked.length = 0;
       await agents.advisorReply(seat, "And the harbour?", 12);
-      check("W53 a second word does not carry them", !asked.find((each) => each.role === "advisor")!.prompt.includes("What you meant to bring to this audience"));
+      const second = asked.find((each) => each.role === "advisor")!;
+      check("W53 a second word does not carry them", !second.prompt.includes("What you meant to bring to this audience"));
+      check("W53 from the second word on, plain words close the court again: dismiss_court is served, the rule has no first-word clause, and the call dismisses", !!second.served?.includes("dismiss_court")
+        && second.systemPrompt.includes("a thumbs-up to your closing). Read it as a person would.") && !second.systemPrompt.includes("not in this reply to their first word")
+        && (await agents.callRealmTool(seat, { canRecordWill: true }, schema, "dismiss_court", {}), seat.dismissed === true), JSON.stringify(second.served));
+      seat.dismissed = false;
+      const sovereign = { ...seat, kind: "agent" };
+      check("W53 a sovereign is never served dismiss_court, the first word waiting or not", [{ ...sovereign, road, agenda }, sovereign].every((each) => !agents.servedTools(each, { canRecordWill: true, sideTools: ["proclaim"] }).includes("dismiss_court")));
       check("W53 the expert at the table, and the guard: only the ruler's words change the course", first.systemPrompt.includes("Be that for the ruler. At this table you are the one who knows the game, and the ruler sets the course") && first.systemPrompt.includes("Only their words change the realm's course: a word that takes no road leaves it as it stands."));
       check("W53 told once: a matter once an audience, the closing says what changed, the loose ends never relist a matter brought", /and a matter is told once: after that, only what has changed about it/.test(first.systemPrompt) && /say what this audience changed and what you now set in motion, not the whole course again/.test(first.systemPrompt) && !/the only place you sum up/.test(first.systemPrompt)
         && /nor a matter you brought: what the closing sets in motion is no loose end/.test(first.systemPrompt));

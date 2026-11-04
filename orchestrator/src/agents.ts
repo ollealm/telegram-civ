@@ -427,10 +427,17 @@ function gameTools(seat: Seat, { canRecordWill = false, readOnly = false, sideTo
       },
     ) as never,
   );
-  // A sovereign holds no court, so it has none to dismiss
-  const served = [...READ_TOOLS, ...(readOnly ? [] : ["set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", ...(seat.kind === "agent" ? [] : ["dismiss_court"])] : [])]), ...sideTools];
+  const served = servedTools(seat, { canRecordWill, readOnly, sideTools });
   return { tools, server: createSdkMcpServer({ name: "realm", version: "1.0.0", tools: tools.filter((each) => served.includes((each as { name: string }).name)) }), served };
 }
+
+/** The realm tools of this moment. A sovereign holds no court, so it has none to dismiss; nor does an advisor answering the ruler's first word
+ *  while the road and the matters wait: only the ruler's own /onward closes that audience */
+export const servedTools = (seat: Seat, { canRecordWill = false, readOnly = false, sideTools = [] }: Moment) =>
+  [...READ_TOOLS, ...(readOnly ? [] : ["set_orders", "update_plan", ...(canRecordWill ? ["record_rulers_will", ...(seat.kind === "agent" || firstWordWaits(seat) ? [] : ["dismiss_court"])] : [])]), ...sideTools];
+
+/** The road and the matters the letter kept back still wait: the reply now due answers the ruler's first word */
+const firstWordWaits = (seat: Seat) => !!(seat.road || seat.agenda?.length);
 
 /** Everything one model call did - what the dev feed shows */
 export type Trace = {
@@ -466,13 +473,13 @@ type RunOptions = Moment & {
 };
 
 /** A stand-in for the models, for the regress cases: while one is set, every call is answered by it and no model is asked */
-type StandIn = (call: { role: string; systemPrompt: string; prompt: string; civ?: string; outputSchema?: Record<string, unknown> }) => { text: string; data?: unknown };
+type StandIn = (call: { role: string; systemPrompt: string; prompt: string; civ?: string; outputSchema?: Record<string, unknown>; served?: string[] }) => { text: string; data?: unknown };
 let standIn: StandIn | undefined;
 export const standInForModels = (answer: StandIn | undefined) => (standIn = answer);
 
 /** One model call; the answer is prose, or data in the shape of outputSchema when one is given */
 async function call(role: string, model: string, systemPrompt: string, prompt: string, options: RunOptions & { outputSchema?: Record<string, unknown> }, attempt = 1): Promise<{ text: string; data?: unknown }> {
-  if (standIn) return standIn({ role, systemPrompt, prompt, civ: options.seat?.civ, outputSchema: options.outputSchema });
+  if (standIn) return standIn({ role, systemPrompt, prompt, civ: options.seat?.civ, outputSchema: options.outputSchema, served: options.seat && servedTools(options.seat, options) });
   // A model named gpt-* runs through the Codex CLI on the ChatGPT subscription (codex.ts), with the same tools, trace, usage and failure shape
   if (model.startsWith("gpt-")) return callCodex(role, model, systemPrompt, prompt, options);
   const { seat, onText, outputSchema, timeoutMs } = options;
@@ -695,7 +702,7 @@ These few are not left to your judgement.
 - ${warRule(seat)}
 - Never among the loose ends: war, peace, alliances and pacts, anything costing more than about a third of the treasury, and anything that touches the age's open question - they belong in the conversation.${state.pendingRound?.urgent ? " This court sits in emergency council: there is no list at all." : ""}
 - The closing ends with "Name any you want to raise; otherwise" and then, on a line of its own, exactly "/onward". Offer only /onward (a ruler may type /go; it means the same). Do not offer it while a question of yours still needs their word; a "yes" answers that one question and the audience goes on.
-- Time passes only when the ruler dismisses the court: with /onward, or by letting you know in their own way that they are done ("proceed", "sounds good, do that", a thumbs-up to your closing). Read it as a person would. When their message reads as a close and nothing of yours is left open, set the orders, give your closing, settle any loose end still listed as you said it would be done in that same set_orders, and call dismiss_court; then do not end with the /onward line - your call dismisses the court - and list no loose ends: they are settled, and the ruler has read what you will do. If one deserves a word, it belongs in the closing's own sentences. When you are unsure whether they meant to leave, do not dismiss: end with the /onward line and let them tap it.
+- Time passes only when the ruler dismisses the court: with /onward, or by letting you know in their own way that they are done ("proceed", "sounds good, do that", a thumbs-up to your closing)${firstWordWaits(seat) ? " - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience" : ""}. Read it as a person would. When their message reads as a close and nothing of yours is left open, set the orders, give your closing, settle any loose end still listed as you said it would be done in that same set_orders, and call dismiss_court; then do not end with the /onward line - your call dismisses the court - and list no loose ends: they are settled, and the ruler has read what you will do. If one deserves a word, it belongs in the closing's own sentences. When you are unsure whether they meant to leave, do not dismiss: end with the /onward line and let them tap it.
 ${seat.clerk ? `- Questions about the game's rules (what a wonder or a people's gift does) or about this court's workings (commands, ages, councils) are for ${seat.clerk.name}, ${seat.clerk.title}; you may send the ruler there ("ask ${seat.clerk.name}") rather than guess, and then end your message with a line that is exactly "/clerk" (the clerk holds the floor until the ruler calls you back with /advisor or your name).\n` : ""}- proclaim, once an audience at most: let something the ruler said leak to the heralds - a remark, a mood, a turn of phrase with their character in it - kept close to their own phrasing. Never a plan, the treasury, research or a weakness. If the ruler said nothing in their own voice, nothing leaks; but a ruler who speaks in character should be heard of in the world's history more often than not.
 Then ${turnsPerRound} turns pass - ${yearsOf(turnsPerRound, briefing)} - while you govern by the recorded will and look in on the realm every few turns.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time
@@ -709,7 +716,7 @@ Then ${turnsPerRound} turns pass - ${yearsOf(turnsPerRound, briefing)} - while y
 };
 
 /** The road and the matters the advisor prepared with its letter, while they wait for its first reply: answered after what the ruler said, adjusted to it */
-const agendaFor = (seat: Seat) => seat.road || seat.agenda?.length
+const agendaFor = (seat: Seat) => firstWordWaits(seat)
   ? `What you meant to bring to this audience, prepared before the ruler spoke. Their first word opens the audience, it does not close it: the road and the matters come before anything of yours is settled or the court closes. Answer what the ruler said first; then bring all of it in this same reply, adjusted to it - drop what they settled, bring forward what they raised, keep the rest - in your own words and in its shape: opening with the road, then the matters, each in a sentence or two in the flow of talk - what it is and what you will do about it, or that it is only talk - with no heading or list of their own, the case for one only where the ruler opened it; that all of it goes ahead if they say nothing you say once, after the matters, not with each. When their word changes nothing, bring it as prepared.${[seat.road, ...(seat.agenda ?? [])].filter(Boolean).map((part) => `\n\n${part}`).join("")}\n\n`
   : "";
 
