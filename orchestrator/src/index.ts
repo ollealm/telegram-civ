@@ -801,25 +801,34 @@ function setUpAdvisor(bot: Bot, index: number) {
         // A closing's picture of the decision and the ruler's words for the Chronicler went by the advisor's own tools. The picture is painted once
         // the court is dismissed - a closing can still be talked over, and only the last one stands.
         // A court the advisor dismissed by its own call is not also offered the tap
-        if (seat().dismissed) reply = reply.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "");
+        const tapLine = new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i");
+        if (seat().dismissed) reply = reply.replace(tapLine, "");
         remember(seat(), { from: "ruler", text: message });
-        remember(seat(), { from: "advisor", text: reply });
+        const held = { from: "advisor" as const, text: reply };
+        remember(seat(), held);
         seat().forCouncil = undefined; // what was left with the clerk was before the advisor in this reply
         persist();
-        await ctx.reply(reply);
         // A closing that never weighed its loose ends is asked once: list them, or say there are none (an empty list counts as considered).
-        // A court the advisor dismissed by its own call is not asked: it settled them by lean in its orders, and the dismissal follows at once
-        const closed = !seat().dismissed && new RegExp(`/(${LEAVE.join("|")})\\s*$`, "i").test(reply);
-        if (closed && seat().matters === undefined && !thenGo && !state.pendingRound?.urgent) {
-          const listed = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the loose ends. If there are calls you would settle alone once it rises, list them now - numbered, one line each with what will be done, checked - and give them to loose_ends, ending with \"Name any you want to raise; otherwise\" and the /onward line. If there are truly none, call loose_ends with an empty list and say in one line that nothing is left loose. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
-            .catch((error) => { log(`${seat().civ}: the loose-ends follow-up failed:`, error.message); return ""; });
-          if (listed.trim()) {
-            const shown = seat().dismissed ? listed.replace(new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i"), "") : listed;
+        // A court the advisor dismissed by its own call is not asked: it settled them by lean in its orders, and the dismissal follows at once.
+        // The closing is held while it is asked, and the ruler gets one message: the closing without its /onward, then the list under it
+        // (AD 1655: two messages in a row, each ending on /onward). The follow-up reads the closing in the transcript, so it stays there
+        // until the one message takes its place.
+        const tap = reply.match(new RegExp(`(\\s*)(/(?:${LEAVE.join("|")}))\\s*$`, "i"));
+        let shown = reply;
+        if (tap && !seat().dismissed && seat().matters === undefined && !thenGo && !state.pendingRound?.urgent) {
+          const listed = (await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the loose ends. If there are calls you would settle alone once it rises, list them now - numbered, one line each with what will be done, checked - and give them to loose_ends, ending with \"Name any you want to raise; otherwise\" and the /onward line. If there are truly none, call loose_ends with an empty list and say in one line that nothing is left loose. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
+            .catch((error) => { log(`${seat().civ}: the loose-ends follow-up failed:`, error.message); return ""; })).trim();
+          if (listed) {
+            // The list's own /onward ends the message; a list without one ("nothing is left loose") gets the closing's back
+            shown = `${reply.slice(0, tap.index).trimEnd()}\n\n${listed}${tapLine.test(listed) ? "" : `${tap[1] || " "}${tap[2]}`}`;
+            if (seat().dismissed) shown = shown.replace(tapLine, "");
+            const at = seat().chat.lastIndexOf(held);
+            if (at >= 0) seat().chat.splice(at, 1);
             remember(seat(), { from: "advisor", text: shown });
             persist();
-            await ctx.reply(shown);
           }
         }
+        await ctx.reply(shown);
         // Answered once the ruler has it: a restart before this answers it again, which beats never answering it
         answered();
         await flushDevFeed(herald, `Audience - ${seat().civ}`);

@@ -1384,24 +1384,64 @@ const CASES: Record<string, () => Promise<void>> = {
     const plant = (text: string, closing = false) => { seat.closing = closing || undefined; remember(seat, { from: "advisor", text }); };
     // The stand-in advisor: what a dismiss_court or loose_ends call would do, it does to the seat; each call notes what the ruler had been sent by then
     const calls: { said: string; sentBefore: number; ready: boolean; dismissedTold: boolean; served?: string[]; owedNote: boolean }[] = [];
+    // The loose-ends follow-up's answer, set by each case: a list, "nothing is left loose" with no /onward of its own, or nothing at all
+    let looseEnds = (): { text: string } => ({ text: "" });
     agents.standInForModels((asked) => {
       if (asked.outputSchema) return { text: "", data: { caption: "The granary. Grain comes in.", description: "Oil painting. A granary.", year: game.year } }; // the decision's picture
       const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
       calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED), served: asked.served, owedNote: asked.prompt.includes("its orders are not set yet") });
       if (/The ruler now says:\nGo on\.$/.test(said)) return { text: "Learning stays our road. I will send the warrior east and buy Kyoto its granary." };
       if (/Sounds good, do that/.test(said)) { seat.dismissed = true; return { text: "Then the granary first and the walls after; Kyoto grows before it arms." }; }
-      if (/Carry on then/.test(said)) return { text: "The granary first, then the walls.\n\nName any you want to raise; otherwise\n/onward" };
-      if (/without weighing the loose ends/.test(said)) { seat.matters = []; return { text: "Nothing is left loose.\n/onward" }; }
+      if (/Carry on then/.test(said)) return { text: "The granary first, then the walls. Anything else, or shall we go on? /onward" };
+      if (/That will do/.test(said)) return { text: "Then the granary.\n\n/onward" };
+      if (/As you say/.test(said)) return { text: "As you say: the granary.\n/onward" };
+      if (/Fine by me/.test(said)) { Object.assign(seat, { matters: [{ item: "Spare gold", lean: "goes to the walls" }], closing: true }); return { text: "The granary first.\n\nLeft loose:\n1. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward" }; }
+      if (/without weighing the loose ends/.test(said)) return looseEnds();
       if (/dismisses the court without another word/.test(said)) return { text: /leaving the loose ends to you/.test(said) ? "Settled as listed." : "I went with the granary, for the winter." };
       return { text: "Granary or walls, Majesty?" };
     });
     Object.assign(process.env, { HERALD_BOT_TOKEN: "1:herald", ADVISOR_1_BOT_TOKEN: "2:advisor", TELEGRAM_API_ROOT: `http://127.0.0.1:${tgPort}`, PAINTED_MAPS: "off" });
     try {
       await import("../src/index.ts");
-      // A: closed with the /onward line and no list weighed: the follow-up is asked, once, in the new name
+      // A: closed with the /onward line and no list weighed: the follow-up is asked, once, and the ruler gets one message - the closing without its /onward,
+      // then the list with its own (AD 1655: two messages in a row, each ending on /onward); the transcript keeps that one message, once, as the closing
+      const asked = (from: number) => calls.slice(from).filter((each) => /without weighing the loose ends/.test(each.said)).length;
+      const listed = "Two things I'd settle on my own once the court rises:\n1. The idle Great Scientist settles in Kyoto's academy\n2. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward";
+      looseEnds = () => { Object.assign(seat, { matters: [{ item: "An idle Great Scientist", lean: "settles in Kyoto's academy" }, { item: "Spare gold", lean: "goes to the walls" }], closing: true }); return { text: listed }; };
       plant("Granary or walls, Majesty?");
+      const beforeA = { calls: calls.length, sent: sent.length };
       say("Carry on then.");
-      check("W51 a closing with the /onward line and no list weighed gets the loose-ends follow-up", await until(() => calls.some((each) => /without weighing the loose ends/.test(each.said)) && sent.includes("Nothing is left loose.\n/onward")), calls.map((each) => each.said.slice(20, 80)).join(" | "));
+      await until(() => asked(beforeA.calls) > 0 && sent.length > beforeA.sent);
+      await sleep(300);
+      const one = `The granary first, then the walls. Anything else, or shall we go on?\n\n${listed}`;
+      check("W51 a closing with no list weighed is asked once for the loose ends, and the ruler gets one message: the closing, then the list ending on its /onward", asked(beforeA.calls) === 1 && JSON.stringify(sent.slice(beforeA.sent)) === JSON.stringify([one])
+        && sent.at(-1)!.endsWith("Name any you want to raise; otherwise\n/onward") && sent.at(-1)!.match(/\/onward/g)!.length === 1, `asked ${asked(beforeA.calls)}; sent ${JSON.stringify(sent.slice(beforeA.sent))}`);
+      check("W51 that one message is remembered once, as the advisor's closing, and the closing alone is not kept beside it", JSON.stringify(seat.chat.slice(-2)) === JSON.stringify([{ from: "ruler", text: "Carry on then." }, { from: "advisor", text: one, closing: true }])
+        && !seat.chat.some((each: { text: string }) => each.text.startsWith("The granary first, then the walls. Anything else, or shall we go on? /onward")), JSON.stringify(seat.chat.slice(-3)));
+      // A2: the follow-up finds nothing loose and gives no /onward of its own: the closing's goes back at the end
+      looseEnds = () => { seat.matters = []; return { text: "Nothing is left loose." }; };
+      seat.matters = undefined;
+      const beforeA2 = { calls: calls.length, sent: sent.length };
+      say("That will do.");
+      await until(() => asked(beforeA2.calls) > 0 && sent.length > beforeA2.sent);
+      await sleep(300);
+      check("W51 nothing left loose and no /onward in the answer: one message, the closing's /onward put back at the end", JSON.stringify(sent.slice(beforeA2.sent)) === JSON.stringify(["Then the granary.\n\nNothing is left loose.\n\n/onward"]), JSON.stringify(sent.slice(beforeA2.sent)));
+      // A3: the follow-up comes back empty: the closing goes out as it was
+      looseEnds = () => ({ text: "  " });
+      seat.matters = undefined;
+      const beforeA3 = { calls: calls.length, sent: sent.length };
+      say("As you say.");
+      await until(() => asked(beforeA3.calls) > 0 && sent.length > beforeA3.sent);
+      await sleep(300);
+      check("W51 an empty follow-up: the closing is sent as it was, once, and remembered once", JSON.stringify(sent.slice(beforeA3.sent)) === JSON.stringify(["As you say: the granary.\n/onward"]) && JSON.stringify(seat.chat.at(-1)) === JSON.stringify({ from: "advisor", text: "As you say: the granary.\n/onward" }),
+        `${JSON.stringify(sent.slice(beforeA3.sent))}; ${JSON.stringify(seat.chat.at(-1))}`);
+      // A4: a closing that weighed its loose ends itself is not asked: one message, unchanged
+      seat.matters = undefined;
+      const beforeA4 = { calls: calls.length, sent: sent.length };
+      say("Fine by me.");
+      await until(() => sent.length > beforeA4.sent);
+      await sleep(300);
+      check("W51 a closing that called loose_ends: no follow-up, one message unchanged", asked(beforeA4.calls) === 0 && JSON.stringify(sent.slice(beforeA4.sent)) === JSON.stringify(["The granary first.\n\nLeft loose:\n1. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward"]), JSON.stringify(sent.slice(beforeA4.sent)));
       // B: the advisor dismisses by its own call: no follow-up, the reply and then the dismissal
       seat.matters = undefined;
       const beforeB = { calls: calls.length, sent: sent.length };
