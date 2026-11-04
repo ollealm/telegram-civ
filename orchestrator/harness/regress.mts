@@ -1279,7 +1279,10 @@ const CASES: Record<string, () => Promise<void>> = {
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
       check("W53 the ruler's first word puts the road and then the matters in the advisor's input, to be brought in their shape", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Answer what the ruler said first; then bring all of it in this same reply")
-        && first.prompt.includes("the road first, then the matters as lines, the case for one only where the ruler opened it") && first.prompt.includes(`The road:\n${road}\nThe matters:\n1. ${agenda[0]}\n2. ${agenda[1]}`));
+        && first.prompt.includes("the road first, then the matters as lines, the case for one only where the ruler opened it") && first.prompt.includes(`opened it. When their word changes nothing, bring it as prepared.\n\n${road}\n\n${agenda[0]}\n\n${agenda[1]}\n\n`)
+        && !/The road:|The matters:|\n1\. /.test(first.prompt), first.prompt.slice(first.prompt.indexOf("What you meant"), first.prompt.indexOf("What you meant") + 1200));
+      check("W53 the letter writer and the closing quote no wording to copy: summons, door and the standing sentence are described, not exemplified", /no more than a hint of what waits\.\n/.test(report.systemPrompt + report.prompt) && /whether the ruler wants to hear what you bring to court\. Never the words you used last time/.test(report.systemPrompt + report.prompt)
+        && !/The court is called, AD 680|Adiega asks|Are you ready for the detailed matters|are the sense of it/.test(report.systemPrompt + report.prompt) && /say so in one plain sentence so the ruler can correct it/.test(first.systemPrompt) && !/I take it as standing/.test(first.systemPrompt));
       check("W53 the advisor's reply clears them", seat.agenda === undefined && seat.road === undefined);
       seat.chat.push({ from: "ruler", text: "Go on." }, { from: "advisor", text: "As you wish, Majesty." });
       asked.length = 0;
