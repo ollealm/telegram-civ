@@ -91,6 +91,8 @@ export type Seat = {
   ready: boolean;
   /** Set by the advisor's dismiss_court tool when the ruler says to proceed in plain words */
   dismissed?: boolean;
+  /** The advisor's reply to the ruler's first word told what it will do without setting the orders (not served then): the next reply sets them */
+  ordersOwed?: boolean;
 };
 
 /** A picture that was asked for: who saw it ("chronicle" for the whole world, else the civ) and what it showed */

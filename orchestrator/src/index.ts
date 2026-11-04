@@ -675,12 +675,14 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (letterOnly && seat().agenda?.length) seat().journal.push(`${seat().annals?.at(-1)?.years ?? "This age"}: the ruler rose before hearing my matters; I do as I meant to with each: ${seat().agenda!.join(" ")}`);
     seat().agenda = undefined;
     seat().road = undefined; // a road unanswered leaves the course as it stands
-    // A question left unanswered, or loose ends left to the advisor: either needs the closing pass, or the leans are never applied
-    if (silently && !letterOnly && last?.from === "advisor" && (/\?/.test(last.text) || seat().matters?.length)) {
+    // A question left unanswered, loose ends left to the advisor, or the orders its first reply told and could not yet set: each needs the closing pass, or it is never done
+    if (silently && !letterOnly && last?.from === "advisor" && (/\?/.test(last.text) || seat().matters?.length || seat().ordersOwed)) {
       // A question unanswered needs a word on which way the advisor went; loose ends alone do not: the ruler has read what will be done and needs no retelling
       const message = /\?/.test(last.text) && !last.closing
         ? "[The ruler dismisses the court without another word. The choice is yours now: take the way forward you recommended, or the one the ruler's recorded will and what you know of them point to" + (seat().matters?.length ? ", and settle the loose ends you listed as you see fit" : "") + ". Apply it, update your plan, and say in one or two sentences which way you went and why. Do not offer /onward - the court is already dismissed.]"
-        : "[The ruler dismisses the court without another word, leaving the loose ends to you. Settle each as you said it would be done and update your plan. Nothing you write here reaches the ruler, who has read what you will do; if one had to go another way, your plan carries it to your next dispatch.]";
+        : seat().ordersOwed && !seat().matters?.length
+          ? "[The ruler dismisses the court without another word. Set the orders for what you told them you will do in this audience and update your plan. Nothing you write here reaches the ruler, who has read what you will do.]"
+          : "[The ruler dismisses the court without another word, leaving the loose ends to you. Settle each as you said it would be done and update your plan. Nothing you write here reaches the ruler, who has read what you will do; if one had to go another way, your plan carries it to your next dispatch.]";
       // A question left open earns a word; a closing's own question marks (the loose ends' invitations) do not: the ruler read what will be done under it
       const shown = /\?/.test(last.text) && !last.closing;
       // A silent pass has nothing for the ruler: the dismissal is told before it, not after its 20-60 s; the round still waits for its orders
@@ -719,6 +721,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     seat().ready = true;
     seat().floor = undefined; // a court that rises returns the floor to the advisor
     seat().matters = undefined; // whatever was not taken up was left to the advisor
+    seat().ordersOwed = undefined; // the closing pass above set them, if they were owed
     seat().dismissed = false; // a closing pass above may have called dismiss_court again
     persist();
     // The same words whether the other rulers are done or not: what the wait is for is not the ruler's concern
@@ -794,7 +797,7 @@ function setUpAdvisor(bot: Bot, index: number) {
       }
       try {
         const game = await host.state();
-        let reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, turnsAhead(game.turn)));
+        let reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, turnsAhead(game.turn), thenGo));
         // A closing's picture of the decision and the ruler's words for the Chronicler went by the advisor's own tools. The picture is painted once
         // the court is dismissed - a closing can still be talked over, and only the last one stands.
         // A court the advisor dismissed by its own call is not also offered the tap

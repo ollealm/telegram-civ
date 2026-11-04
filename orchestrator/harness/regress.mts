@@ -1266,7 +1266,7 @@ const CASES: Record<string, () => Promise<void>> = {
       const round = { fromTurn: 88, turn: 100, fromYear: "AD 440", year: game.year, publicEvents: [], rankings: [] } as any;
       const dispatch = await agents.advisorReport(seat, round, [], briefing);
       const report = asked.find((each) => each.role === "report")!;
-      check("W53 the letter writer is asked for the door, the road and the matters, and no longer view or question (the expert court)", /\ndoor - the letter's last line/.test(report.systemPrompt) && /\nroad - your read of how this realm wins/.test(report.systemPrompt) && /the best case for the road you would not take/.test(report.systemPrompt)
+      check("W53 the letter writer is asked for the door, the road and the matters, and no longer view or question (the expert court)", /\ndoor - the letter's last paragraph/.test(report.systemPrompt) && /\nroad - your read of how this realm wins/.test(report.systemPrompt) && /the best case for the road you would not take/.test(report.systemPrompt)
         && /\nagenda - your matters after the road/.test(report.systemPrompt) && !/\n(question|strategy) - /.test(report.systemPrompt) && /A thing is said once across the dispatch, the road and the matters/.test(report.systemPrompt) && /The road and the matters are your own words/.test(report.systemPrompt));
       check("W53 the letter writer has what can be done now, and is told to look through it before the matters", /\n\nWhat can be done right now - every city's buildable items/.test(report.prompt) && /Before you write the matters, look through what can be done now \(below\) for what the ruler would not think to ask about/.test(report.systemPrompt));
       check("W53 the dispatch carries the door, the road and the matters, and no question", JSON.stringify(dispatch.agenda) === JSON.stringify(agenda) && dispatch.road === road && dispatch.door === "Shall I bring you what I have?" && dispatch.question === undefined);
@@ -1283,15 +1283,23 @@ const CASES: Record<string, () => Promise<void>> = {
       asked.length = 0;
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
-      check("W53 the reply to the first word is not served dismiss_court, and is told that only /onward ends this audience", !!first.served?.includes("record_rulers_will") && !first.served.includes("dismiss_court")
+      check("W53 the reply to the first word is served neither dismiss_court nor set_orders, and is told that only /onward ends this audience", !!first.served?.includes("record_rulers_will") && !first.served.includes("dismiss_court") && !first.served.includes("set_orders") && seat.ordersOwed === true
         && first.systemPrompt.includes('a thumbs-up to your closing) - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience. Read it as a person would.'), JSON.stringify(first.served));
-      check("W53 the ruler's first word puts the road and then the matters in the advisor's input, to be brought in their shape", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Their first word opens the audience, it does not close it: the road and the matters come before anything of yours is settled or the court closes. Answer what the ruler said first; then bring all of it in this same reply")
-        && first.prompt.includes("opening with the road, then the matters, each in a sentence or two in the flow of talk - what it is and what you will do about it, or that it is only talk - with no heading or list of their own, the case for one only where the ruler opened it; that all of it goes ahead if they say nothing you say once, after the matters, not with each.") && !first.prompt.includes("as lines") && first.prompt.includes(`not with each. When their word changes nothing, bring it as prepared.\n\n${road}\n\n${agenda[0]}\n\n${agenda[1]}\n\n`)
+      check("W53 the ruler's first word puts the road and then the matters in the advisor's input, to be brought in their shape", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Their first word opens the audience, it does not close it: the road and the matters come before anything of yours is settled or the court closes.") && first.prompt.includes("Answer what the ruler said first; then bring all of it in this same reply")
+        && first.prompt.includes("opening with the road, then the matters, each in a sentence or two in the flow of talk - what it is and what you will do about it, as your own intention, or that it is only talk - with no heading or list of their own, the case for one only where the ruler opened it; that their word can stop any of it goes unsaid.") && !first.prompt.includes("as lines") && first.prompt.includes(`the orders for it follow on their next word or their /onward. When their word changes nothing, bring it as prepared.\n\n${road}\n\n${agenda[0]}\n\n${agenda[1]}\n\n`)
         && !/The road:|The matters:|\n1\. /.test(first.prompt), first.prompt.slice(first.prompt.indexOf("What you meant"), first.prompt.indexOf("What you meant") + 1200));
-      check("W53 the letter writer and the closing quote no wording to copy: summons, door and the standing sentence are described, not exemplified", /no more than a hint of what waits\.\n/.test(report.systemPrompt + report.prompt) && /so that only this age could have written it, and put as a question\. Never the words you used last time/.test(report.systemPrompt + report.prompt)
+      check("W53 the letter writer and the closing quote no wording to copy: summons, door and the standing sentence are described, not exemplified", /no more than a hint of what waits\.\n/.test(report.systemPrompt + report.prompt) && /Framed on this age, so that only it could have written the question, and answerable by a ruler who has never played this game\./.test(report.systemPrompt + report.prompt)
         && !/The court is called, AD 680|Adiega asks|Are you ready for the detailed matters|are the sense of it/.test(report.systemPrompt + report.prompt) && /say so in one plain sentence so the ruler can correct it/.test(first.systemPrompt) && !/I take it as standing/.test(first.systemPrompt));
-      check("W53 the door names what waits and the letter takes no side", /whether the ruler wants to hear what you bring to court, naming what waits - a matter or two by what it is, not what you think of it or would do about it, which waits for the road - so that only this age could have written it, and put as a question\./.test(report.systemPrompt + report.prompt)
-        && /kept back until the ruler's first word, when you bring it; your leans and what you would do wait with it, so the letter and its door take no side\./.test(report.systemPrompt + report.prompt));
+      // Court form C (brief data/briefs/court-form-c-2026-11-04.md, round 5 of data/harness/court-form-research-2026-11-04/REPORT.md): the door asks for direction and takes no side; a word that
+      // chooses nothing leaves the question open; no silence clause anywhere; the specifics are the advisor's, said as what it will do
+      check("W53 the door asks the ruler for direction and takes no side", report.systemPrompt.includes("door - the letter's last paragraph, in your voice: in a line, where the course stands after these years - what we are set on and how it goes - and then a question to the ruler of how they want this age's situation handled or seen: hold the course, change it, press, wait, or the like.")
+        && report.systemPrompt.includes("Specifics - a building, a deal, a city, a price - are matters, not the door. The door takes no side: your read and lean wait for the road. Never the words you used last time.")
+        && report.systemPrompt.includes("kept back until the ruler's first word, when you bring it; your leans on the matters and what you would do about each wait with it, so the letter and its door take no side.") && !/naming what waits/.test(report.systemPrompt));
+      check("W53 a word that chooses nothing leaves the letter's question open", first.prompt.includes("before anything of yours is settled or the court closes. A word that does not choose between what your letter asked leaves that question open: the course stands as it was before this audience, the question still waits for them, and nothing of yours goes down as their wish. Answer what the ruler said first"));
+      check("W53 no silence clause: the road stands until another is taken, the matters are intentions, the specifics the advisor's to say what it will do", report.systemPrompt.includes("A road is theirs to take; until they take another, the course stands as it is.")
+        && report.systemPrompt.includes("the matter and what you will do about it, as your own intention in plain words, with what follows from it in the same sentence - or that it is only talk. That the ruler's word can stop any of it is the court's standing rule and goes unsaid. What you put to the ruler is direction - a road, a strategy, a war, a standing rule; the specifics you decide, and say what you will do. A matter is a question to the ruler only when it is one of direction.")
+        && ![report.systemPrompt, first.systemPrompt, first.prompt].some((text) => /says? nothing|goes ahead if|unless the ruler takes it up|say you have decided/.test(text)));
+      check("W53 the loose ends are intentions too", first.systemPrompt.includes("numbered, one line each saying what you will do, as your own intention in the shape of the matters (") && !/unless the ruler takes it up/.test(readFileSync("src/agents.ts", "utf8")));
       check("W53 years, never turns: the letter writer and the audience say in years what the briefing counts in turns", [report.systemPrompt, first.systemPrompt].every((prompt) => prompt.includes("Time is years and seasons, never turns: what the briefing counts in turns (turnsLeft, deal durations, the next policy, a yield \"a turn\") you say in years, by its calendar line, or as how long a thing takes; places are cities")));
       check("W53 the advisor's reply clears them", seat.agenda === undefined && seat.road === undefined);
       seat.chat.push({ from: "ruler", text: "Go on." }, { from: "advisor", text: "As you wish, Majesty." });
@@ -1299,10 +1307,19 @@ const CASES: Record<string, () => Promise<void>> = {
       await agents.advisorReply(seat, "And the harbour?", 12);
       const second = asked.find((each) => each.role === "advisor")!;
       check("W53 a second word does not carry them", !second.prompt.includes("What you meant to bring to this audience"));
+      check("W53 the next word sets the orders the first reply told: it is served set_orders and told they are owed, and then they are not", !!second.served?.includes("set_orders")
+        && second.prompt.includes("Your reply to the ruler's first word told them what you will do, and its orders are not set yet: set them in this reply, as you told them, with whatever the ruler's word now changes.\n\nThe ruler now says:\nAnd the harbour?") && seat.ordersOwed === undefined);
       check("W53 from the second word on, plain words close the court again: dismiss_court is served, the rule has no first-word clause, and the call dismisses", !!second.served?.includes("dismiss_court")
         && second.systemPrompt.includes("a thumbs-up to your closing). Read it as a person would.") && !second.systemPrompt.includes("not in this reply to their first word")
         && (await agents.callRealmTool(seat, { canRecordWill: true }, schema, "dismiss_court", {}), seat.dismissed === true), JSON.stringify(second.served));
       seat.dismissed = false;
+      // A first word that came with /onward is the ruler's last: its orders are set in that same reply, and none are owed
+      Object.assign(seat, { road, agenda });
+      asked.length = 0;
+      await agents.advisorReply(seat, "Go on.\n\n[The ruler added /onward]", 12, true);
+      const lastWord = asked.find((each) => each.role === "advisor")!;
+      check("W53 a first word with /onward is served set_orders (not dismiss_court), is not told the orders wait, and owes none", !!lastWord.served?.includes("set_orders") && !lastWord.served.includes("dismiss_court")
+        && lastWord.prompt.includes("that their word can stop any of it goes unsaid. When their word changes nothing") && seat.ordersOwed === undefined, JSON.stringify(lastWord.served));
       const sovereign = { ...seat, kind: "agent" };
       check("W53 a sovereign is never served dismiss_court, the first word waiting or not", [{ ...sovereign, road, agenda }, sovereign].every((each) => !agents.servedTools(each, { canRecordWill: true, sideTools: ["proclaim"] }).includes("dismiss_court")));
       check("W53 the expert at the table, and the guard: only the ruler's words change the course", first.systemPrompt.includes("Be that for the ruler. At this table you are the one who knows the game, and the ruler sets the course") && first.systemPrompt.includes("Only their words change the realm's course: a word that takes no road leaves it as it stands."));
@@ -1366,11 +1383,12 @@ const CASES: Record<string, () => Promise<void>> = {
     const seat = state.seats[0];
     const plant = (text: string, closing = false) => { seat.closing = closing || undefined; remember(seat, { from: "advisor", text }); };
     // The stand-in advisor: what a dismiss_court or loose_ends call would do, it does to the seat; each call notes what the ruler had been sent by then
-    const calls: { said: string; sentBefore: number; ready: boolean; dismissedTold: boolean }[] = [];
+    const calls: { said: string; sentBefore: number; ready: boolean; dismissedTold: boolean; served?: string[]; owedNote: boolean }[] = [];
     agents.standInForModels((asked) => {
       if (asked.outputSchema) return { text: "", data: { caption: "The granary. Grain comes in.", description: "Oil painting. A granary.", year: game.year } }; // the decision's picture
       const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
-      calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED) });
+      calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED), served: asked.served, owedNote: asked.prompt.includes("its orders are not set yet") });
+      if (/The ruler now says:\nGo on\.$/.test(said)) return { text: "Learning stays our road. I will send the warrior east and buy Kyoto its granary." };
       if (/Sounds good, do that/.test(said)) { seat.dismissed = true; return { text: "Then the granary first and the walls after; Kyoto grows before it arms." }; }
       if (/Carry on then/.test(said)) return { text: "The granary first, then the walls.\n\nName any you want to raise; otherwise\n/onward" };
       if (/without weighing the loose ends/.test(said)) { seat.matters = []; return { text: "Nothing is left loose.\n/onward" }; }
@@ -1419,6 +1437,34 @@ const CASES: Record<string, () => Promise<void>> = {
       await until(() => seat.ready && sent.slice(beforeE.sent).includes(DISMISSED));
       check("W51 a bare /onward straight after the letter: dismissed, no closing pass, the agenda cleared and its defaults in the journal", calls.length === beforeE.calls && JSON.stringify(sent.slice(beforeE.sent)) === JSON.stringify([DISMISSED])
         && seat.agenda === undefined && /the ruler rose before hearing my matters; I do as I meant to with each: The lone warrior walks to the eastern hills/.test(seat.journal.at(-1) ?? ""), `calls ${calls.length - beforeE.calls}; sent ${JSON.stringify(sent.slice(beforeE.sent))}; journal ${seat.journal.at(-1)}`);
+      // F: court form C - the reply to the first word tells what the advisor will do and is not served set_orders; the orders are owed, kept across a restart,
+      // and a bare /onward under that reply, with no question in it and no loose ends, still gets the silent pass that sets them
+      const letter = () => {
+        Object.assign(seat, { ready: false, dismissed: false, matters: undefined, road: "Learning stays our road.", agenda: ["The warrior walks east: I will send him."] });
+        seat.annals.push({ years: "AD 440 to AD 800", story: "Another age.", agenda: seat.agenda, course: seat.road });
+        remember(seat, { from: "advisor", text: "Another age. Do we hold the course?", letter: true });
+      };
+      letter();
+      const beforeF = { calls: calls.length, sent: sent.length };
+      say("Go on.");
+      await until(() => sent.slice(beforeF.sent).length > 0);
+      const firstReply = calls[beforeF.calls];
+      const kept = (JSON.parse(readFileSync(process.env.RULER_STATE_FILE!, "utf8")) as { seats: { civ: string; ordersOwed?: boolean }[] }).seats.find((each) => each.civ === ours);
+      check("W51 the reply to the first word is not served set_orders, and the orders it told are owed - in the state file too, for a restart", !!firstReply && !firstReply.served?.includes("set_orders") && !firstReply.served.includes("dismiss_court") && seat.ordersOwed === true && kept?.ordersOwed === true && !seat.ready,
+        `served ${JSON.stringify(firstReply?.served)}; owed ${seat.ordersOwed}; kept ${kept?.ordersOwed}`);
+      say("/onward");
+      await until(() => seat.ready);
+      const owedPass = calls.slice(beforeF.calls + 1).find((each) => /dismisses the court without another word/.test(each.said));
+      check("W51 a bare /onward after it: a silent pass is served set_orders and told to set the orders it told, then the court rises with none owed", !!owedPass?.served?.includes("set_orders") && /Set the orders for what you told them you will do in this audience/.test(owedPass.said) && owedPass.owedNote
+        && JSON.stringify(sent.slice(beforeF.sent)) === JSON.stringify(["Learning stays our road. I will send the warrior east and buy Kyoto its granary.", DISMISSED]) && seat.ordersOwed === undefined, `${JSON.stringify(owedPass)}; sent ${JSON.stringify(sent.slice(beforeF.sent))}`);
+      // G: a first word that comes with /onward is the ruler's last: that reply is served set_orders and owes nothing; the court rises on it
+      letter();
+      const beforeG = { calls: calls.length, sent: sent.length };
+      say("Go on. /onward");
+      await until(() => seat.ready && sent.slice(beforeG.sent).includes(DISMISSED));
+      const lastWordReply = calls[beforeG.calls];
+      check("W51 a first word with /onward: served set_orders, nothing owed, no pass, the court rises", !!lastWordReply?.served?.includes("set_orders") && calls.length === beforeG.calls + 1 && seat.ordersOwed === undefined && seat.ready,
+        `served ${JSON.stringify(lastWordReply?.served)}; calls ${calls.length - beforeG.calls}; said ${lastWordReply?.said.slice(0, 120)}`);
     } finally {
       agents.standInForModels(undefined);
       await stop(host);
