@@ -1280,6 +1280,18 @@ const CASES: Record<string, () => Promise<void>> = {
       const schema = (await get("/schema")).json as any;
       const unserved = await agents.callRealmTool(seat, { canRecordWill: true }, schema, "dismiss_court", {}).catch((error: Error) => error.message);
       check("W53 while the road and the matters wait, a dismiss_court call cannot dismiss the court", !seat.dismissed, unserved);
+      // Brief commands (2026-11-05, data/briefs/brief-commands-2026-11-05.md): a brief asked before the first word is not that word - the road and the
+      // matters wait on, out of its input - and it is served the read tools alone
+      asked.length = 0;
+      await agents.advisorBrief(seat, "cities", 12);
+      const briefed = asked.find((each) => each.role === "advisor")!;
+      check("W53 a brief before the first word leaves the road and the matters waiting and owes no orders; its input carries neither, nor the first-word rule", seat.road === road && JSON.stringify(seat.agenda) === JSON.stringify(agenda) && seat.ordersOwed === undefined
+        && !briefed.prompt.includes("What you meant to bring to this audience") && !briefed.prompt.includes(road.slice(0, 30)) && !agenda.some((item) => briefed.prompt.includes(item.slice(0, 30))) && !briefed.systemPrompt.includes("but not in this reply to their first word")
+        && briefed.prompt.includes("The ruler now says:\nThe ruler asks you for a brief on our cities - what each is for") && briefed.prompt.includes("What you are not sure of, look up before you write; say you do not know only what nothing you can reach would tell you."), briefed.prompt.slice(-900));
+      check("W53 a brief is served the read tools alone", JSON.stringify(briefed.served) === JSON.stringify(["get_briefing", "get_options", "look_up", "get_log"]), JSON.stringify(briefed.served));
+      check("W53 the closing's fixed line offers a brief, and the old line is gone", briefed.systemPrompt.includes('- The closing ends with the line "Name any you want to raise, ask for a /brief, or /onward".')
+        && !/Name any you want to raise; otherwise/.test(readFileSync("src/agents.ts", "utf8") + readFileSync("src/index.ts", "utf8")));
+      check("W53 a sovereign is never asked a brief", await agents.advisorBrief({ ...seat, kind: "agent" }, "cities", 12).then(() => false, () => true));
       asked.length = 0;
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
@@ -1302,6 +1314,11 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W53 the loose ends are intentions too", first.systemPrompt.includes("numbered, one line each saying what you will do, as your own intention in the shape of the matters (") && !/unless the ruler takes it up/.test(readFileSync("src/agents.ts", "utf8")));
       check("W53 years, never turns: the letter writer and the audience say in years what the briefing counts in turns", [report.systemPrompt, first.systemPrompt].every((prompt) => prompt.includes("Time is years and seasons, never turns: what the briefing counts in turns (turnsLeft, deal durations, the next policy, a yield \"a turn\") you say in years, by its calendar line, or as how long a thing takes; places are cities")));
       check("W53 the advisor's reply clears them", seat.agenda === undefined && seat.road === undefined);
+      // A brief between the first reply and the next word: the orders stay owed, and the brief is not told so
+      asked.length = 0;
+      await agents.advisorBrief(seat, "rivals", 12);
+      const owedBrief = asked.find((each) => each.role === "advisor")!;
+      check("W53 a brief while orders are owed leaves them owed and is not told to set them", seat.ordersOwed === true && !owedBrief.prompt.includes("its orders are not set yet") && JSON.stringify(owedBrief.served) === JSON.stringify(["get_briefing", "get_options", "look_up", "get_log"]));
       seat.chat.push({ from: "ruler", text: "Go on." }, { from: "advisor", text: "As you wish, Majesty." });
       asked.length = 0;
       await agents.advisorReply(seat, "And the harbour?", 12);
@@ -1346,6 +1363,8 @@ const CASES: Record<string, () => Promise<void>> = {
     const [ours, other] = game.majorCivs.filter((each) => each.alive).map((each) => each.civ);
     // The stand-in for Telegram, as probe-ending's: every message sent is kept, and an update waits for the advisor bot's next poll
     const sent: string[] = [];
+    const markups: unknown[] = []; // each sent message's buttons, by its place in sent
+    const menus: { command: string }[][] = [];
     const queued: unknown[] = [];
     let updateId = 1;
     const telegram = createServer((request, response) => {
@@ -1362,7 +1381,8 @@ const CASES: Record<string, () => Promise<void>> = {
           await sleep(200);
           return reply([]);
         }
-        if (method === "sendMessage") sent.push(String(params.text ?? ""));
+        if (method === "sendMessage") { sent.push(String(params.text ?? "")); markups[sent.length - 1] = params.reply_markup; }
+        if (method === "setMyCommands") menus.push(params.commands as { command: string }[]);
         if (method.startsWith("send")) return reply({ message_id: sent.length, date: Math.floor(Date.now() / 1000), chat: { id: Number(params.chat_id), type: "private" } });
         return reply(true);
       });
@@ -1371,23 +1391,29 @@ const CASES: Record<string, () => Promise<void>> = {
     await new Promise<void>((done) => telegram.listen(tgPort, "127.0.0.1", done));
     const say = (text: string) => queued.push({ update_id: updateId++, message: { message_id: updateId, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, from: { id: 7, is_bot: false, first_name: "Ruler" }, text,
       ...(text.startsWith("/") && { entities: [{ type: "bot_command", offset: 0, length: text.split(" ")[0].length }] }) } });
+    const tap = (data: string) => queued.push({ update_id: updateId++, callback_query: { id: String(updateId), chat_instance: "1", data, from: { id: 7, is_bot: false, first_name: "Ruler" },
+      message: { message_id: 1, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, text: "Which brief, Majesty?" } } });
     const until = async (done: () => boolean, ms = 30_000) => { for (let waited = 0; !done() && waited < ms; waited += 100) await sleep(100); return done(); };
     const DISMISSED = "The court is dismissed. Until next time.";
     // Our seat, and another ruler's still in council, so that no round starts behind the dismissals
     const character = { name: "Adiega", title: "Steward", pronouns: "she/her", sheet: "A careful steward who says little." };
     state.phase = "audience";
     state.seats = [
-      { civ: ours, bot: 0, chatId: 4242, rulerName: "the ruler", will: "", journal: [], chat: [], ready: false, character } as any,
+      { civ: ours, bot: 0, chatId: 4242, rulerName: "the ruler", will: "", journal: [], chat: [], ready: false, character, clerk: { name: "Gisela", title: "Keeper of the Rolls", sheet: "Exact." } } as any,
       { civ: other, chatId: 4343, will: "", journal: [], chat: [], ready: false, character } as any,
     ];
     const seat = state.seats[0];
+    // A letter that never went out before a restart: the bot sends it as it starts, with the briefs under it as under every letter
+    seat.annals = [{ years: "AD 440 to AD 800", heading: "AD 800 - come to court.", story: "The story of the age.", door: "Do we hold the course?", undelivered: true }];
     const plant = (text: string, closing = false) => { seat.closing = closing || undefined; remember(seat, { from: "advisor", text }); };
     // The stand-in advisor: what a dismiss_court or loose_ends call would do, it does to the seat; each call notes what the ruler had been sent by then
     const calls: { said: string; sentBefore: number; ready: boolean; dismissedTold: boolean; served?: string[]; owedNote: boolean }[] = [];
     // The loose-ends follow-up's answer, set by each case: a list, "nothing is left loose" with no /onward of its own, or nothing at all
     let looseEnds = (): { text: string } => ({ text: "" });
+    const briefs: { role: string; said: string; served?: string[] }[] = [];
     agents.standInForModels((asked) => {
       if (asked.outputSchema) return { text: "", data: { caption: "The granary. Grain comes in.", description: "Oil painting. A granary.", year: game.year } }; // the decision's picture
+      if (/asks you for a brief on/.test(asked.prompt)) { briefs.push({ role: asked.role, said: asked.prompt.slice(asked.prompt.lastIndexOf("The ruler asks you for a brief")), served: asked.served }); return { text: asked.role === "clerk" ? "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." : "The host is three spearmen and a catapult." }; }
       const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
       calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED), served: asked.served, owedNote: asked.prompt.includes("its orders are not set yet") });
       if (/The ruler now says:\nGo on\.$/.test(said)) return { text: "Learning stays our road. I will send the warrior east and buy Kyoto its granary." };
@@ -1395,6 +1421,7 @@ const CASES: Record<string, () => Promise<void>> = {
       if (/Carry on then/.test(said)) return { text: "The granary first, then the walls. Anything else, or shall we go on? /onward" };
       if (/That will do/.test(said)) return { text: "Then the granary.\n\n/onward" };
       if (/As you say/.test(said)) return { text: "As you say: the granary.\n/onward" };
+      if (/So be it/.test(said)) return { text: "Walls it is.\n\nName any you want to raise, ask for a /brief, or /onward" };
       if (/Fine by me/.test(said)) { Object.assign(seat, { matters: [{ item: "Spare gold", lean: "goes to the walls" }], closing: true }); return { text: "The granary first.\n\nLeft loose:\n1. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward" }; }
       if (/without weighing the loose ends/.test(said)) return looseEnds();
       if (/dismisses the court without another word/.test(said)) return { text: /leaving the loose ends to you/.test(said) ? "Settled as listed." : "I went with the granary, for the winter." };
@@ -1403,10 +1430,14 @@ const CASES: Record<string, () => Promise<void>> = {
     Object.assign(process.env, { HERALD_BOT_TOKEN: "1:herald", ADVISOR_1_BOT_TOKEN: "2:advisor", TELEGRAM_API_ROOT: `http://127.0.0.1:${tgPort}`, PAINTED_MAPS: "off" });
     try {
       await import("../src/index.ts");
+      await until(() => sent.includes("AD 800 - come to court.\n\nThe story of the age.\n\nDo we hold the course?"));
+      const letterRows = (markups[sent.indexOf("AD 800 - come to court.\n\nThe story of the age.\n\nDo we hold the course?")] as { inline_keyboard?: { callback_data: string }[][] } | undefined)?.inline_keyboard;
+      check("W51 a letter carries the six briefs as buttons, two rows of three - the one resent at a restart, and the round's own", letterRows?.map((row) => row.length).join() === "3,3" && letterRows.flat().map((button) => button.callback_data).join() === "brief:cities,brief:military,brief:science,brief:culture,brief:trade,brief:rivals"
+        && /await bot\.api\.sendMessage\(chatId, post\.letter, \{ reply_markup: briefButtons\(\) \}\)/.test(readFileSync("src/index.ts", "utf8")), JSON.stringify(letterRows));
       // A: closed with the /onward line and no list weighed: the follow-up is asked, once, and the ruler gets one message - the closing without its /onward,
       // then the list with its own (AD 1655: two messages in a row, each ending on /onward); the transcript keeps that one message, once, as the closing
       const asked = (from: number) => calls.slice(from).filter((each) => /without weighing the loose ends/.test(each.said)).length;
-      const listed = "Two things I'd settle on my own once the court rises:\n1. The idle Great Scientist settles in Kyoto's academy\n2. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward";
+      const listed = "Two things I'd settle on my own once the court rises:\n1. The idle Great Scientist settles in Kyoto's academy\n2. Spare gold goes to the walls\n\nName any you want to raise, ask for a /brief, or /onward";
       looseEnds = () => { Object.assign(seat, { matters: [{ item: "An idle Great Scientist", lean: "settles in Kyoto's academy" }, { item: "Spare gold", lean: "goes to the walls" }], closing: true }); return { text: listed }; };
       plant("Granary or walls, Majesty?");
       const beforeA = { calls: calls.length, sent: sent.length };
@@ -1415,7 +1446,7 @@ const CASES: Record<string, () => Promise<void>> = {
       await sleep(300);
       const one = `The granary first, then the walls. Anything else, or shall we go on?\n\n${listed}`;
       check("W51 a closing with no list weighed is asked once for the loose ends, and the ruler gets one message: the closing, then the list ending on its /onward", asked(beforeA.calls) === 1 && JSON.stringify(sent.slice(beforeA.sent)) === JSON.stringify([one])
-        && sent.at(-1)!.endsWith("Name any you want to raise; otherwise\n/onward") && sent.at(-1)!.match(/\/onward/g)!.length === 1, `asked ${asked(beforeA.calls)}; sent ${JSON.stringify(sent.slice(beforeA.sent))}`);
+        && sent.at(-1)!.endsWith("Name any you want to raise, ask for a /brief, or /onward") && sent.at(-1)!.match(/\/onward/g)!.length === 1, `asked ${asked(beforeA.calls)}; sent ${JSON.stringify(sent.slice(beforeA.sent))}`);
       check("W51 that one message is remembered once, as the advisor's closing, and the closing alone is not kept beside it", JSON.stringify(seat.chat.slice(-2)) === JSON.stringify([{ from: "ruler", text: "Carry on then." }, { from: "advisor", text: one, closing: true }])
         && !seat.chat.some((each: { text: string }) => each.text.startsWith("The granary first, then the walls. Anything else, or shall we go on? /onward")), JSON.stringify(seat.chat.slice(-3)));
       // A2: the follow-up finds nothing loose and gives no /onward of its own: the closing's goes back at the end
@@ -1442,6 +1473,45 @@ const CASES: Record<string, () => Promise<void>> = {
       await until(() => sent.length > beforeA4.sent);
       await sleep(300);
       check("W51 a closing that called loose_ends: no follow-up, one message unchanged", asked(beforeA4.calls) === 0 && JSON.stringify(sent.slice(beforeA4.sent)) === JSON.stringify(["The granary first.\n\nLeft loose:\n1. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward"]), JSON.stringify(sent.slice(beforeA4.sent)));
+      // A5: a closing that ends on the fixed line, asked for its loose ends: the line ends the one message once, under the list
+      looseEnds = () => { Object.assign(seat, { matters: [{ item: "Spare gold", lean: "goes to the walls" }], closing: true }); return { text: listed }; };
+      seat.matters = undefined;
+      const beforeA5 = { calls: calls.length, sent: sent.length };
+      say("So be it.");
+      await until(() => asked(beforeA5.calls) > 0 && sent.length > beforeA5.sent);
+      await sleep(300);
+      check("W51 a closing on the fixed line: one message, the closing, the list, and the fixed line once at the end", JSON.stringify(sent.slice(beforeA5.sent)) === JSON.stringify([`Walls it is.\n\n${listed}`])
+        && sent.at(-1)!.split("Name any you want to raise").length === 2, JSON.stringify(sent.slice(beforeA5.sent)));
+      // H: brief commands (2026-11-05, data/briefs/brief-commands-2026-11-05.md). /brief posts the six as buttons, two rows of three; a tap asks the advisor,
+      // read-only, and the ask and the brief join the transcript; a brief before the first word leaves the road and the matters waiting; mid-age the clerk answers
+      check("W51 the six briefs and /brief are in Telegram's command menu", ["brief", "cities", "military", "science", "culture", "trade", "rivals"].every((command) => menus.at(-1)?.some((each) => each.command === command)), JSON.stringify(menus.at(-1)));
+      seat.matters = undefined;
+      const beforeH = sent.length;
+      say("/brief");
+      await until(() => sent.length > beforeH);
+      const rows = (markups[beforeH] as { inline_keyboard?: { text: string; callback_data: string }[][] } | undefined)?.inline_keyboard;
+      check("W51 /brief posts the six as buttons, two rows of three", JSON.stringify(rows?.map((row) => row.map((button) => button.callback_data))) === JSON.stringify([["brief:cities", "brief:military", "brief:science"], ["brief:culture", "brief:trade", "brief:rivals"]]), JSON.stringify(rows));
+      const beforeH2 = { sent: sent.length, briefs: briefs.length, calls: calls.length };
+      tap("brief:military");
+      await until(() => sent.length > beforeH2.sent);
+      await sleep(300);
+      const military = briefs[beforeH2.briefs];
+      check("W51 a tap asks the advisor for that brief, read-only; the brief is sent once and starts no loose-ends pass", military?.role === "advisor" && /a brief on the host - its strength/.test(military.said) && JSON.stringify(military.served) === JSON.stringify(["get_briefing", "get_options", "look_up", "get_log"])
+        && JSON.stringify(sent.slice(beforeH2.sent)) === JSON.stringify(["The host is three spearmen and a catapult."]) && calls.length === beforeH2.calls && !seat.ready, `${JSON.stringify(military)}; sent ${JSON.stringify(sent.slice(beforeH2.sent))}`);
+      check("W51 the ask and the brief join the transcript as the ruler's and the advisor's", JSON.stringify(seat.chat.slice(-2)) === JSON.stringify([{ from: "ruler", text: "/military" }, { from: "advisor", text: "The host is three spearmen and a catapult." }]), JSON.stringify(seat.chat.slice(-2)));
+      Object.assign(seat, { road: "Learning stays our road.", agenda: ["The warrior walks east: I will send him."], ordersOwed: undefined });
+      const beforeH3 = { sent: sent.length, briefs: briefs.length };
+      say("/cities");
+      await until(() => sent.length > beforeH3.sent);
+      check("W51 a typed brief before the first word: the road and the matters still wait, no orders are owed", briefs[beforeH3.briefs]?.role === "advisor" && seat.road === "Learning stays our road." && seat.agenda?.length === 1 && seat.ordersOwed === undefined, JSON.stringify(briefs[beforeH3.briefs]));
+      Object.assign(seat, { road: undefined, agenda: undefined });
+      state.phase = "passing";
+      const beforeH4 = { sent: sent.length, briefs: briefs.length };
+      say("/trade");
+      await until(() => sent.length > beforeH4.sent);
+      check("W51 mid-age the clerk answers a brief, from the briefing, and the advisor is not called", briefs.slice(beforeH4.briefs).map((each) => each.role).join() === "clerk" && /from the briefing as it stands: the facts, no counsel - the advisor is governing/.test(briefs[beforeH4.briefs]?.said ?? "")
+        && sent.at(-1) === "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." && seat.clerkChat?.at(-2)?.text === "/trade", `${JSON.stringify(briefs.slice(beforeH4.briefs))}; ${JSON.stringify(sent.slice(beforeH4.sent))}`);
+      state.phase = "audience";
       // B: the advisor dismisses by its own call: no follow-up, the reply and then the dismissal
       seat.matters = undefined;
       const beforeB = { calls: calls.length, sent: sent.length };

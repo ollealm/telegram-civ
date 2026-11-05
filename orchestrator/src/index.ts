@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, loadSchema, advisorReply, dated, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, placePictures, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
+import { advisorGreeting, loadSchema, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, placePictures, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -58,9 +58,17 @@ const seatOf = (botIndex: number) => state.seats.find((seat) => seat.bot === bot
 /** The advisor bot a ruler hears their court through; a sovereign's realm has none */
 const botOf = (seat: Seat) => (seat.bot === undefined ? undefined : advisors[seat.bot]);
 /** A word to a ruler through their own advisor's bot; nothing for a seat no ruler sits in */
-const tell = async (seat: Seat, text: string) => {
+const tell = async (seat: Seat, text: string, options?: { reply_markup: InlineKeyboard }) => {
   const bot = botOf(seat);
-  if (bot && seat.chatId) await bot.api.sendMessage(seat.chatId, text).catch((error) => log(`telling ${seat.civ} failed:`, error.message));
+  if (bot && seat.chatId) await bot.api.sendMessage(seat.chatId, text, options).catch((error) => log(`telling ${seat.civ} failed:`, error.message));
+};
+
+/** The six briefs as buttons, two rows of three: under every letter and on /brief. A tap asks for that brief as if its command were typed */
+const BRIEFS = Object.keys(BRIEF_LENS) as (keyof typeof BRIEF_LENS)[];
+const briefButtons = () => {
+  const keyboard = new InlineKeyboard();
+  BRIEFS.forEach((command, at) => { keyboard.text(`/${command}`, `brief:${command}`); if (at === 2) keyboard.row(); });
+  return keyboard;
 };
 
 /** Show "typing…" for as long as the work takes */
@@ -402,7 +410,7 @@ async function playRound() {
       const chatId = post.seat.chatId!;
       // An emergency letter goes the moment it is written; its picture follows. A regular letter waits for its paintings
       const send = async () => {
-        await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+        await bot.api.sendMessage(chatId, post.letter, { reply_markup: briefButtons() }).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
         if (post.annal) { post.annal.undelivered = undefined; }
         post.seat.floor = undefined; persist(); // a letter opens the court with the advisor speaking
       };
@@ -740,7 +748,8 @@ function setUpAdvisor(bot: Bot, index: number) {
   });
 
   /** The keeper of the rolls answers: while the clocks run, on /clerk, or when addressed by name. Read-only; anything that sounded like an order goes to the council. */
-  const clerk = (ctx: Context, message: string) => {
+  /** said: what the ruler's own words were, for the clerk's record, when the clerk is asked something on their behalf (a brief) */
+  const clerk = (ctx: Context, message: string, said = message) => {
     enqueue(async () => {
       try {
         if (!seat().clerk) { seat().clerk = await draftClerk(seat().civ, ADVISOR_MODEL, seat().character?.name); persist(); }
@@ -762,7 +771,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         };
         // Anything that sounded like an order went to the council by the clerk's own tool
         const reply = await whileTyping(bot, chatId, clerkReply(seat(), message, away, show));
-        (seat().clerkChat ??= []).push({ from: "ruler", text: message }, { from: "clerk", text: reply });
+        (seat().clerkChat ??= []).push({ from: "ruler", text: said }, { from: "clerk", text: reply });
         if (seat().clerkChat!.length > 12) seat().clerkChat!.splice(0, seat().clerkChat!.length - 12);
         persist();
         await editing;
@@ -813,14 +822,15 @@ function setUpAdvisor(bot: Bot, index: number) {
         // The closing is held while it is asked, and the ruler gets one message: the closing without its /onward, then the list under it
         // (AD 1655: two messages in a row, each ending on /onward). The follow-up reads the closing in the transcript, so it stays there
         // until the one message takes its place.
-        const tap = reply.match(new RegExp(`(\\s*)(/(?:${LEAVE.join("|")}))\\s*$`, "i"));
+        // The closing's last line - the fixed "Name any you want to raise..." line with its /onward, or the /onward alone - ends the one message once
+        const tap = reply.match(new RegExp(`(?:\\s*Name any you want to raise[^\\n]*?(?:\\n\\s*)?)?\\s*/(?:${LEAVE.join("|")})\\s*$`, "i"));
         let shown = reply;
         if (tap && !seat().dismissed && seat().matters === undefined && !thenGo && !state.pendingRound?.urgent) {
-          const listed = (await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the loose ends. If there are calls you would settle alone once it rises, list them now - numbered, one line each with what will be done, checked - and give them to loose_ends, ending with \"Name any you want to raise; otherwise\" and the /onward line. If there are truly none, call loose_ends with an empty list and say in one line that nothing is left loose. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
+          const listed = (await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the loose ends. If there are calls you would settle alone once it rises, list them now - numbered, one line each with what will be done, checked - and give them to loose_ends, ending with the line \"Name any you want to raise, ask for a /brief, or /onward\". If there are truly none, call loose_ends with an empty list and say in one line that nothing is left loose. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
             .catch((error) => { log(`${seat().civ}: the loose-ends follow-up failed:`, error.message); return ""; })).trim();
           if (listed) {
-            // The list's own /onward ends the message; a list without one ("nothing is left loose") gets the closing's back
-            shown = `${reply.slice(0, tap.index).trimEnd()}\n\n${listed}${tapLine.test(listed) ? "" : `${tap[1] || " "}${tap[2]}`}`;
+            // The list's own last line ends the message; a list without an /onward ("nothing is left loose") gets the closing's back
+            shown = `${reply.slice(0, tap.index).trimEnd()}\n\n${listed}${tapLine.test(listed) ? "" : `\n\n${tap[0].trim()}`}`;
             if (seat().dismissed) shown = shown.replace(tapLine, "");
             const at = seat().chat.lastIndexOf(held);
             if (at >= 0) seat().chat.splice(at, 1);
@@ -841,6 +851,43 @@ function setUpAdvisor(bot: Bot, index: number) {
       }
     });
   };
+
+  /** A brief the ruler asked for (/cities, /military..., or a tap on its button): the advisor's in an open court, read-only and never the ruler's first
+   *  word; the clerk's, from the briefing, while the advisor is away (time passing, or the court risen). Never a sovereign's */
+  const brief = (ctx: Context, command: BriefCommand) => {
+    if (seat().fallen) return void ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
+    if (!seat().character || seat().kind === "agent") return void ctx.reply("The court is not assembled yet, Majesty.");
+    const away = () => state.phase === "passing" || (state.phase === "audience" && seat().ready);
+    if (away()) return clerk(ctx, clerkBrief(command), `/${command}`);
+    if (state.phase !== "audience") return void ctx.reply("The court is not assembled yet, Majesty.");
+    enqueue(async () => {
+      // Decided when the brief is due, as a reply is: a court risen or an age begun meanwhile sends it to the clerk
+      if (away()) return clerk(ctx, clerkBrief(command), `/${command}`);
+      try {
+        const reply = await whileTyping(bot, ctx.chat!.id, advisorBrief(seat(), command, turnsAhead((await host.state()).turn)));
+        // The ask and the brief join the audience, so the next reply can build on it; the brief is no closing and asks for no loose ends
+        remember(seat(), { from: "ruler", text: `/${command}` });
+        remember(seat(), { from: "advisor", text: reply });
+        persist();
+        await ctx.reply(reply);
+        await flushDevFeed(herald, `Brief /${command} - ${seat().civ}`);
+      } catch (error) {
+        log("brief failed:", error);
+        await ctx.reply("Forgive me, Majesty, I lost my train of thought. Could you ask again?").catch(() => {});
+      }
+    });
+  };
+  bot.command(BRIEFS, (ctx) => brief(ctx, ctx.message!.text.slice(1).split(/[\s@]/)[0].toLowerCase() as BriefCommand));
+  bot.command("brief", (ctx) => ctx.reply("Which brief, Majesty?", { reply_markup: briefButtons() }));
+  bot.callbackQuery(/^brief:(\w+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    if (BRIEFS.includes(ctx.match[1] as BriefCommand)) brief(ctx, ctx.match[1] as BriefCommand);
+  });
+  // The briefs show in Telegram's command menu beside whatever the bot already lists there
+  void bot.api.getMyCommands().then((listed) => {
+    const wanted = [{ command: "brief", description: "Choose a brief from your advisor" }, ...BRIEFS.map((command) => ({ command, description: `A brief on ${BRIEF_LENS[command].split(" - ")[0]}` }))];
+    return bot.api.setMyCommands([...(Array.isArray(listed) ? listed : []).filter((each) => !wanted.some((other) => other.command === each.command)), ...wanted]);
+  }).catch((error) => log("the brief commands could not be listed with Telegram:", error.message));
 
   bot.command("status", async (ctx) => {
     const game = await host.state();
@@ -1069,7 +1116,7 @@ async function recover() {
   for (const seat of state.seats)
     for (const annal of seat.annals ?? [])
       if (annal.undelivered) {
-        await tell(seat, [annal.heading, annal.story, annal.door, annal.question].filter(Boolean).join("\n\n"));
+        await tell(seat, [annal.heading, annal.story, annal.door, annal.question].filter(Boolean).join("\n\n"), seat.kind === "agent" ? undefined : { reply_markup: briefButtons() });
         annal.undelivered = undefined;
         resent.add(seat);
       }
