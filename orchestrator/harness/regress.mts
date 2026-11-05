@@ -1368,6 +1368,44 @@ const CASES: Record<string, () => Promise<void>> = {
       await stop(host);
     }
   },
+  async W54() { // a great person's ways lost for good (2026-11-05, the rulebook-silence samples): the rulebook gives a Great Prophet its holy site, founding and
+    // enhancing only "if it hasn't used other actions yet", and the engine's check is that it has acted at all. A spent prophet's lines said nothing of them, and three
+    // audiences promised its holy site. Planted on Japan at T100: a prophet that has spread the faith twice, on Kyoto's centre, and a fresh one on Tokyo's
+    let spent = 0, fresh = 0;
+    const host = await start("t100-world", "", undefined, (game) => {
+      const prophet = (x: number, y: number, used?: Record<string, number>) => {
+        const tile = game.tileMap.tileList.find((each: any) => (each.position?.x ?? 0) === x && (each.position?.y ?? 0) === y);
+        game.lastUnitId += 1;
+        tile.civilianUnit = { owner: "Japan", originalOwner: "Japan", name: "Great Prophet", id: game.lastUnitId, currentMovement: 2, ...(used && { abilityToTimesUsed: used }) };
+        return game.lastUnitId;
+      };
+      // Faith enough that the briefing gives religion in full, where the prophets are listed
+      game.civilizations.find((civ: any) => civ.civName === "Japan").religionManager.storedFaith = 200;
+      spent = prophet(11, 2, { "Can Spread Religion": 2 });
+      fresh = prophet(15, 7);
+    });
+    try {
+      const briefing = (await get("/briefing?civ=Japan")).json as { religion?: { prophetsAndMissionaries?: string[] } };
+      const lines = briefing.religion?.prophetsAndMissionaries ?? [];
+      const spentLine = lines.find((line) => line.startsWith(`Great Prophet #${spent}:`)) ?? "";
+      const freshLine = lines.find((line) => line.startsWith(`Great Prophet #${fresh}:`)) ?? "";
+      check("W54 the spent prophet's religion line says its holy site, founding and enhancing are closed for good", /Raising a Holy site, founding a religion and enhancing a religion are closed to it for good/.test(spentLine), spentLine);
+      check("W54 and names what it did: it has already spread the faith", /closed to it for good: it has already spread the faith/.test(spentLine), spentLine);
+      check("W54 a fresh prophet's religion line has nothing closed, and its holy site and founding are offered", !!freshLine && !/closed to it for good/.test(freshLine) && /can found our religion/.test(freshLine) && /can raise a Holy site/.test(freshLine), freshLine);
+      const refused = await orders("Japan", { units: [{ unit: spent, action: "use", ability: "improvement" }] });
+      const refusal = JSON.stringify(refused.json);
+      check("W54 an order to raise the spent prophet's holy site is refused with the reason", /has no 'improvement' to use \(raising a Holy site, founding a religion and enhancing a religion are closed to it for good: it has already spread the faith\)/.test(refusal), refusal.slice(0, 400));
+      // A turn played: each is caught as a great person awaiting orders, its ways in the log
+      const turn = (await get("/state")).json.turn as number;
+      await post("/advance", { turns: 1 });
+      const log = (await logOf("Japan", turn)).map((entry) => entry.text);
+      const spentLog = log.find((line) => line.includes(`Great Prophet #${spent} `) && line.includes("awaits orders")) ?? "";
+      const freshLog = log.find((line) => line.includes(`Great Prophet #${fresh} `) && line.includes("awaits orders")) ?? "";
+      check("W54 the spent prophet's ways say the holy site is closed for good, never what tile it needs, and its religion needs only a city to spread to", /closed to it for good: it has already spread the faith/.test(spentLog) && !/needs an unimproved tile/.test(spentLog) && !/improvement/.test(spentLog)
+        && /religion needs a city of another faith to spread it to;/.test(spentLog) && !/to found or enhance/.test(spentLog), spentLog);
+      check("W54 a fresh prophet off a tile of its own still gets what its holy site needs", /improvement \(it raises a Holy site[^)]*\)\)? needs an unimproved tile of ours outside a city to stand on/.test(freshLog) && !/closed to it for good/.test(freshLog), freshLog);
+    } finally { await stop(host); }
+  },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
     // dismissed by its own call gets no loose-ends follow-up (a 600 BC list came after the closing, and the dismissal fired under it); a silent closing
     // pass tells the dismissal before it, the round waiting on the pass; a pass with a word for the ruler keeps the word first. Last: the bots poll on
