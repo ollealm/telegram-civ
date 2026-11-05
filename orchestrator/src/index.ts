@@ -214,6 +214,8 @@ async function sendMap(bot: Bot, seat: Seat) {
 
 /** The word that ends an audience and lets the years pass */
 const LEAVE = ["onward", "go"]; // the advisors offer /onward; /go is the quick way to type it
+/** The end of a closing: its fixed line ("Name any you want to raise, ask for a /brief, or /onward") or the bare /onward - taken off whole wherever it must go */
+const CLOSING_TAIL = new RegExp(`(?:\\s*Name any you want to raise[^\\n]*?(?:\\n\\s*)?)?\\s*/(?:${LEAVE.join("|")})\\s*$`, "i");
 
 async function broadcastHerald(text: string) {
   for (const chatId of state.heraldChats) await herald.api.sendMessage(chatId, text).catch((error) => log("herald send failed", error.message));
@@ -810,8 +812,7 @@ function setUpAdvisor(bot: Bot, index: number) {
         // A closing's picture of the decision and the ruler's words for the Chronicler went by the advisor's own tools. The picture is painted once
         // the court is dismissed - a closing can still be talked over, and only the last one stands.
         // A court the advisor dismissed by its own call is not also offered the tap
-        const tapLine = new RegExp(`\\n*/(${LEAVE.join("|")})\\s*$`, "i");
-        if (seat().dismissed) reply = reply.replace(tapLine, "");
+        if (seat().dismissed) reply = reply.replace(CLOSING_TAIL, "");
         remember(seat(), { from: "ruler", text: message });
         const held = { from: "advisor" as const, text: reply };
         remember(seat(), held);
@@ -822,16 +823,16 @@ function setUpAdvisor(bot: Bot, index: number) {
         // The closing is held while it is asked, and the ruler gets one message: the closing without its /onward, then the list under it
         // (AD 1655: two messages in a row, each ending on /onward). The follow-up reads the closing in the transcript, so it stays there
         // until the one message takes its place.
-        // The closing's last line - the fixed "Name any you want to raise..." line with its /onward, or the /onward alone - ends the one message once
-        const tap = reply.match(new RegExp(`(?:\\s*Name any you want to raise[^\\n]*?(?:\\n\\s*)?)?\\s*/(?:${LEAVE.join("|")})\\s*$`, "i"));
+        // The closing's last line - the fixed line with its /onward, or the /onward alone - ends the one message once
+        const tap = reply.match(CLOSING_TAIL);
         let shown = reply;
         if (tap && !seat().dismissed && seat().matters === undefined && !thenGo && !state.pendingRound?.urgent) {
           const listed = (await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), "[You closed the court without weighing the loose ends. If there are calls you would settle alone once it rises, list them now - numbered, one line each with what will be done, checked - and give them to loose_ends, ending with the line \"Name any you want to raise, ask for a /brief, or /onward\". If there are truly none, call loose_ends with an empty list and say in one line that nothing is left loose. This note is the court's, not the ruler's words.]", turnsAhead((await host.state()).turn)))
             .catch((error) => { log(`${seat().civ}: the loose-ends follow-up failed:`, error.message); return ""; })).trim();
           if (listed) {
             // The list's own last line ends the message; a list without an /onward ("nothing is left loose") gets the closing's back
-            shown = `${reply.slice(0, tap.index).trimEnd()}\n\n${listed}${tapLine.test(listed) ? "" : `\n\n${tap[0].trim()}`}`;
-            if (seat().dismissed) shown = shown.replace(tapLine, "");
+            shown = `${reply.slice(0, tap.index).trimEnd()}\n\n${listed}${CLOSING_TAIL.test(listed) ? "" : `\n\n${tap[0].trim()}`}`;
+            if (seat().dismissed) shown = shown.replace(CLOSING_TAIL, "");
             const at = seat().chat.lastIndexOf(held);
             if (at >= 0) seat().chat.splice(at, 1);
             remember(seat(), { from: "advisor", text: shown });
@@ -864,7 +865,9 @@ function setUpAdvisor(bot: Bot, index: number) {
       // Decided when the brief is due, as a reply is: a court risen or an age begun meanwhile sends it to the clerk
       if (away()) return clerk(ctx, clerkBrief(command), `/${command}`);
       try {
-        const reply = await whileTyping(bot, ctx.chat!.id, advisorBrief(seat(), command, turnsAhead((await host.state()).turn)));
+        let reply = await whileTyping(bot, ctx.chat!.id, advisorBrief(seat(), command, turnsAhead((await host.state()).turn)));
+        // A brief is no closing: an /onward under it would dismiss a court whose road and matters may not even be brought
+        if (CLOSING_TAIL.test(reply)) { reply = reply.replace(CLOSING_TAIL, "").trimEnd(); log(`${seat().civ}: the /${command} brief ended on a closing line; taken off`); }
         // The ask and the brief join the audience, so the next reply can build on it; the brief is no closing and asks for no loose ends
         remember(seat(), { from: "ruler", text: `/${command}` });
         remember(seat(), { from: "advisor", text: reply });

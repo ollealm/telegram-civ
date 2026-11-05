@@ -1287,16 +1287,22 @@ const CASES: Record<string, () => Promise<void>> = {
       const briefed = asked.find((each) => each.role === "advisor")!;
       check("W53 a brief before the first word leaves the road and the matters waiting and owes no orders; its input carries neither, nor the first-word rule", seat.road === road && JSON.stringify(seat.agenda) === JSON.stringify(agenda) && seat.ordersOwed === undefined
         && !briefed.prompt.includes("What you meant to bring to this audience") && !briefed.prompt.includes(road.slice(0, 30)) && !agenda.some((item) => briefed.prompt.includes(item.slice(0, 30))) && !briefed.systemPrompt.includes("but not in this reply to their first word")
-        && briefed.prompt.includes("The ruler now says:\nThe ruler asks you for a brief on our cities - what each is for") && briefed.prompt.includes("What you are not sure of, look up before you write; say you do not know only what nothing you can reach would tell you."), briefed.prompt.slice(-900));
+        && briefed.prompt.includes("The ruler now says:\nThe ruler asks you for a brief on our cities - what each is for") && briefed.prompt.includes("the one thing you would change if it were yours alone. In a brief you set no orders and ask for no decision; where one waits, name it and leave it for the audience. What you are not sure of, look up before you write; say you do not know only what nothing you can reach would tell you.")
+        && !/A brief changes nothing/.test(briefed.prompt), briefed.prompt.slice(-900));
+      check("W53 a brief's rules have no closing, no dismissal and no loose ends: it ends on its last sentence, with no /onward", briefed.systemPrompt.includes("\n- A brief ends on its last sentence: no closing line and no /onward.\n")
+        && !/The closing ends with the line|Time passes only when the ruler dismisses the court|Never among the loose ends/.test(briefed.systemPrompt), briefed.systemPrompt.slice(briefed.systemPrompt.indexOf("THE COURT'S FIXED RULES"), briefed.systemPrompt.indexOf("THE COURT'S FIXED RULES") + 700));
+      asked.length = 0;
+      await agents.advisorBrief({ ...seat, chat: [] }, "trade", 12);
+      check("W53 a brief with nothing said yet is not told it is the ruler's first word", asked.find((each) => each.role === "advisor")!.prompt.includes("The audience so far:\n(nothing has been said yet)") && !asked.some((each) => each.prompt.includes("this is the ruler's first word to you")));
       check("W53 a brief is served the read tools alone", JSON.stringify(briefed.served) === JSON.stringify(["get_briefing", "get_options", "look_up", "get_log"]), JSON.stringify(briefed.served));
-      check("W53 the closing's fixed line offers a brief, and the old line is gone", briefed.systemPrompt.includes('- The closing ends with the line "Name any you want to raise, ask for a /brief, or /onward".')
-        && !/Name any you want to raise; otherwise/.test(readFileSync("src/agents.ts", "utf8") + readFileSync("src/index.ts", "utf8")));
       check("W53 a sovereign is never asked a brief", await agents.advisorBrief({ ...seat, kind: "agent" }, "cities", 12).then(() => false, () => true));
       asked.length = 0;
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
       check("W53 the reply to the first word is served neither dismiss_court nor set_orders, and is told that only /onward ends this audience", !!first.served?.includes("record_rulers_will") && !first.served.includes("dismiss_court") && !first.served.includes("set_orders") && seat.ordersOwed === true
         && first.systemPrompt.includes('a thumbs-up to your closing) - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience. Read it as a person would.'), JSON.stringify(first.served));
+      check("W53 the closing's fixed line offers a brief, and the old line is gone", first.systemPrompt.includes('- The closing ends with the line "Name any you want to raise, ask for a /brief, or /onward".')
+        && !/Name any you want to raise; otherwise/.test(readFileSync("src/agents.ts", "utf8") + readFileSync("src/index.ts", "utf8")));
       check("W53 the ruler's first word puts the road and then the matters in the advisor's input, to be brought in their shape", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Their first word opens the audience, it does not close it: the road and the matters come before anything of yours is settled or the court closes.") && first.prompt.includes("Answer what the ruler said first; then bring all of it in this same reply")
         && first.prompt.includes("opening with the road, then the matters, each in a sentence or two in the flow of talk - what it is and what you will do about it, as your own intention, or that it is only talk - with no heading or list of their own, the case for one only where the ruler opened it; that their word can stop any of it goes unsaid.") && !first.prompt.includes("as lines") && first.prompt.includes(`the orders for it follow on their next word or their /onward. When their word changes nothing, bring it as prepared.\n\n${road}\n\n${agenda[0]}\n\n${agenda[1]}\n\n`)
         && !/The road:|The matters:|\n1\. /.test(first.prompt), first.prompt.slice(first.prompt.indexOf("What you meant"), first.prompt.indexOf("What you meant") + 1200));
@@ -1413,10 +1419,11 @@ const CASES: Record<string, () => Promise<void>> = {
     const briefs: { role: string; said: string; served?: string[] }[] = [];
     agents.standInForModels((asked) => {
       if (asked.outputSchema) return { text: "", data: { caption: "The granary. Grain comes in.", description: "Oil painting. A granary.", year: game.year } }; // the decision's picture
-      if (/asks you for a brief on/.test(asked.prompt)) { briefs.push({ role: asked.role, said: asked.prompt.slice(asked.prompt.lastIndexOf("The ruler asks you for a brief")), served: asked.served }); return { text: asked.role === "clerk" ? "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." : "The host is three spearmen and a catapult." }; }
+      if (/asks you for a brief on/.test(asked.prompt)) { briefs.push({ role: asked.role, said: asked.prompt.slice(asked.prompt.lastIndexOf("The ruler asks you for a brief")), served: asked.served }); return { text: asked.role === "clerk" ? "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." : /a brief on our learning/.test(asked.prompt) ? "The academies lead the world.\n\nName any you want to raise, ask for a /brief, or /onward" : "The host is three spearmen and a catapult." }; }
       const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
       calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED), served: asked.served, owedNote: asked.prompt.includes("its orders are not set yet") });
       if (/The ruler now says:\nGo on\.$/.test(said)) return { text: "Learning stays our road. I will send the warrior east and buy Kyoto its granary." };
+      if (/Do it all/.test(said)) { seat.dismissed = true; return { text: "Walls and granary both, then.\n\nName any you want to raise, ask for a /brief, or /onward" }; }
       if (/Sounds good, do that/.test(said)) { seat.dismissed = true; return { text: "Then the granary first and the walls after; Kyoto grows before it arms." }; }
       if (/Carry on then/.test(said)) return { text: "The granary first, then the walls. Anything else, or shall we go on? /onward" };
       if (/That will do/.test(said)) return { text: "Then the granary.\n\n/onward" };
@@ -1498,6 +1505,11 @@ const CASES: Record<string, () => Promise<void>> = {
       const military = briefs[beforeH2.briefs];
       check("W51 a tap asks the advisor for that brief, read-only; the brief is sent once and starts no loose-ends pass", military?.role === "advisor" && /a brief on the host - its strength/.test(military.said) && JSON.stringify(military.served) === JSON.stringify(["get_briefing", "get_options", "look_up", "get_log"])
         && JSON.stringify(sent.slice(beforeH2.sent)) === JSON.stringify(["The host is three spearmen and a catapult."]) && calls.length === beforeH2.calls && !seat.ready, `${JSON.stringify(military)}; sent ${JSON.stringify(sent.slice(beforeH2.sent))}`);
+      const beforeH2b = sent.length;
+      say("/science");
+      await until(() => sent.length > beforeH2b);
+      check("W51 a brief that ends on the closing line has it taken off before it is sent and kept", sent.at(-1) === "The academies lead the world." && seat.chat.at(-1)?.text === "The academies lead the world.", JSON.stringify(sent.slice(beforeH2b)));
+      seat.chat.splice(-2, 2); // the transcript check below is the military brief's
       check("W51 the ask and the brief join the transcript as the ruler's and the advisor's", JSON.stringify(seat.chat.slice(-2)) === JSON.stringify([{ from: "ruler", text: "/military" }, { from: "advisor", text: "The host is three spearmen and a catapult." }]), JSON.stringify(seat.chat.slice(-2)));
       Object.assign(seat, { road: "Learning stays our road.", agenda: ["The warrior walks east: I will send him."], ordersOwed: undefined });
       const beforeH3 = { sent: sent.length, briefs: briefs.length };
@@ -1520,6 +1532,12 @@ const CASES: Record<string, () => Promise<void>> = {
       const afterB = calls.slice(beforeB.calls).filter((each) => !/Sounds good/.test(each.said));
       check("W51 a court the advisor dismissed by its own call gets no follow-up: the closing, then the dismissal", afterB.length === 0 && JSON.stringify(sent.slice(beforeB.sent)) === JSON.stringify(["Then the granary first and the walls after; Kyoto grows before it arms.", DISMISSED]) && seat.ready,
         `calls after: ${afterB.map((each) => each.said.slice(20, 90)).join(" | ")}; sent: ${JSON.stringify(sent.slice(beforeB.sent))}`);
+      // B2: dismissed by its own call under the fixed line: the whole line comes off, not the /onward alone
+      Object.assign(seat, { ready: false, dismissed: false, matters: undefined });
+      const beforeB2 = sent.length;
+      say("Do it all.");
+      await until(() => sent.slice(beforeB2).includes(DISMISSED));
+      check("W51 a court the advisor dismissed under the fixed line: the closing goes out without that line, then the dismissal", JSON.stringify(sent.slice(beforeB2)) === JSON.stringify(["Walls and granary both, then.", DISMISSED]), JSON.stringify(sent.slice(beforeB2)));
       // C: a bare /onward under a closing with loose ends: the dismissal goes out before the silent pass, and the court rises only after it
       Object.assign(seat, { ready: false, dismissed: false, matters: [{ item: "An idle Great Scientist", lean: "settles in Kyoto's academy" }, { item: "Spare gold", lean: "goes to the walls" }] });
       plant("The granary first.\n\nLeft loose:\n1. An idle Great Scientist: he settles in Kyoto's academy\n2. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward", true);
