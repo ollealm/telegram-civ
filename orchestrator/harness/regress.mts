@@ -1126,6 +1126,16 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W47 an early age line gives the age's media, never a medium chosen for the picture (picture guide O)", agents.ageLine("Japan", "Classical era") === `The people's age: Japan, the Classical era. Media this age allows: ${agents.ALLOWED_MEDIA.Classical}.` && !/The medium for this picture/.test(agents.ageLine("Japan", "Classical era")), agents.ageLine("Japan", "Classical era"));
     check("W47 an untyped early picture gets the full media line", /Media this age allows: A finished history painting; a broad romantic landscape/.test(agents.ageLine("Japan", "Medieval era")));
     check("W47 a later age line gets its age's media", /Media this age allows: Oil painting, one of: oil on oak panel/.test(agents.ageLine("Japan", "Renaissance era")) && /Usually a photograph/.test(agents.ageLine("Japan", "Atomic era")));
+    // Picture guide P (2026-11-05): period styles from the Medieval age on, foundings seen wide, the Modern ages photographed only once the decade could
+    const media = agents.ALLOWED_MEDIA as Record<string, string>;
+    check("W47 the Medieval age has its own line with no archaeological reconstruction, and Medieval, Renaissance and Industrial each differ from the early ages'", !/archaeological reconstruction/i.test(media.Medieval)
+      && ["Medieval", "Renaissance", "Industrial"].every((age) => media[age] !== media.Ancient), media.Medieval);
+    check("W47 no age's line offers a reconstruction for a founding", Object.values(media).every((line) => !/reconstruction[^.]*\bfounding/i.test(line)), media.Ancient);
+    check("W47 the Medieval and Renaissance lines offer the people's own painters; the Industrial line does not", /own painters/.test(media.Medieval) && /own painters/.test(media.Renaissance) && !/own painters/.test(media.Industrial));
+    const craft = readFileSync("src/agents.ts", "utf8").match(/const PICTURE_CRAFT = `([\s\S]*?)`;/)?.[1] ?? "";
+    const [guidance, examples = ""] = craft.split("Examples of good descriptions:");
+    check("W47 the picture craft sees a founding from a step back, and none of its examples is a founding", /A city founded is seen from a step back/.test(guidance) && !!examples.trim() && !/found/i.test(examples), examples.split("\n").filter((line) => /found/i.test(line)).join(" | "));
+    check("W47 the Modern ages are photographed once the decade has a photograph", ["Modern", "Atomic", "Information", "Future"].every((age) => /once the decade has one/.test(media[age])));
     const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean; era: string }[] };
     const civName = game.majorCivs.find((each) => each.alive)!.civ;
     const era = game.majorCivs.find((each) => each.civ === civName)!.era;
