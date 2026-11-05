@@ -173,7 +173,7 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W2 the event: Polynesia came in by its pact", events.some((text) => /Polynesia came in at England's side by its pact/.test(text)));
     const persia = await logOf("Persia", 236);
     check("W2 Persia's joins are folded into one line per foe", persia.filter((line) => /have joined us in the war against England/.test(line.text)).length === 1 && !persia.some((line) => /^Quebec City has joined/.test(line.text)));
-    check("W2 Polynesia's chancery: joined England by its pact, in our words", (await logOf("Polynesia", 236)).some((line) => /^We joined England in the war against Persia, as our Defensive Pact with England binds us\. No peace can be made for \d+ turns\.$/.test(line.text)));
+    check("W2 Polynesia's chancery: joined England by its pact, in our words", (await logOf("Polynesia", 236)).some((line) => /^We joined England in the war against Persia, as our Defensive Pact with England binds us\. No peace can be made before (?:AD \d+|\d+ BC)\.$/.test(line.text)));
     await stop(host);
   },
   async W3() { // faith above the reserve; a free technology to the goal
@@ -212,7 +212,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const courts = ["China", "Byzantium", "Siam", "Egypt", "The Ottomans", "India"];
     await post("/advance", { turns: 1 });
     const lines = await Promise.all(courts.map(async (name) => (await get(`/briefing?civ=${civ(name)}`)).json.victory?.diplomatic?.unitedNations as string));
-    const countdowns = lines.map((line) => /next vote in (\d+) turns?|votes this turn/.exec(line ?? "")?.[0]);
+    const countdowns = lines.map((line) => /next vote in (?:AD \d+|\d+ BC), (?:a year|\d+ years) from now|votes now/.exec(line ?? "")?.[0]);
     check("W5 every court reads the same countdown after the UN is built", new Set(countdowns).size === 1 && countdowns[0] !== undefined, countdowns.join(" | "));
     await orders("India", { worldVote: "Egypt" });
     for (let i = 0; i < 11; i++) await post("/advance", { turns: 1 });
@@ -374,7 +374,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const proposed = await orders("Greece", { trade: [{ with: "Inca", give: [{ item: "Gold", amount: 20 }] }] });
     await post("/advance", { turns: 1 });
     const waiting = ((await get(`/briefing?civ=Inca`)).json.tradeOffers ?? []) as string[];
-    check("W20 an offer on the desk says its turns in the one wording", waiting.some((line) => /^Greece: .*Gold x20.*\((waits \d+ more turns?|lapses at the next turn); answerOffers accept or refuse\)/.test(line)), `${JSON.stringify(proposed.json.done)}; ${waiting.join(" | ")}`);
+    check("W20 an offer on the desk says when it lapses in the one wording", waiting.some((line) => /^Greece: .*Gold x20.*\((waits until (?:AD \d+|\d+ BC), (?:a year|\d+ years) from now|lapses in (?:AD \d+|\d+ BC), (?:a year|\d+ years) from now); answerOffers accept or refuse\)/.test(line)), `${JSON.stringify(proposed.json.done)}; ${waiting.join(" | ")}`);
     // An advance stops early when a court is woken: played on to eight turns after the offer was entered
     const entered = (await get("/state")).json.turn as number;
     for (let i = 0; i < 20 && (await get("/state")).json.turn < entered + 8; i++) await post("/advance", { turns: entered + 8 - (await get("/state")).json.turn });
@@ -388,7 +388,9 @@ const CASES: Record<string, () => Promise<void>> = {
     await post("/advance", { turns: 2, ageTurns: 6, lookInTurns: 2 });
     const turn = (await get("/state")).json.turn as number;
     const log = (await get(`/briefing?civ=Greece`)).json.log as string[];
-    const earliest = Math.min(...log.map((line) => Number(/^T(\d+):/.exec(line)?.[1] ?? turn)));
+    // The briefing stamps its log lines with the year; each is found in the raw log, which keeps its turn
+    const raw = await logOf("Greece", 0);
+    const earliest = Math.min(...log.map((line) => raw.find((entry) => line.endsWith(`: ${entry.text}`))?.turn ?? turn));
     check("W21 the briefing's log reaches back one age as told (6 turns), not the old 12", earliest >= turn - 6 && earliest <= turn - 4, `T${earliest} at T${turn}`);
     check("W21 the cadence is kept in host.json", JSON.stringify(JSON.parse(readFileSync(join(host.dir, "host.json"), "utf8")).cadence) === JSON.stringify({ ageTurns: 6, lookInTurns: 2 }));
     await orders("Greece", { trade: [{ with: "Inca", give: [{ item: "Gold", amount: 20 }] }] });
@@ -512,7 +514,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const siam = await logOf("Siam", 168);
     check("W28 no turn failed in Siam's log", !siam.some((line) => /could not be played/.test(line.text)));
     const posture = (await get(`/briefing?civ=Siam`)).json.standingOrders?.posture;
-    check("W28 the posture says where the host at sea is bound", Array.isArray(posture?.hostAtSea) && posture.hostAtSea.some((line: string) => /crossing to (its|their) landing at .*, against Hamburg \(.* turns? at sea\)|waiting out of reach off .*, against Hamburg: every shore near it lies under .* \(.* turns? at sea\)|holding at sea out of reach: no shore near Hamburg .* \(.* turns? at sea\)/.test(line)), JSON.stringify(posture?.hostAtSea ?? posture).slice(0, 300));
+    check("W28 the posture says where the host at sea is bound", Array.isArray(posture?.hostAtSea) && posture.hostAtSea.some((line: string) => /crossing to (its|their) landing at .*, against Hamburg \(at sea since (?:AD \d+|\d+ BC)\)|waiting out of reach off .*, against Hamburg: every shore near it lies under .* \(at sea since (?:AD \d+|\d+ BC)\)|holding at sea out of reach: no shore near Hamburg .* \(at sea since (?:AD \d+|\d+ BC)\)/.test(line)), JSON.stringify(posture?.hostAtSea ?? posture).slice(0, 300));
     const holding = siam.filter((line) => /^Our host holds at sea out of reach: no shore near Hamburg/.test(line.text)).map((line) => line.turn);
     check("W28 a host holding at sea is said when it begins, not every turn", holding.every((turn, index) => index === 0 || turn - holding[index - 1] > 1), holding.join(", "));
     await stop(host);
@@ -531,7 +533,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const japan = await logOf("Japan", 300);
     check("W29 another court hears it in our words, not the engine's", japan.some((line) => /completed the Manhattan Project.*: the age of atomic arms begins\.$/.test(line.text)) && !japan.some((line) => /has completed Manhattan Project/.test(line.text)), japan.filter((line) => /Manhattan/.test(line.text)).map((line) => line.text).join(" | "));
     const denmark = await logOf("Denmark", 300);
-    check("W29 the golden age is told with its cause, length and gifts", denmark.some((line) => /^We entered a Golden Age of \d+ turns, born of the people's contentment: a fifth more production and culture in every city/.test(line.text)) && !denmark.some((line) => /entered a Golden Age!$/.test(line.text)), denmark.filter((line) => /Golden Age/.test(line.text)).map((line) => line.text).join(" | "));
+    check("W29 the golden age is told with its cause, length and gifts", denmark.some((line) => /^We entered a Golden Age, until (?:AD \d+|\d+ BC), born of the people's contentment: a fifth more production and culture in every city/.test(line.text)) && !denmark.some((line) => /entered a Golden Age!$/.test(line.text)), denmark.filter((line) => /Golden Age/.test(line.text)).map((line) => line.text).join(" | "));
     const everyone = (await Promise.all(["Aztecs", "Japan", "Arabia", "Songhai", "Austria", "Denmark"].map((name) => logOf(name, 300)))).flat();
     const twice = (await Promise.all(["Aztecs", "Japan", "Arabia", "Songhai", "Austria", "Denmark"].map(async (name) => {
       const news = (await logOf(name, 300)).filter((line) => /Manhattan|Golden Age/.test(line.text));
@@ -550,7 +552,7 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W30 a denouncement: the world once, the denounced in our words", events.filter((text) => text === "Iroquois denounced Polynesia.").length === 1 && polynesia.filter((line) => /denounced us/.test(line.text)).map((line) => line.text).join() === "Iroquois has denounced us.",
       events.filter((text) => /denounce/.test(text)).join(" | ") + " / " + polynesia.filter((line) => /denounce/.test(line.text)).map((line) => line.text).join(" | "));
     const declared = polynesia.find((line) => /^Persia has declared war on us/.test(line.text));
-    check("W30 the struck court's line names the war and its minimum", !!declared && /No peace can be made for \d+ turns\.$/.test(declared.text), declared?.text);
+    check("W30 the struck court's line names the war and its minimum", !!declared && /No peace can be made before (?:AD \d+|\d+ BC)\.$/.test(declared.text), declared?.text);
     check("W30 the joins it names are not told again", !polynesia.some((line) => /has joined|have joined/.test(line.text) && declared && line.text.split(" ")[0] && declared.text.includes(line.text.split(" ")[0])), polynesia.filter((line) => /joined/.test(line.text)).map((line) => line.text).join(" | "));
     await stop(host);
   },
@@ -831,11 +833,11 @@ const CASES: Record<string, () => Promise<void>> = {
     const awaiting = (ledger.awaiting ?? []) as string[];
     const since = (ledger.sinceLastLookIn ?? {}) as Record<string, string[]>;
     check("W43 awaiting: the proposal and who answers it", awaiting.some((line) => /^Our proposal to Siam \(we give Gold x30; they give nothing\): Siam is an advised court/.test(line)), awaiting.join(" | "));
-    check("W43 awaiting: a march under way, whither and turns so far", awaiting.some((line) => /^Settler #737 is on its way to .+, \d+ turns? so far/.test(line)) || briefing.units.some((unit: string) => /^Settler #737 .* in Athens/.test(unit)), awaiting.join(" | "));
+    check("W43 awaiting: a march under way, whither and since when", awaiting.some((line) => /^Settler #737 is on its way to .+, marching since (?:AD \d+|\d+ BC)/.test(line)) || briefing.units.some((unit: string) => /^Settler #737 .* in Athens/.test(unit)), awaiting.join(" | "));
     check("W43 awaiting: an item waiting for its tech, with why", awaiting.some((line) => /^Nuclear Plant waits in Sparta's queue: it needs Nuclear Fission/.test(line)));
-    check("W43 awaiting: the renewals set to go out", awaiting.some((line) => /is to be offered again the turn it ends\.$/.test(line)));
-    check("W43 refused: what set_orders turned back, with its turn", (given.json.failed as string[]).length === 1 && (since.refused ?? []).some((line) => /^T301: Unknown building or unit Flying Carpet Factory/.test(line)), JSON.stringify(since.refused));
-    check("W43 carried out: the order's own line", (since.carriedOut ?? []).some((line) => /^T301: By your order: Sparta's queue is now Science/.test(line)), JSON.stringify(since.carriedOut));
+    check("W43 awaiting: the renewals set to go out", awaiting.some((line) => /is to be offered again when it ends\.$/.test(line)));
+    check("W43 refused: what set_orders turned back, with its year", (given.json.failed as string[]).length === 1 && (since.refused ?? []).some((line) => /^(?:AD \d+|\d+ BC): Unknown building or unit Flying Carpet Factory/.test(line)), JSON.stringify(since.refused));
+    check("W43 carried out: the order's own line", (since.carriedOut ?? []).some((line) => /^(?:AD \d+|\d+ BC): By your order: Sparta's queue is now Science/.test(line)), JSON.stringify(since.carriedOut));
     const all = [...awaiting, ...Object.values(since).flat()];
     check("W43 the ledger's lines are not in the log a second time", !(briefing.log as string[]).some((line) => all.includes(line)));
     check("W43 no unit number in prose: units by name and #id only", !all.some((line) => /\b(unit|number|no\.) ?#?\d+/i.test(line)), all.find((line) => /\b(unit|number|no\.) ?#?\d+/i.test(line)));
@@ -875,7 +877,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const before = await race("Egypt");
     check("W44 a rival's parts still to add and the learning it lacks for them", /^India: 4 of 6 spaceship parts; still to add to its ship: an SS Engine and an SS Stasis Chamber; it has yet to learn Particle Physics \(for the SS Engine\) and Nanotechnology \(for the SS Stasis Chamber\)/.test(lineOf(before, "Scientific", "India")), lineOf(before, "Scientific", "India"));
     check("W44 parts under way, and where", /; SS Boosters are under way in Persepolis, Susa and Tarsus$/.test(lineOf(before, "Scientific", "Persia")), lineOf(before, "Scientific", "Persia"));
-    check("W44 the last step and how long ago, from the events recorded", /; it completed its own Apollo Program last turn;/.test(lineOf(before, "Scientific", "Persia")));
+    check("W44 the last step and how long ago, from the events recorded", /; it completed its own Apollo Program in (?:AD \d+|\d+ BC), (?:a year|\d+ years) ago;/.test(lineOf(before, "Scientific", "Persia")));
     check("W44 a rival's own Apollo Program under way", /; its own Apollo Program is under way in Utique$/.test(lineOf(before, "Scientific", "Carthage")), lineOf(before, "Scientific", "Carthage"));
     // Egypt's five parts were added before the parts were told: no older step stands in for the last one
     check("W44 no last step the standing does not match", !/ ago|this turn|last turn/.test(lineOf(await race("Persia"), "Scientific", "Egypt")), lineOf(await race("Persia"), "Scientific", "Egypt"));
@@ -890,14 +892,14 @@ const CASES: Record<string, () => Promise<void>> = {
     check("W44 a branch of policy completed is a public event", events.includes(branch), events.filter((text) => /^Siam/.test(text)).join(" | "));
     check("W44 a court that knows the power hears it, its own court as ours", (await logOf("Egypt", 300)).some((line) => line.text === branch) && (await logOf("Siam", 300)).some((line) => line.text === "We completed the branch of policy Tradition: 3 of the 5 a cultural victory asks."));
     const after = await race("Egypt");
-    check("W44 the step's age in the race line", /; it completed the branch of policy Tradition this turn$/.test(lineOf(after, "Cultural", "Siam")), lineOf(after, "Cultural", "Siam"));
+    check("W44 the step's age in the race line", /; it completed the branch of policy Tradition this year$/.test(lineOf(after, "Cultural", "Siam")), lineOf(after, "Cultural", "Siam"));
     check("W44 the holder of the United Nations: votes short and its last step", /^us: \d+ of \d+ votes, in the city-states allied$/.test(lineOf(after, "Diplomatic", "us")) &&
-      /^Egypt: \d+ of \d+ votes, in the city-states allied; \d+ votes? short; it completed the United Nations this turn$/.test(lineOf(await race("Persia"), "Diplomatic", "Egypt")), lineOf(await race("Persia"), "Diplomatic", "Egypt"));
+      /^Egypt: \d+ of \d+ votes, in the city-states allied; \d+ votes? short; it completed the United Nations this year$/.test(lineOf(await race("Persia"), "Diplomatic", "Egypt")), lineOf(await race("Persia"), "Diplomatic", "Egypt"));
     await post("/advance", { turns: 2 });
     const added = ((await get("/events?since=300")).json as { text: string }[]).map((event) => event.text).find((text) => /^Persia added /.test(text)) ?? "";
     check("W44 a part added to a spaceship is a public event, with the count", /^Persia added an SS Booster to its spaceship in Persepolis: 1 of 6 parts\.$/.test(added), added);
     check("W44 its own court hears it as ours", (await logOf("Persia", 300)).some((line) => line.text === "We added an SS Booster to our spaceship in Persepolis: 1 of 6 parts."));
-    check("W44 the part's step in the race line", /; it added an SS Booster to its spaceship (this turn|last turn|2 turns ago)/.test(lineOf(await race("Egypt"), "Scientific", "Persia")), lineOf(await race("Egypt"), "Scientific", "Persia"));
+    check("W44 the part's step in the race line", /; it added an SS Booster to its spaceship (this year|in (?:AD \d+|\d+ BC), (?:a year|\d+ years) ago)/.test(lineOf(await race("Egypt"), "Scientific", "Persia")), lineOf(await race("Egypt"), "Scientific", "Persia"));
     // Invariants over every court's race view: no turns to come, no stage word, no engine token
     const views = await Promise.all(["Egypt", "Persia", "Siam", "Carthage", "Greece", "Austria"].map(race));
     const text = views.flatMap((view) => Object.values(view ?? {}).flat()).join("\n");
@@ -1328,7 +1330,8 @@ const CASES: Record<string, () => Promise<void>> = {
         && report.systemPrompt.includes("the matter and what you will do about it, as your own intention in plain words, with what follows from it in the same sentence - or that it is only talk. That the ruler's word can stop any of it is the court's standing rule and goes unsaid. What you put to the ruler is direction - a road, a strategy, a war, a standing rule; the specifics you decide, and say what you will do. A matter is a question to the ruler only when it is one of direction.")
         && ![report.systemPrompt, first.systemPrompt, first.prompt].some((text) => /says? nothing|goes ahead if|unless the ruler takes it up|say you have decided/.test(text)));
       check("W53 the loose ends are intentions too", first.systemPrompt.includes("numbered, one line each saying what you will do, as your own intention in the shape of the matters (") && !/unless the ruler takes it up/.test(readFileSync("src/agents.ts", "utf8")));
-      check("W53 years, never turns: the letter writer and the audience say in years what the briefing counts in turns", [report.systemPrompt, first.systemPrompt].every((prompt) => prompt.includes("Time is years and seasons, never turns: what the briefing counts in turns (turnsLeft, deal durations, the next policy, a yield \"a turn\") you say in years, by its calendar line, or as how long a thing takes; places are cities")));
+      check("W53 years, never turns: the letter writer and the audience say in years what the briefing counts in turns", [report.systemPrompt, first.systemPrompt].every((prompt) => prompt.includes("Time is years and seasons, never turns: the briefing gives what is coming as a year and as how long from now - say whichever reads better; places are cities")));
+      check("W53 the audience's rules count no turns: the age passes, and the look-ins are every few years", !/\b\d+ turns\b|turns pass|every few turns/.test(first.systemPrompt) && first.systemPrompt.includes("Then the next age passes while you govern by the recorded will and look in on the realm every few years."));
       check("W53 the advisor's reply clears them", seat.agenda === undefined && seat.road === undefined);
       // A brief between the first reply and the next word: the orders stay owed, and the brief is not told so
       asked.length = 0;
@@ -1404,6 +1407,43 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W54 the spent prophet's ways say the holy site is closed for good, never what tile it needs, and its religion needs only a city to spread to", /closed to it for good: it has already spread the faith/.test(spentLog) && !/needs an unimproved tile/.test(spentLog) && !/improvement/.test(spentLog)
         && /religion needs a city of another faith to spread it to;/.test(spentLog) && !/to found or enhance/.test(spentLog), spentLog);
       check("W54 a fresh prophet off a tile of its own still gets what its holy site needs", /improvement \(it raises a Holy site[^)]*\)\)? needs an unimproved tile of ours outside a city to stand on/.test(freshLog) && !/closed to it for good/.test(freshLog), freshLog);
+    } finally { await stop(host); }
+  },
+  async W55() { // end years (2026-11-05, brief data/briefs/end-years-2026-11-05.md): every end the briefing states is a year and how long from now, through the
+    // game's own calendar, so a span is right where a turn's length changes inside it (the advisor multiplied the current turn's length: "about nine centuries"
+    // for a friendship that ended 640 years off). Planted on Spain at T123: a friendship ten turns long, across the calendar's change of pace near T130
+    let partner = "";
+    const host = await start("run20-t123-spain-swordsman", "", undefined, (game) => {
+      const spain = game.civilizations.find((each: any) => each.civName === "Spain");
+      const majors = new Set(game.civilizations.filter((each: any) => !each.cityStateType && !["Barbarians", "Spectator", "Spain"].includes(each.civName) && (each.cities ?? []).length).map((each: any) => each.civName));
+      partner = Object.keys(spain.diplomacy).find((name) => majors.has(name))!;
+      const other = game.civilizations.find((each: any) => each.civName === partner);
+      for (const [manager] of [[spain.diplomacy[partner]], [other.diplomacy.Spain]]) manager.flagsCountdown = { ...(manager.flagsCountdown ?? {}), DeclarationOfFriendship: 10 };
+    });
+    try {
+      const yearNumber = (year: string) => year.endsWith(" BC") ? -Number(year.slice(0, -3)) : Number(year.slice(3));
+      const before = (await get("/state")).json as { turn: number; year: string };
+      const briefing = (await get("/briefing?civ=Spain")).json as any;
+      check("W55 the calendar line names no turn length and no quoted span", briefing.calendar === `Every date in this briefing is a year of the realm's calendar, with how long from now; it is now ${before.year}.`, briefing.calendar);
+      const friendship = String(briefing.knownCivs?.find((each: any) => each.civ === partner)?.friendship ?? "");
+      const told = /^in force until ((?:AD \d+|\d+ BC)), (\d+) years from now/.exec(friendship);
+      check("W55 a friendship is told as a year and how long from now", !!told, friendship);
+      const policy = String(briefing.culture?.nextPolicy ?? "");
+      check("W55 the next policy is a year and how long from now, with no 'a turn' pair and no turn count", /^(about (?:AD \d+|\d+ BC), (?:a year|\d+ years) from now|now|never, while the realm makes no culture)$/.test(policy) && briefing.culture?.turnsToNextPolicy === undefined, JSON.stringify(briefing.culture));
+      const builds = (briefing.cities ?? []).map((city: any) => city.doneAbout).filter((done: unknown) => done !== null && done !== undefined);
+      check("W55 each city's build is done about a year, never a count of turns", builds.length > 0 && builds.every((done: string) => /^((?:AD \d+|\d+ BC), (?:a year|\d+ years) from now|ongoing .*)$/.test(done)) && !(briefing.cities ?? []).some((city: any) => "turnsLeft" in city), JSON.stringify(builds).slice(0, 300));
+      check("W55 the log's stamps are years", (briefing.log ?? []).length > 0 && (briefing.log as string[]).every((line) => /^(?:AD \d+|\d+ BC): /.test(line)), (briefing.log ?? []).slice(0, 3).join(" | "));
+      const options = (await get("/options?civ=Spain")).json as any;
+      const ready = (options.researchableNow ?? []).map((each: any) => each.readyAbout);
+      check("W55 research is ready about a year, never a count of turns", ready.length > 0 && ready.every((when: string) => /^((?:AD \d+|\d+ BC), (?:a year|\d+ years) from now|now|never, .*)$/.test(when)), JSON.stringify(ready).slice(0, 200));
+      // The calendar ten turns on, as the game reaches it: the friendship's year, and a span the current turn's length would have got wrong
+      await post("/advance", { turns: 1 });
+      const next = (await get("/state")).json as { year: string };
+      await post("/advance", { turns: 9 });
+      const after = (await get("/state")).json as { year: string };
+      const pace = yearNumber(next.year) - yearNumber(before.year);
+      check("W55 the friendship's year is the calendar's year ten turns on, and the span its distance", told?.[1] === after.year && Number(told?.[2]) === yearNumber(after.year) - yearNumber(before.year), `${friendship} / the year ten turns on: ${after.year}`);
+      check("W55 the turn's length changes inside that span (the case the multiplication got wrong)", yearNumber(after.year) - yearNumber(before.year) !== 10 * pace, `${before.year} -> ${next.year} -> ${after.year}`);
     } finally { await stop(host); }
   },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor

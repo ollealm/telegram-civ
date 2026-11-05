@@ -108,13 +108,15 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
       const scheduled = Object.keys(woken).length === 0;
       const standing = (seat: Seat) => !round || round.rankings.some((rank) => rank.civ === seat.civ); // a realm that fell during this age has no one left to look in
       const due = (scheduled ? seats : seats.filter((seat) => woken[seat.civ])).filter(standing);
+      // The notes are stamped with the year, as the host stamps its log (end years, 2026-11-05)
+      const stamp = due.length ? await host.state().then((game) => game.year).catch(() => `T${now}`) : `T${now}`;
       await Promise.all(
         due.map((seat) =>
           io
             .working(seat, governPass(seat, lookedAt.get(seat.civ)!, GOVERN_EVERY, woken[seat.civ], seat.kind === "agent" && scheduled && played === 0))
             .then((entry) => {
               lookInFailures.set(seat.civ, 0);
-              notes.get(seat.civ)!.push(`T${now}: ${entry}`);
+              notes.get(seat.civ)!.push(`${stamp}: ${entry}`);
               lookedAt.set(seat.civ, now);
               seat.lookedAt = now; // persisted with the round's progress, after the advance
             })
@@ -124,7 +126,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
               const failures = (lookInFailures.get(seat.civ) ?? 0) + 1;
               lookInFailures.set(seat.civ, failures);
               if (failures >= 3) throw new Error(`${seat.civ}'s advisor could not be reached three look-ins running (${error.message}); the age is halted so the realm does not run on unadvised`);
-              io.log(`govern pass for ${seat.civ} failed:`, error.message); notes.get(seat.civ)!.push(`T${now}: (no look-in this year - the advisor could not be reached: ${String(error.message).slice(0, 80)}. The realm ran on the standing orders alone.)`); }),
+              io.log(`govern pass for ${seat.civ} failed:`, error.message); notes.get(seat.civ)!.push(`${stamp}: (no look-in this year - the advisor could not be reached: ${String(error.message).slice(0, 80)}. The realm ran on the standing orders alone.)`); }),
         ),
       );
       const untilNextLookIn = GOVERN_EVERY - (played % GOVERN_EVERY);
@@ -226,7 +228,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
         const briefing = await host.briefing(seat.civ, finished.fromTurn).catch(() => ({ note: `${seat.civ} is no more.` }));
         if (seat.kind === "agent") {
           // An agent realm holds no council with itself: its journal is its own look-in notes, and it weighs the longer game at the first look-in of the next age
-          const entry = governLogs.map((note) => note.replace(/^T\d+: /, "")).filter((note) => !/^nothing to change/i.test(note)).join(" ");
+          const entry = governLogs.map((note) => note.replace(/^(?:T\d+|AD \d+|\d+ BC): /, "")).filter((note) => !/^nothing to change/i.test(note)).join(" ");
           seat.journal.push(`${finished.fromYear} to ${finished.year}: ${entry.length > 1200 ? `...${entry.slice(-1200)}` : entry || "A quiet age; nothing changed."}`);
           return;
         }
