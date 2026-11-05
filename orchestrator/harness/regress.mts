@@ -1137,6 +1137,9 @@ const CASES: Record<string, () => Promise<void>> = {
     const craft = readFileSync("src/agents.ts", "utf8").match(/const PICTURE_CRAFT = `([\s\S]*?)`;/)?.[1] ?? "";
     const [guidance, examples = ""] = craft.split("Examples of good descriptions:");
     check("W47 the picture craft sees a founding from a step back, and none of its examples is a founding", /A city founded is seen from a step back/.test(guidance) && !!examples.trim() && !/found/i.test(examples), examples.split("\n").filter((line) => /found/i.test(line)).join(" | "));
+    // Picture brief Q (2026-11-05): from about 2005 "its people's own manner" was read as the people's old building (a stepped temple in 2005, yurts with solar mats in 2060)
+    const foundingLine = guidance.split("\n").find((line) => line.startsWith("A city founded")) ?? "";
+    check("W47 the founding line names a year before which the people's own manner applies, never every age", /\bbefore (?:AD \d+|\d+ BC), built in its people's own manner/.test(foundingLine) && (foundingLine.match(/own manner/g) ?? []).length === 1, foundingLine);
     check("W47 the Modern ages are photographed once the decade has a photograph", ["Modern", "Atomic", "Information", "Future"].every((age) => /once the decade has one/.test(media[age])));
     const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean; era: string }[] };
     const civName = game.majorCivs.find((each) => each.alive)!.civ;
