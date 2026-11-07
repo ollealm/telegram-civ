@@ -1609,7 +1609,7 @@ const CASES: Record<string, () => Promise<void>> = {
       say("/status");
       await until(() => sent.length > beforeS);
       await sleep(300);
-      check("W51 /status arrives, one message, without the will", sent.length === beforeS + 1 && !sent[beforeS].includes("My reading") && !/will/i.test(sent[beforeS]) && sent[beforeS].startsWith(game.year), JSON.stringify(sent.slice(beforeS)));
+      check("W51 /status arrives, one message: the year, no turn and no will", sent.length === beforeS + 1 && !sent[beforeS].includes("My reading") && !/will|turn/i.test(sent[beforeS]) && sent[beforeS].startsWith(`${game.year}. `), JSON.stringify(sent.slice(beforeS)));
       seat.will = "";
       const { partsOf, splitLongMessages } = await import("../src/longMessages.ts");
       // The clerk's answer is a draft edited as it grows; an answer past the limit is edited in as its first part, the rest sent after it with the buttons

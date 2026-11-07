@@ -913,7 +913,7 @@ function setUpAdvisor(bot: Bot, index: number) {
   bot.command("status", async (ctx) => {
     const game = await host.state();
     const ready = state.seats.filter((other) => other.chatId).map((other) => `${other.civ}: ${other.ready ? "ready" : "in audience"}`);
-    await ctx.reply(`${game.year} (turn ${game.turn}). ${state.phase === "passing" ? "Time is passing." : ready.join(", ")}`);
+    await ctx.reply(`${game.year}. ${state.phase === "passing" ? "Time is passing." : ready.join(", ")}`);
   });
 
   // The record the advisor governs by while the ruler is away - theirs to read, and to correct by saying so in the audience
