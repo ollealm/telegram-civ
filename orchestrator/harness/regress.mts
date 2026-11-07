@@ -1462,6 +1462,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const sent: string[] = [];
     const markups: unknown[] = []; // each sent message's buttons, by its place in sent
     const menus: { command: string }[][] = [];
+    const edits: { id: number; text: string; buttons: boolean }[] = [];
     const queued: unknown[] = [];
     let updateId = 1;
     const telegram = createServer((request, response) => {
@@ -1478,7 +1479,10 @@ const CASES: Record<string, () => Promise<void>> = {
           await sleep(200);
           return reply([]);
         }
+        // As Telegram: a text past 4096 characters is refused whole
+        if ((method === "sendMessage" || method === "editMessageText") && String(params.text ?? "").length > 4096) { response.statusCode = 400; response.setHeader("content-type", "application/json"); return response.end(JSON.stringify({ ok: false, error_code: 400, description: "Bad Request: message is too long" })); }
         if (method === "sendMessage") { sent.push(String(params.text ?? "")); markups[sent.length - 1] = params.reply_markup; }
+        if (method === "editMessageText") edits.push({ id: Number(params.message_id), text: String(params.text ?? ""), buttons: !!params.reply_markup });
         if (method === "setMyCommands") menus.push(params.commands as { command: string }[]);
         if (method.startsWith("send")) return reply({ message_id: sent.length, date: Math.floor(Date.now() / 1000), chat: { id: Number(params.chat_id), type: "private" } });
         return reply(true);
@@ -1582,7 +1586,43 @@ const CASES: Record<string, () => Promise<void>> = {
         && sent.at(-1)!.split("Name any you want to raise").length === 2, JSON.stringify(sent.slice(beforeA5.sent)));
       // H: brief commands (2026-11-05, data/briefs/brief-commands-2026-11-05.md). /brief posts the six as buttons, two rows of three; a tap asks the advisor,
       // read-only, and the ask and the brief join the transcript; a brief before the first word leaves the road and the matters waiting; mid-age the clerk answers
-      check("W51 the six briefs and /brief are in Telegram's command menu", ["brief", "cities", "military", "science", "culture", "trade", "rivals"].every((command) => menus.at(-1)?.some((each) => each.command === command)), JSON.stringify(menus.at(-1)));
+      // The menu (2026-11-07, data/briefs/menu-and-long-messages-2026-11-07.md): set whole to these thirteen, in order - no /brief, no /saga
+      const MENU = ["onward", "map", "cities", "military", "science", "culture", "trade", "rivals", "will", "status", "character", "clerk", "advisor"];
+      check("W51 Telegram's command menu is set whole to the thirteen, in order, with no brief or saga", menus.length === 1 && JSON.stringify(menus[0]?.map((each) => each.command)) === JSON.stringify(MENU)
+        && menus[0]?.find((each) => each.command === "military")?.description === "A brief on the army and navy", JSON.stringify(menus));
+      // Messages past Telegram's limit: Germany's will of 4319 characters left /will and /status sending nothing (2026-11-06). A will past the limit arrives
+      // whole in more than one message, none past it, cut on a paragraph break; /status no longer carries the will
+      const willParagraphs = Array.from({ length: 16 }, (_, at) => `My reading ${at + 1}: ${"the ruler wants the granaries kept full before any wall is raised, and the roads east kept open for trade. ".repeat(3).trim()}`);
+      seat.will = willParagraphs.join("\n\n");
+      const beforeL = sent.length;
+      say("/will");
+      await until(() => sent.length > beforeL + 1);
+      await sleep(500);
+      const willParts = sent.slice(beforeL);
+      const lastOfFirst = willParts[0]?.split("\n\n").at(-1);
+      check("W51 a will past 4096 characters: /will arrives whole in more than one message, none past the limit, cut on a paragraph break",
+        seat.will.length > 4096 && willParts.length > 1 && willParts.every((part) => part.length <= 4096) && willParts.join("\n\n").endsWith(seat.will) && /^What Adiega has written down/.test(willParts[0])
+        && willParagraphs.includes(lastOfFirst ?? "") && willParagraphs.includes(willParts[1]?.split("\n\n")[0] ?? ""), `${willParts.length} parts of ${willParts.map((part) => part.length).join(", ")}; first ends ${JSON.stringify(lastOfFirst?.slice(-60))}`);
+      const beforeS = sent.length;
+      say("/status");
+      await until(() => sent.length > beforeS);
+      await sleep(300);
+      check("W51 /status arrives, one message, without the will", sent.length === beforeS + 1 && !sent[beforeS].includes("My reading") && !/will/i.test(sent[beforeS]) && sent[beforeS].startsWith(game.year), JSON.stringify(sent.slice(beforeS)));
+      seat.will = "";
+      const { partsOf, splitLongMessages } = await import("../src/longMessages.ts");
+      // The clerk's answer is a draft edited as it grows; an answer past the limit is edited in as its first part, the rest sent after it with the buttons
+      const { Bot: TestBot, InlineKeyboard: Keys } = await import("grammy");
+      const editor = new TestBot("3:editor", { client: { apiRoot: `http://127.0.0.1:${tgPort}` } });
+      splitLongMessages(editor);
+      const beforeE2 = { sent: sent.length, edits: edits.length };
+      await editor.api.editMessageText(4242, 77, willParagraphs.join("\n\n"), { reply_markup: new Keys().text("/advisor", "x") });
+      const edited = edits.slice(beforeE2.edits), after = sent.slice(beforeE2.sent);
+      check("W51 an edit past the limit: the draft is edited to the first part, the rest follows as a message with the buttons, nothing lost", edited.length === 1 && edited[0].id === 77 && !edited[0].buttons && after.length === 1 && !!markups[beforeE2.sent]
+        && [edited[0]?.text, ...after].join("\n\n") === willParagraphs.join("\n\n") && [edited[0]?.text, ...after].every((part) => part.length <= 4096), `${JSON.stringify(edited.map((each) => each.text.length))}; sent ${after.map((part) => part.length)}`);
+      const prose = Array.from({ length: 80 }, (_, at) => `Sentence ${at} runs on about the granary and the walls for a while.`).join(" ");
+      const proseParts = partsOf(prose);
+      check("W51 a text past the limit with no line break is cut at a sentence end, nothing lost", proseParts.length === 2 && proseParts.every((part) => part.length <= 4096) && proseParts[0].endsWith(".") && proseParts.join(" ") === prose,
+        proseParts.map((part) => `${part.length}: ...${part.slice(-30)}`).join(" | "));
       seat.matters = undefined;
       const beforeH = sent.length;
       say("/brief");

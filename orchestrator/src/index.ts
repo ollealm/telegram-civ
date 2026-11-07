@@ -6,6 +6,7 @@ import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
+import { LIMIT, splitLongMessages } from "./longMessages.ts";
 import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, forgetMaps, forgetWonderPictures, generateImage, imagesIdle, keepMap, keepWonderPicture, keptMap, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
 import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
@@ -48,6 +49,8 @@ if (!process.env.HERALD_BOT_TOKEN || advisorTokens.length === 0) throw new Error
 const telegram = process.env.TELEGRAM_API_ROOT ? { client: { apiRoot: process.env.TELEGRAM_API_ROOT } } : undefined;
 const herald = new Bot(process.env.HERALD_BOT_TOKEN, telegram);
 const advisors = advisorTokens.map((token) => new Bot(token, telegram));
+// Every message any bot sends past Telegram's limit goes as several, cut on paragraph breaks, instead of being refused whole
+for (const bot of [herald, ...advisors]) splitLongMessages(bot);
 
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args);
 // A failure nobody caught is logged, not fatal: one lost reply must not take every court down with it
@@ -62,6 +65,23 @@ const tell = async (seat: Seat, text: string, options?: { reply_markup: InlineKe
   const bot = botOf(seat);
   if (bot && seat.chatId) await bot.api.sendMessage(seat.chatId, text, options).catch((error) => log(`telling ${seat.civ} failed:`, error.message));
 };
+
+/** Telegram's command menu, in this order (Olle, 2026-11-07: no /brief, no /saga); the lens words are fixed, not BRIEF_LENS's */
+const MENU = [
+  { command: "onward", description: "Let the age pass" },
+  { command: "map", description: "The campaign map" },
+  { command: "cities", description: "A brief on the cities" },
+  { command: "military", description: "A brief on the army and navy" },
+  { command: "science", description: "A brief on learning" },
+  { command: "culture", description: "A brief on culture and faith" },
+  { command: "trade", description: "A brief on trade and the treasury" },
+  { command: "rivals", description: "A brief on the rival peoples" },
+  { command: "will", description: "Your standing wishes, as recorded" },
+  { command: "status", description: "Where the realm stands this moment" },
+  { command: "character", description: "Who stands at your side" },
+  { command: "clerk", description: "Turn to the clerk" },
+  { command: "advisor", description: "Turn back to your advisor" },
+];
 
 /** The six briefs as buttons, two rows of three: under every letter and on /brief. A tap asks for that brief as if its command were typed */
 const BRIEFS = Object.keys(BRIEF_LENS) as (keyof typeof BRIEF_LENS)[];
@@ -765,7 +785,8 @@ function setUpAdvisor(bot: Bot, index: number) {
           if (Date.now() - lastEdit < 1200) return;
           lastEdit = Date.now();
           const text = soFar.trim();
-          if (!text) return;
+          // Past the limit the draft stays as it was: the full answer is split when it is sent at the end
+          if (!text || text.length + 2 > LIMIT) return;
           editing = editing.then(async () => {
             if (!draft) draft = await bot.api.sendMessage(chatId, text + " …");
             else await bot.api.editMessageText(chatId, draft.message_id, text + " …").catch(() => {});
@@ -886,16 +907,13 @@ function setUpAdvisor(bot: Bot, index: number) {
     await ctx.answerCallbackQuery().catch(() => {});
     if (BRIEFS.includes(ctx.match[1] as BriefCommand)) brief(ctx, ctx.match[1] as BriefCommand);
   });
-  // The briefs show in Telegram's command menu beside whatever the bot already lists there
-  void bot.api.getMyCommands().then((listed) => {
-    const wanted = [{ command: "brief", description: "Choose a brief from your advisor" }, ...BRIEFS.map((command) => ({ command, description: `A brief on ${BRIEF_LENS[command].split(" - ")[0]}` }))];
-    return bot.api.setMyCommands([...(Array.isArray(listed) ? listed : []).filter((each) => !wanted.some((other) => other.command === each.command)), ...wanted]);
-  }).catch((error) => log("the brief commands could not be listed with Telegram:", error.message));
+  // Telegram's command menu is this list, set whole; /brief, /saga and the rest still work off it
+  void bot.api.setMyCommands(MENU).catch((error) => log("the command menu could not be set with Telegram:", error.message));
 
   bot.command("status", async (ctx) => {
     const game = await host.state();
     const ready = state.seats.filter((other) => other.chatId).map((other) => `${other.civ}: ${other.ready ? "ready" : "in audience"}`);
-    await ctx.reply(`${game.year} (turn ${game.turn}). ${state.phase === "passing" ? "Time is passing." : ready.join(", ")}\n\nYour recorded will:\n${seat().will || "(none yet)"}`);
+    await ctx.reply(`${game.year} (turn ${game.turn}). ${state.phase === "passing" ? "Time is passing." : ready.join(", ")}`);
   });
 
   // The record the advisor governs by while the ruler is away - theirs to read, and to correct by saying so in the audience
