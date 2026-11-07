@@ -233,10 +233,24 @@ export function forgetPicture(picture: Picture) {
   persist();
 }
 
+/** A caption is a heading on its own line, a blank line, then the body (Olle, 2026-11-07): the heading the code sets, or the writer's own title.
+ *  The break is stored in the caption, so every send carries it and the startsWith checks on headings keep working */
+export const captioned = (heading: string, body = "") => (body.trim() ? `${heading.trim()}\n\n${body.trim()}` : heading.trim());
+/** A writer's caption ("a short title, a full stop, then one sentence"): its first sentence becomes the heading, without the full stop */
+export const headed = (caption: string) => {
+  if (caption.includes("\n\n")) return caption.trim(); // headed already
+  const [, title, body] = /^(.+?[.!?])\s+(\S[\s\S]*)$/.exec(caption.trim()) ?? [];
+  return title ? captioned(title.replace(/\.$/, ""), body) : caption.trim();
+};
+/** A caption on one line, as the writers read it in their lists: the heading's full stop put back */
+export const oneLine = (caption: string) => caption.replace(/([^.!?:])\s*\n\n\s*/g, "$1. ").replace(/\s*\n+\s*/g, " ");
+/** What goes under a picture sent with a note (a wonder's boon): after the body, or as the body when the caption is a heading alone */
+export const withNote = (caption: string, note?: string) => (!note ? caption : caption.includes("\n\n") ? `${caption}. ${note}` : captioned(caption, note));
+
 /** What these viewers have been shown in this age and the one before, for whoever describes the next picture (the last eight until two ages are on record) */
 export const recentPictures = (viewers: string[]) => {
   const since = state.ageStarts?.at(-2);
   const shown = (state.pictures ?? []).filter((picture) => viewers.includes(picture.for));
   return (since === undefined ? shown.slice(-8) : shown.filter((picture) => picture.turn >= since))
-    .map((picture) => `${picture.year}: ${picture.caption} - ${picture.description.slice(0, 180)}`).join("\n") || "(none yet)";
+    .map((picture) => `${picture.year}: ${oneLine(picture.caption)} - ${picture.description.slice(0, 180)}`).join("\n") || "(none yet)";
 };

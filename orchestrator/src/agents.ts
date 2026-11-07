@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { host, type AgeSummary, type HostSchema, type PublicEvent, type RoundResult, type Orders } from "./host.ts";
 import { codexTokens, priceSdkCall, priceUsd, sdkTokens, type SdkUsage, type Tokens } from "./prices.ts";
-import { addUsage, persist, recentPictures, state, type Picture as PictureRecord, type Seat } from "./store.ts";
+import { addUsage, captioned, headed, oneLine, persist, recentPictures, state, type Picture as PictureRecord, type Seat } from "./store.ts";
 import { endLookIn, noteRefusals, refusalsForPrompt } from "./refusals.ts";
 import { runCodex, serveRealm, type CodexReply } from "./codex.ts";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -1012,9 +1012,10 @@ export const eraScene = (civ: string, era: string, year: string, recent: PublicE
     HERALD_MODEL,
     `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory, and not the technology that opened the age: paint the people in the age - one instant of ordinary life in which the new age shows in the everyday, the dress, the tools, the buildings, the pace of the day.
 Set it in one of their cities, named below with the lie of its land, and let the land show: a river town under mountains and a coastal town among forests are different pictures before anything else differs.
-Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year. ${CAPTION_CRAFT}`,
-    `${civ} entered the ${era} in ${year}.\n\n${ageLine(civ, era)}\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
-    Picture,
+Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year.
+The caption is read under the picture, after a heading set for you that names who entered which age and when: write no title, only one sentence (up to 25 words) on what the age looked like in this place and what came of it there - never the entry into the age, its year, or the learning that opened it, again. The reader can already see the picture: never describe it. In the world's words, no chancery terms.`,
+    `${civ} entered the ${era} in ${year}.\n\n${ageLine(civ, era)}\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted for other peoples entering the ${era} earlier in this game, and this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
+    Picture.extend({ caption: z.string().describe("Read under the picture, after the heading set for you: one sentence (up to 25 words), no title - never the entry into the age, its year or the learning that opened it, and never a description of the picture") }),
   );
 
 /** The world is won: the moment of victory, in a medium the winners' age allows. The caption is only the Chronicler's sentence - the title is set above it */
@@ -1037,7 +1038,7 @@ export const oddityScene = async (round: RoundResult, events: PublicEvent[], cam
     `You are the Chronicler. Was there anything in these years the world would still tell of as strange, comic or unheard-of? Most ages have none, and then the answer is none; at most one when there is; a good chapter needs no oddity. What counts is something retold for its own sake, not for its weight in the story - the age's great events are the chapter's business, never the oddity's, however dramatic. Below are the age's events, what the armies and ships did, and the chancery's own flagged curiosities: the flags are candidates, not orders, and you may choose something none of them caught.
 If there is one, paint it. ${PICTURE_CRAFT} Where a people's age and the calendar disagree, the age wins for everything made. ${CAPTION_CRAFT} The caption may carry a dry historian's humour.
 why - one line for the chancery's log: what you chose and why it is strange, or why there was nothing.`,
-    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nWhat the armies and ships did in these years:\n${campaigns.map((line) => `- ${line}`).join("\n") || "(nothing)"}\n\nThe chancery's flagged curiosities:\n${curiosities.map((line) => `- ${line}`).join("\n") || "(none flagged)"}\n\nAlready going with this chapter (never the oddity):\n${painting.map((caption) => `- ${caption}`).join("\n") || "(nothing)"}\n\n${peoplesAges((await host.state().catch(() => undefined))?.majorCivs ?? [])}\n\n${alreadyPainted(["chronicle"])}`,
+    `The years ${round.fromYear} to ${round.year}.\n\nEvents of these years:\n${events.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing the world took note of)"}\n\nWhat the armies and ships did in these years:\n${campaigns.map((line) => `- ${line}`).join("\n") || "(nothing)"}\n\nThe chancery's flagged curiosities:\n${curiosities.map((line) => `- ${line}`).join("\n") || "(none flagged)"}\n\nAlready going with this chapter (never the oddity):\n${painting.map((caption) => `- ${oneLine(caption)}`).join("\n") || "(nothing)"}\n\n${peoplesAges((await host.state().catch(() => undefined))?.majorCivs ?? [])}\n\n${alreadyPainted(["chronicle"])}`,
     z.object({ oddity: Picture.nullable(), why: z.string() }),
   );
 
@@ -1101,7 +1102,7 @@ export const choosePlace = (candidates: PlaceCandidate[], year: string, painting
 ${PLACE_CRAFT}
 ${CAPTION_CRAFT}
 why - one line for the chancery's log: the place and why, or why none.`,
-    `${candidates.map((place) => placeBlock(place, year)).join("\n\n")}\n\nAlready going with this chapter (never the same subject):\n${painting.map((caption) => `- ${caption}`).join("\n") || "(nothing yet)"}\n\n${alreadyPainted(["chronicle"])}`,
+    `${candidates.map((place) => placeBlock(place, year)).join("\n\n")}\n\nAlready going with this chapter (never the same subject):\n${painting.map((caption) => `- ${oneLine(caption)}`).join("\n") || "(nothing yet)"}\n\n${alreadyPainted(["chronicle"])}`,
     z.object({ place: z.string().nullable().describe("Exactly one of the places' names, or null"), why: z.string(), picture: Picture.nullable() }),
   );
 
@@ -1119,7 +1120,59 @@ export const placePictures = async (round: RoundResult, painting: string[], log:
   // A reference goes along only for a wonder the description names: the writer chooses what still shows, and an attached picture of a wonder it left out
   // could put that wonder in (the first samples attached London's Djenne to a picture of its Great Wall and Taj Mahal)
   const shown = place.wonders.filter((each) => answer.picture!.description.toLowerCase().includes(each.wonder.toLowerCase())).map((each) => each.wonder);
-  return [{ ...dated({ turn: round.turn, for: "chronicle", note: "", caption: `${PLACE_PREFIX(place.name)}, ${round.year}. ${answer.picture.caption.trim()}`, description: answer.picture.description, year: round.year }, round.year), wonders: shown }];
+  return [{ ...dated({ turn: round.turn, for: "chronicle", note: "", caption: captioned(`${PLACE_PREFIX(place.name)}, ${round.year}`, answer.picture.caption), description: answer.picture.description, year: round.year }, round.year), wonders: shown }];
+};
+
+/** A people's entry into a new age always gets its picture - once; the Chronicler chooses the instant from what that people has lately done */
+export const eraPictures = async (round: RoundResult, log: (...args: unknown[]) => void = () => {}): Promise<PictureRecord[]> => {
+  const entries = round.publicEvents.flatMap((event) => {
+    const [, civ, era] = /^(.+?) entered the (.+?)(?: with the learning of (?:.+?))?\.?$/.exec(event.text) ?? [];
+    return !era || /^Ancient/i.test(era) ? [] : [{ event, civ, era }];
+  });
+  if (!entries.length) return [];
+  const all = await host.events().catch(() => [] as PublicEvent[]);
+  // One people at a time: two peoples entering the same age in the same round would otherwise be painted with the same face, neither picture yet known to the other
+  const pictures: PictureRecord[] = [];
+  for (const { event, civ, era } of entries) {
+    // The heading names the age without the word "era" (a caption from before 2026-11-07 still starts with this tag)
+    const age = era.replace(/ era$/i, "");
+    const tag = `${civ} enter the ${age}`;
+    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(tag))) continue;
+    // A face is taken for the whole game: every picture of another people entering this age, then this season's (the Atomic airfield was painted twice, AD 1870 and AD 1938)
+    const sameAge = new RegExp(`^.+? enter the ${age.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: era)?, `);
+    const taken = [...(state.pictures ?? []).filter((picture) => picture.for === "chronicle" && sameAge.test(picture.caption)), ...pictures];
+    const recent = all.filter((entry) => entry.turn <= event.turn && entry.text.startsWith(civ)).slice(-12);
+    const cities = await host.cities(civ).catch(() => []);
+    const scene = await eraScene(civ, era, event.year, recent, cities, taken.map((picture) => `${oneLine(picture.caption)} - ${picture.description.slice(0, 200)}`)).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
+    if (scene) pictures.push(dated({ turn: event.turn, for: "chronicle", caption: captioned(`${tag}, ${event.year}`, scene.caption), description: scene.description, year: scene.year }, event.year));
+  }
+  return pictures;
+};
+
+/** The world is won: the Chronicler paints the moment - once - and it leads the last age's pictures */
+export const victoryPictures = async (round: RoundResult, log: (...args: unknown[]) => void = () => {}): Promise<PictureRecord[]> => {
+  if (!/has won/.test(round.stoppedEarly ?? "")) return [];
+  const game = await host.state();
+  if (!game.winner) return [];
+  const title = `${game.winner} wins the world: ${game.victoryType} victory, ${round.year}`;
+  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(`${game.winner} wins the world`))) return [];
+  const era = game.majorCivs.find((civ) => civ.civ === game.winner)?.era ?? "age it had reached";
+  const cities = await host.cities(game.winner).catch(() => []);
+  const scene = await victoryScene(game.winner, game.victoryType ?? "", era, round.year, cities).catch((error) => { log("victory picture failed:", error.message); return null; });
+  if (!scene) return [];
+  return [dated({ turn: round.turn, for: "chronicle", caption: captioned(title, scene.caption), description: scene.description, year: scene.year }, round.year)];
+};
+
+/** The oddity of the age: none most ages, by the Chronicler's own judgement. Every decision is logged, so a game's worth can be counted */
+export const oddityPictures = async (round: RoundResult, seen: { campaigns: string[]; curiosities: string[] }, painting: string[], log: (...args: unknown[]) => void = () => {}): Promise<(PictureRecord & { note: string })[]> => {
+  const answer = await oddityScene(round, round.publicEvents, seen.campaigns, seen.curiosities, painting).catch((error) => { log("the oddity of the age failed:", error.message); return null; });
+  if (!answer) return [];
+  if (!answer.oddity) { log(`no oddity this age (${round.fromYear} to ${round.year}): ${answer.why}`); return []; }
+  // The caption stands on its own: no fixed opening (Olle, 2026-10-04: it reads better and funnier without)
+  const caption = headed(answer.oddity.caption);
+  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && oneLine(picture.caption).replace(/^The oddity of the age\. /, "") === oneLine(caption))) { log(`the Chronicler's oddity was painted before: ${answer.why}`); return []; }
+  log(`the Chronicler found an oddity (${round.fromYear} to ${round.year}): ${answer.why}`);
+  return [dated({ turn: round.turn, for: "chronicle", caption, description: answer.oddity.description, year: answer.oddity.year, note: "" }, round.year)];
 };
 
 type Built = { turn: number; year: string; wonder: string; site?: string };
