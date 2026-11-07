@@ -52,6 +52,20 @@ export const draftCandidates = async (civ: string, model: string, takenNames: st
 
 export const draftSovereign = (civ: string, model: string) => draftCandidate(civ, model, shuffled(WALKS_OF_LIFE)[0], shuffled(MANNERS)[0], [], true);
 
+/** An advisor chosen before their card was kept (2026-11-07): the sheet shortened once to the card a candidate presents, so /advisors can show them as one */
+export const shortenToCard = (character: { name: string; title?: string; sheet: string }, civ: string, model: string) =>
+  runStructured(
+    "character",
+    model,
+    `Below is the sheet of the chief advisor to the ruler of a civilization: who they are, where they come from and how they speak. Shorten it to the card they would have presented as a candidate for the post. Draw only on the sheet, and add nothing to it.`,
+    `The people: ${civ}.\nThe advisor: ${character.name}${character.title ? `, ${character.title}` : ""}.\n\nTheir sheet:\n${character.sheet}`,
+    z.object({
+      pitch: z.string().describe("At most 30 words in their own voice, presenting themselves to the ruler, without quotation marks. It should let the manner be heard."),
+      walk: z.string().describe('Their walk of life in a few words, in lower case, beginning with "a" or "an"'),
+      manner: z.string().describe("Their manner of speaking in a few words, in lower case"),
+    }),
+  );
+
 /** The pitch lets the voice be heard; the plain line under it says outright what kind of company this will be for a whole history */
-export const card = (candidate: Candidate) =>
-  `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}${candidate.pronouns ? ` (${candidate.pronouns})` : ""}\n"${candidate.pitch}"${candidate.manner ? `\n${candidate.walk![0].toUpperCase()}${candidate.walk!.slice(1)} - ${candidate.manner}.` : ""}`;
+export const card = (candidate: { name: string; title?: string; pronouns?: string; pitch?: string; walk?: string; manner?: string }) =>
+  `${candidate.name}${candidate.title ? `, ${candidate.title}` : ""}${candidate.pronouns ? ` (${candidate.pronouns})` : ""}${candidate.pitch ? `\n"${candidate.pitch}"` : ""}${candidate.manner && candidate.walk ? `\n${candidate.walk[0].toUpperCase()}${candidate.walk.slice(1)} - ${candidate.manner}.` : ""}`;

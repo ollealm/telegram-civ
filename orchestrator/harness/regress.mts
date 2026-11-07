@@ -1653,7 +1653,16 @@ const CASES: Record<string, () => Promise<void>> = {
     // The loose-ends follow-up's answer, set by each case: a list, "nothing is left loose" with no /onward of its own, or nothing at all
     let looseEnds = (): { text: string } => ({ text: "" });
     const briefs: { role: string; said: string; served?: string[] }[] = [];
+    // /advisors (2026-11-07): the character writer's calls - the sheet shortened to a card, and the candidates drafted, each numbered - and a new advisor's greeting
+    const shortenings: string[] = [];
+    let drafted = 0;
     agents.standInForModels((asked) => {
+      if (asked.role === "character") {
+        if (/Shorten it to the card/.test(asked.systemPrompt)) { shortenings.push(asked.prompt); return { text: "", data: { pitch: "I count the grain and say little of it.", walk: "a keeper of granaries", manner: "sparing and exact" } }; }
+        drafted++;
+        return { text: "", data: { name: `Ninurta${drafted}`, title: "the Seer", pronouns: "he", pitch: `Pitch ${drafted}, in my own voice.`, sheet: `You are candidate ${drafted}.` } };
+      }
+      if (asked.role === "greeting") return { text: `I am candidate ${/You are candidate (\d+)/.exec(asked.systemPrompt)?.[1] ?? "?"}, at your service.` };
       if (asked.outputSchema) return { text: "", data: { caption: "The granary. Grain comes in.", description: "Oil painting. A granary.", year: game.year } }; // the decision's picture
       if (/asks you for a brief on/.test(asked.prompt)) { briefs.push({ role: asked.role, said: asked.prompt.slice(asked.prompt.lastIndexOf("The ruler asks you for a brief")), served: asked.served }); return { text: asked.role === "clerk" ? "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." : /a brief on our learning/.test(asked.prompt) ? "The academies lead the world.\n\nName any you want to raise, ask for a /brief, or /onward" : "The host is three spearmen and a catapult." }; }
       const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
@@ -1771,10 +1780,10 @@ const CASES: Record<string, () => Promise<void>> = {
         && JSON.stringify(sent.slice(beforeG2b.sent)) === JSON.stringify(["The spare gold, then: the walls want 120 and a market 90. Which shall it be, Majesty?"]), `served ${JSON.stringify(calls[beforeG2b.calls]?.served)}; sent ${JSON.stringify(sent.slice(beforeG2b.sent))}`);
       // H: brief commands (2026-11-05, data/briefs/brief-commands-2026-11-05.md). /brief posts the six as buttons, two rows of three; a tap asks the advisor,
       // read-only, and the ask and the brief join the transcript; a brief before the first word leaves the road and the matters waiting; mid-age the clerk answers
-      // The menu (2026-11-07, data/briefs/menu-and-long-messages-2026-11-07.md): set whole to these thirteen, in order - no /brief, no /saga
-      const MENU = ["onward", "map", "cities", "military", "science", "culture", "trade", "rivals", "will", "status", "character", "clerk", "advisor"];
-      check("W51 Telegram's command menu is set whole to the thirteen, in order, with no brief or saga", menus.length === 1 && JSON.stringify(menus[0]?.map((each) => each.command)) === JSON.stringify(MENU)
-        && menus[0]?.find((each) => each.command === "military")?.description === "A brief on the army and navy", JSON.stringify(menus));
+      // The menu (2026-11-07, data/briefs/menu-advisors-2026-11-07.md): set whole to these eight, in order - the age, the six briefs, the advisors
+      const MENU = ["onward", "cities", "military", "science", "culture", "trade", "rivals", "advisors"];
+      check("W51 Telegram's command menu is set whole to the eight, in order", menus.length === 1 && JSON.stringify(menus[0]?.map((each) => each.command)) === JSON.stringify(MENU)
+        && menus[0]?.find((each) => each.command === "military")?.description === "A brief on the army and navy" && menus[0]?.find((each) => each.command === "advisors")?.description === "Your advisor, and others who would serve", JSON.stringify(menus));
       // Messages past Telegram's limit: Germany's will of 4319 characters left /will and /status sending nothing (2026-11-06). A will past the limit arrives
       // whole in more than one message, none past it, cut on a paragraph break; /status no longer carries the will
       const willParagraphs = Array.from({ length: 16 }, (_, at) => `My reading ${at + 1}: ${"the ruler wants the granaries kept full before any wall is raised, and the roads east kept open for trade. ".repeat(3).trim()}`);
@@ -1918,6 +1927,59 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W51 the guard asked three times in all - never for a brief, a short word mid-audience, the first word's reply or a silent pass", guarded(0).length === 3, guarded(0).map((each) => each.said.slice(0, 120)).join(" | "));
       check("W51 a first word with /onward: served set_orders, nothing owed, no pass, the court rises", !!lastWordReply?.served?.includes("set_orders") && calls.length === beforeG.calls + 1 && seat.ordersOwed === undefined && seat.ready,
         `served ${JSON.stringify(lastWordReply?.served)}; calls ${calls.length - beforeG.calls}; said ${lastWordReply?.said.slice(0, 120)}`);
+      // /advisors (2026-11-07, data/briefs/menu-advisors-2026-11-07.md): in an open court, one message - the advisor's card, then three new candidates' cards -
+      // and four buttons, "Take" each and "Keep" the advisor. An advisor chosen before the card was kept has the sheet shortened once, and kept
+      Object.assign(seat, { ready: false, dismissed: false, closing: undefined });
+      const advisorsMessage = async () => { const before = sent.length; say("/advisors"); await until(() => sent.length > before); await sleep(400); return { texts: sent.slice(before), markup: markups[before] as { inline_keyboard: { text: string; callback_data: string }[][] } | undefined }; };
+      const buttons = (markup?: { inline_keyboard: { text: string; callback_data: string }[][] }) => (markup?.inline_keyboard ?? []).flat().map((each) => each.text);
+      const beforeV = { drafted, shortenings: shortenings.length };
+      const shown = await advisorsMessage();
+      const cards = (seat.candidates ?? []).map((each: { name: string; pitch: string; walk: string; manner: string }) => `${each.name}, the Seer (he)\n"${each.pitch}"\n${each.walk[0].toUpperCase()}${each.walk.slice(1)} - ${each.manner}.`);
+      const advisorCard = 'Adiega, Steward (she/her)\n"I count the grain and say little of it."\nA keeper of granaries - sparing and exact.';
+      check("W51 /advisors in an open court: one message, the advisor's card from the shortened sheet, then the three candidates' cards under the line that they would serve in her place",
+        shown.texts.length === 1 && cards.length === 3 && drafted - beforeV.drafted === 3 && shortenings.length - beforeV.shortenings === 1
+        && shown.texts[0] === `${advisorCard}\n\nThese three would serve in Adiega's place:\n\n${cards.join("\n\n")}`, JSON.stringify(shown.texts));
+      check("W51 /advisors: four buttons - Take each of the three, then Keep the advisor", JSON.stringify(buttons(shown.markup)) === JSON.stringify([...seat.candidates!.map((each: { name: string }) => `Take ${each.name}`), "Keep Adiega"]), JSON.stringify(buttons(shown.markup)));
+      const keptState = (JSON.parse(readFileSync(process.env.RULER_STATE_FILE!, "utf8")) as { seats: { civ: string; character?: { pitch?: string; walk?: string; manner?: string } }[] }).seats.find((each) => each.civ === ours);
+      check("W51 the shortened card is kept on the character, in the state file too", seat.character.pitch === "I count the grain and say little of it." && keptState?.character?.walk === "a keeper of granaries" && keptState?.character?.manner === "sparing and exact", JSON.stringify(keptState?.character));
+      const again = await advisorsMessage();
+      check("W51 /advisors again: three new candidates, the sheet not shortened again", shortenings.length - beforeV.shortenings === 1 && drafted - beforeV.drafted === 6 && again.texts.length === 1 && again.texts[0].startsWith(advisorCard) && again.texts[0].includes("Ninurta6"), JSON.stringify(again.texts));
+      const beforeK = sent.length;
+      tap("advisors:keep");
+      await until(() => sent.length > beforeK);
+      await sleep(300);
+      check("W51 Keep: the advisor stays, the candidates are cleared, one line answers", seat.character.name === "Adiega" && seat.candidates === undefined && JSON.stringify(sent.slice(beforeK)) === JSON.stringify(["Adiega stays at your side."]), JSON.stringify(sent.slice(beforeK)));
+      // Take: the existing replace path - the advisor goes to formerAdvisors, the will and the clerk stay, the greeting is sent and joins the transcript
+      await advisorsMessage();
+      // But first a Take under the earlier message: it names one of that draw, and takes no one from this one
+      const beforeOld = sent.length;
+      queued.push({ update_id: updateId++, callback_query: { id: String(updateId), chat_instance: "1", data: "advisors:take:0", from: { id: 7, is_bot: false, first_name: "Ruler" },
+        message: { message_id: 1, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, text: again.texts[0], reply_markup: again.markup } } });
+      await until(() => sent.length > beforeOld);
+      check("W51 a Take under an earlier /advisors message takes no one from the later draw", seat.character.name === "Adiega" && seat.candidates?.length === 3 && JSON.stringify(sent.slice(beforeOld)) === JSON.stringify(["Those candidates have gone their way. Send /advisors to call others."]), JSON.stringify(sent.slice(beforeOld)));
+      const taken = seat.candidates![1] as { name: string; pitch: string; walk?: string; manner?: string };
+      const beforeT = { sent: sent.length, former: (seat.formerAdvisors ?? []).length, will: seat.will, clerk: JSON.stringify(seat.clerk) };
+      tap("advisors:take:1");
+      await until(() => sent.length > beforeT.sent && seat.character.name !== "Adiega");
+      await sleep(400);
+      const greeting = sent.slice(beforeT.sent).find((each) => each.includes("at your service"));
+      check("W51 Take: the candidate replaces the advisor - formerAdvisors grows by one with Adiega, the will and the clerk kept, the card kept on the new character",
+        seat.character.name === taken.name && (seat.formerAdvisors ?? []).length === beforeT.former + 1 && seat.formerAdvisors!.at(-1)!.name === "Adiega" && seat.will === beforeT.will && JSON.stringify(seat.clerk) === beforeT.clerk
+        && seat.character.pitch === taken.pitch && seat.character.walk === taken.walk && seat.character.manner === taken.manner && seat.candidates === undefined, `${JSON.stringify(seat.character)}; former ${JSON.stringify(seat.formerAdvisors)}`);
+      check("W51 Take: the new advisor's greeting is sent and joins the transcript", !!greeting && greeting.startsWith(`I am candidate ${taken.name.slice("Ninurta".length)}, at your service.`) && seat.chat.some((each: { from: string; text: string }) => each.from === "advisor" && greeting.startsWith(each.text)) && !seat.ready, JSON.stringify(sent.slice(beforeT.sent)));
+      const name = seat.character.name;
+      const beforeStale = sent.length;
+      tap("advisors:take:0");
+      await until(() => sent.length > beforeStale);
+      check("W51 a Take tapped after the candidates are gone changes nothing", seat.character.name === name && (seat.formerAdvisors ?? []).length === beforeT.former + 1 && JSON.stringify(sent.slice(beforeStale)) === JSON.stringify(["Those candidates have gone their way. Send /advisors to call others."]), JSON.stringify(sent.slice(beforeStale)));
+      // While time passes: nothing is drafted
+      state.phase = "passing";
+      const beforeP = { sent: sent.length, drafted };
+      say("/advisors");
+      await until(() => sent.length > beforeP.sent);
+      await sleep(300);
+      state.phase = "audience";
+      check("W51 /advisors while time passes: \"Wait until time stops passing.\", nothing drafted", JSON.stringify(sent.slice(beforeP.sent)) === JSON.stringify(["Wait until time stops passing."]) && drafted === beforeP.drafted, JSON.stringify(sent.slice(beforeP.sent)));
     } finally {
       agents.standInForModels(undefined);
       await stop(host);

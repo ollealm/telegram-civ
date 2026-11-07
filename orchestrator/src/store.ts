@@ -17,6 +17,10 @@ export type Character = {
   pronouns?: string;
   /** Who they are and how they speak. Voice and background only: nothing in it bends their judgement. */
   sheet: string;
+  /** The card they were chosen by - their pitch, walk of life and manner - kept from the choosing; for an advisor chosen before 2026-11-07, the sheet shortened once by /advisors */
+  pitch?: string;
+  walk?: string;
+  manner?: string;
 };
 
 /** One age of a reign as it was lived: the advisor's telling, the fork put to the ruler, what the ruler said and what was settled. The saga is written from these. */
@@ -68,8 +72,8 @@ export type Seat = {
   /** The advisor's own operating plan: what it intends and why. Governing may update it; the will it may not. */
   plan?: string;
   character?: Character;
-  /** Advisors to choose from during setup, and whether the ruler has already sent for a second three */
-  candidates?: { name: string; title: string; pitch: string; sheet: string; pronouns?: string }[];
+  /** Advisors to choose from during setup or on /advisors, and whether the ruler has already sent for a second three at setup */
+  candidates?: { name: string; title: string; pitch: string; sheet: string; pronouns?: string; walk?: string; manner?: string }[];
   rerolled?: boolean;
   /** War is the ruler's alone unless they have said, in plain words, that the advisor may declare it */
   mayDeclareWar?: boolean;

@@ -2,7 +2,7 @@
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import { advisorGreeting, CLOSING_TAIL, LEAVE, loadSchema, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, placePictures, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
-import { card, draftCandidates, draftSovereign } from "./characters.ts";
+import { card, draftCandidates, draftSovereign, shortenToCard } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
@@ -66,21 +66,16 @@ const tell = async (seat: Seat, text: string, options?: { reply_markup: InlineKe
   if (bot && seat.chatId) await bot.api.sendMessage(seat.chatId, text, options).catch((error) => log(`telling ${seat.civ} failed:`, error.message));
 };
 
-/** Telegram's command menu, in this order (Olle, 2026-11-07: no /brief, no /saga); the lens words are fixed, not BRIEF_LENS's */
+/** Telegram's command menu, in this order (Olle, 2026-11-07: the age, the six briefs and the advisors; /map /will /status /character /clerk /advisor and the rest still work, off the menu); the lens words are fixed, not BRIEF_LENS's */
 const MENU = [
   { command: "onward", description: "Let the age pass" },
-  { command: "map", description: "The campaign map" },
   { command: "cities", description: "A brief on the cities" },
   { command: "military", description: "A brief on the army and navy" },
   { command: "science", description: "A brief on learning" },
   { command: "culture", description: "A brief on culture and faith" },
   { command: "trade", description: "A brief on trade and the treasury" },
   { command: "rivals", description: "A brief on the rival peoples" },
-  { command: "will", description: "Your standing wishes, as recorded" },
-  { command: "status", description: "Where the realm stands this moment" },
-  { command: "character", description: "Who stands at your side" },
-  { command: "clerk", description: "Turn to the clerk" },
-  { command: "advisor", description: "Turn back to your advisor" },
+  { command: "advisors", description: "Your advisor, and others who would serve" },
 ];
 
 /** The six briefs as buttons, two rows of three, on /brief (not under the letter, which ends on the door's question: Olle, 2026-11-07). A tap asks for that brief as if its command were typed */
@@ -596,7 +591,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     const replaced = seat().character?.name;
     try {
       if (seat().character) (seat().formerAdvisors ??= []).push({ name: seat().character!.name, title: seat().character!.title, pronouns: seat().character!.pronouns, until: (await host.state()).year });
-      seat().character = { name: chosen.name, title: chosen.title, pronouns: chosen.pronouns, sheet: chosen.sheet };
+      seat().character = { name: chosen.name, title: chosen.title, pronouns: chosen.pronouns, sheet: chosen.sheet, pitch: chosen.pitch, walk: chosen.walk, manner: chosen.manner };
       void wearName();
       if (!seat().clerk) draftClerk(seat().civ, ADVISOR_MODEL, chosen.name).then((made) => { seat().clerk = made; persist(); }).catch((error) => log("clerk drafting failed:", error.message));
       seat().setup = undefined;
@@ -656,7 +651,7 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.command("start", (ctx) =>
     seat().character
-      ? ctx.reply(`${seat().character!.name} is at your side, Majesty. Talk freely; time only passes when you say so or send /onward.\n\n/status  /map  /will  /usage  /character`)
+      ? ctx.reply(`${seat().character!.name} is at your side, Majesty. Talk freely; time only passes when you say so or send /onward.\n\n${MENU.map((each) => `/${each.command}`).join("  ")}`)
       : beginSetup(ctx),
   );
 
@@ -667,6 +662,48 @@ function setUpAdvisor(bot: Bot, index: number) {
           { reply_markup: new InlineKeyboard().text("Dismiss them and send for candidates", "advisor:new") })
       : beginSetup(ctx),
   );
+
+  // The advisor as a candidate's card, and three who would serve in their place (Olle, 2026-11-07): "Take" replaces them as the /character button's path does, "Keep" sends the three away
+  bot.command("advisors", async (ctx) => {
+    if (seat().setup && seat().civ) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
+    if (!seat().civ || !seat().character || seat().setup) return beginSetup(ctx);
+    if (state.phase === "setup") return ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.");
+    if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
+    const advisor = seat().character!;
+    const takenNames = state.seats.flatMap((other) => (other.character ? [other.character.name.split(/[ ,]/)[0]] : []));
+    // An advisor chosen before the card was kept: the sheet is shortened once, and the card kept on the character
+    const shortened = advisor.pitch ? Promise.resolve(undefined) : shortenToCard(advisor, seat().civ, ADVISOR_MODEL).catch((error) => { log(`shortening ${advisor.name}'s sheet to a card failed:`, error.message); return undefined; });
+    try {
+      const [presented, candidates] = await whileTyping(bot, ctx.chat!.id, Promise.all([shortened, draftCandidates(seat().civ, ADVISOR_MODEL, takenNames)]));
+      if (presented) Object.assign(advisor, presented);
+      seat().candidates = candidates;
+      persist();
+      const keyboard = new InlineKeyboard();
+      candidates.forEach((candidate, at) => keyboard.text(`Take ${candidate.name}`, `advisors:take:${at}`).row());
+      keyboard.text(`Keep ${advisor.name}`, "advisors:keep");
+      await ctx.reply(`${card(advisor)}\n\nThese three would serve in ${advisor.name}'s place:\n\n${candidates.map(card).join("\n\n")}`, { reply_markup: keyboard });
+    } catch (error) {
+      log("drafting candidates failed:", error);
+      await ctx.reply("The candidates are delayed on the road. Send /advisors to try again.");
+    }
+  });
+
+  bot.callbackQuery(/^advisors:(take:\d+|keep)$/, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    if (seat().setup || !seat().character) return;
+    if (ctx.match[1] === "keep") {
+      seat().candidates = undefined;
+      persist();
+      return void (await ctx.reply(`${seat().character!.name} stays at your side.`));
+    }
+    if (state.phase === "passing") return void (await ctx.reply("Wait until time stops passing."));
+    const choice = ctx.match[1].slice("take:".length);
+    // A button under an earlier /advisors names one of that draw: it takes no one from a later draw who happens to stand in the same place
+    const tapped = ctx.callbackQuery.message?.reply_markup?.inline_keyboard.flat().find((button) => "callback_data" in button && button.callback_data === ctx.callbackQuery.data)?.text;
+    const candidate = seat().candidates?.[Number(choice)];
+    if (!candidate || (tapped && tapped !== `Take ${candidate.name}`)) return void (await ctx.reply("Those candidates have gone their way. Send /advisors to call others."));
+    await chooseAdvisor(ctx, choice);
+  });
 
   bot.callbackQuery(/^people:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
