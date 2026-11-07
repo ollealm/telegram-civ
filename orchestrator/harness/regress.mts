@@ -1533,9 +1533,11 @@ const CASES: Record<string, () => Promise<void>> = {
     try {
       await import("../src/index.ts");
       await until(() => sent.includes("AD 800 - come to court.\n\nThe story of the age.\n\nDo we hold the course?"));
-      const letterRows = (markups[sent.indexOf("AD 800 - come to court.\n\nThe story of the age.\n\nDo we hold the course?")] as { inline_keyboard?: { callback_data: string }[][] } | undefined)?.inline_keyboard;
-      check("W51 a letter carries the six briefs as buttons, two rows of three - the one resent at a restart, and the round's own", letterRows?.map((row) => row.length).join() === "3,3" && letterRows.flat().map((button) => button.callback_data).join() === "brief:cities,brief:military,brief:science,brief:culture,brief:trade,brief:rivals"
-        && /await bot\.api\.sendMessage\(chatId, post\.letter, \{ reply_markup: briefButtons\(\) \}\)/.test(readFileSync("src/index.ts", "utf8")), JSON.stringify(letterRows));
+      // The letter ends on the door's question, with no buttons under it to divert from it (Olle, 2026-11-07): the one resent at a restart, and the round's own
+      const letterAt = sent.indexOf("AD 800 - come to court.\n\nThe story of the age.\n\nDo we hold the course?");
+      const source = readFileSync("src/index.ts", "utf8");
+      check("W51 a letter arrives with no buttons - the one resent at a restart, and the round's own; only /brief posts the briefs' buttons", letterAt >= 0 && markups[letterAt] === undefined
+        && /await bot\.api\.sendMessage\(chatId, post\.letter\)/.test(source) && source.match(/reply_markup: briefButtons\(\)/g)?.length === 1, JSON.stringify(markups[letterAt]));
       // A: closed with the /onward line and no list weighed: the follow-up is asked, once, and the ruler gets one message - the closing without its /onward,
       // then the list with its own (AD 1655: two messages in a row, each ending on /onward); the transcript keeps that one message, once, as the closing
       const asked = (from: number) => calls.slice(from).filter((each) => /without weighing the loose ends/.test(each.said)).length;

@@ -83,7 +83,7 @@ const MENU = [
   { command: "advisor", description: "Turn back to your advisor" },
 ];
 
-/** The six briefs as buttons, two rows of three: under every letter and on /brief. A tap asks for that brief as if its command were typed */
+/** The six briefs as buttons, two rows of three, on /brief (not under the letter, which ends on the door's question: Olle, 2026-11-07). A tap asks for that brief as if its command were typed */
 const BRIEFS = Object.keys(BRIEF_LENS) as (keyof typeof BRIEF_LENS)[];
 const briefButtons = () => {
   const keyboard = new InlineKeyboard();
@@ -432,7 +432,7 @@ async function playRound() {
       const chatId = post.seat.chatId!;
       // An emergency letter goes the moment it is written; its picture follows. A regular letter waits for its paintings
       const send = async () => {
-        await bot.api.sendMessage(chatId, post.letter, { reply_markup: briefButtons() }).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+        await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
         if (post.annal) { post.annal.undelivered = undefined; }
         post.seat.floor = undefined; persist(); // a letter opens the court with the advisor speaking
       };
@@ -1137,7 +1137,7 @@ async function recover() {
   for (const seat of state.seats)
     for (const annal of seat.annals ?? [])
       if (annal.undelivered) {
-        await tell(seat, [annal.heading, annal.story, annal.door, annal.question].filter(Boolean).join("\n\n"), seat.kind === "agent" ? undefined : { reply_markup: briefButtons() });
+        await tell(seat, [annal.heading, annal.story, annal.door, annal.question].filter(Boolean).join("\n\n"));
         annal.undelivered = undefined;
         resent.add(seat);
       }
