@@ -1334,6 +1334,13 @@ const CASES: Record<string, () => Promise<void>> = {
         && ![report.systemPrompt, first.systemPrompt, first.prompt].some((text) => /says? nothing|goes ahead if|unless the ruler takes it up|say you have decided/.test(text)));
       check("W53 the loose ends are intentions too", first.systemPrompt.includes("numbered, one line each saying what you will do, as your own intention in the shape of the matters (") && !/unless the ruler takes it up/.test(readFileSync("src/agents.ts", "utf8")));
       check("W53 years, never turns: the letter writer and the audience say in years what the briefing counts in turns", [report.systemPrompt, first.systemPrompt].every((prompt) => prompt.includes("Time is years and seasons, never turns: the briefing gives what is coming as a year and as how long from now - say whichever reads better; places are cities")));
+      // Envoys (2026-11-07, data/briefs/envoys-2026-11-07.md): the host takes the envoy order and set_orders offers it (schemaProblems would name either missing),
+      // words go with a trade and with an answer, and the rule line is in the prompts of the audience and the letter
+      const tools = readFileSync("src/agents.ts", "utf8");
+      check("W53 set_orders serves words with a trade and with an answer, and the envoy order the host takes", schema.orderFields.immediate.includes("envoy") && agents.schemaProblems(schema).length === 0
+        && /want: z\.array[^\n]*\n\s*words: z\.string\(\)\.optional\(\)/.test(tools) && /answerOffers: z\.array\(z\.object\(\{[^\n]*words: z\.string\(\)\.optional\(\)/.test(tools) && /envoy: z\.array\(z\.object\(\{ to: z\.string\(\), words: z\.string\(\)/.test(tools),
+        JSON.stringify(agents.schemaProblems(schema)));
+      check("W53 the rule line on words between courts is in the audience's prompt and the letter writer's", [first.systemPrompt, report.systemPrompt].every((prompt) => prompt.includes("Words may go with an offer or an answer, or alone by envoy, to another court; they reach that court's advisor as written, and nothing else does. A peace or a friendship carries none of its own: its words go by an envoy beside it.")));
       check("W53 the audience's rules count no turns: the age passes, and the look-ins are every few years", !/\b\d+ turns\b|turns pass|every few turns/.test(first.systemPrompt) && first.systemPrompt.includes("Then the next age passes while you govern by the recorded will and look in on the realm every few years."));
       check("W53 the advisor's reply clears them", seat.agenda === undefined && seat.road === undefined);
       // A brief between the first reply and the next word: the orders stay owed, and the brief is not told so
@@ -1460,6 +1467,128 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W55 the friendship's year is the calendar's year ten turns on, and the span its distance", told?.[1] === after.year && Number(told?.[2]) === yearNumber(after.year) - yearNumber(before.year), `${friendship} / the year ten turns on: ${after.year}`);
       check("W55 the turn's length changes inside that span (the case the multiplication got wrong)", yearNumber(after.year) - yearNumber(before.year) !== 10 * pace, `${before.year} -> ${next.year} -> ${after.year}`);
     } finally { await stop(host); }
+  },
+  async W56() { // envoys (2026-11-07, brief data/briefs/envoys-2026-11-07.md): words from one court to another, with an offer, with an answer, or alone. At AD 1916
+    // Germany offered gold for a war on the Maya and only the terms reached the other courts. Planted on the run32-t216 world: Germany and England advised, and
+    // Siam's court taken out of host.json, so Siam is a power with no advisor to read words
+    const dir = mkdtempSync(join(tmpdir(), "regress-run32-t216-peace-"));
+    cpSync(join(FIXTURES, "run32-t216-peace"), dir, { recursive: true });
+    const hostJson = JSON.parse(readFileSync(join(dir, "host.json"), "utf8"));
+    delete hostJson.orders.Siam;
+    writeFileSync(join(dir, "host.json"), JSON.stringify(hostJson));
+    const host = await start("run32-t216-peace", "", dir);
+    try {
+      const game = (await get("/state")).json as { turn: number; majorCivs: { civ: string; alive: boolean }[] };
+      const known = ((await get("/briefing?civ=Germany")).json.knownCivs ?? []) as { civ: string }[];
+      const unadvised = known.map((each) => each.civ).find((name) => !["England", "Germany", "Japan"].includes(name) && game.majorCivs.some((each) => each.civ === name && each.alive));
+      // 0. A peace carries no words of its own: Japan's offer of peace waits on England's desk (the fixture's), and an envoy from Japan is named on its entry
+      const peaceBefore = ((await get("/briefing?civ=England")).json.peaceOffers ?? []) as string[];
+      await orders("Japan", { envoy: [{ to: "England", words: "We stop at the strait; the islands are enough." }] });
+      const peaceAfter = ((await get("/briefing?civ=England")).json.peaceOffers ?? []) as string[];
+      check("W56 an envoy beside a waiting peace is named on the peace offer's entry", peaceBefore.some((line) => line.startsWith("Japan offers")) && !peaceBefore.some((line) => /envoy/.test(line))
+        && peaceAfter.some((line) => line.startsWith("Japan offers") && line.endsWith(" - an envoy from Japan's court waits beside it, with words (envoys)")), `${JSON.stringify(peaceBefore)} -> ${JSON.stringify(peaceAfter)}`);
+      const OFFER = "Japan grows on the sea; a little gold now keeps our friendship warm.";
+      const ANSWER = "We thank you, but England takes no gold it has not earned.";
+      const ENVOY = "Should Japan reach for our coast, we will not sit still. Will you?";
+      // 1. An offer with words: the reply says they go with it, and the waiting offer carries them verbatim in England's briefing
+      const offered = await orders("Germany", { trade: [{ with: "England", give: [{ item: "Gold", amount: 10 }], words: OFFER }] });
+      check("W56 an offer with words to an advised court: proposed, and the reply says the words go with it as written", (offered.json.done ?? []).some((line: string) => /^Proposed to England/.test(line) && line.includes("(Your words go with it to England's court, as you wrote them.)")), JSON.stringify(offered.json));
+      const waiting = ((await get("/briefing?civ=England")).json.tradeOffers ?? []) as string[];
+      check("W56 England's briefing carries the offer's words verbatim, marked as Germany's", waiting.some((line) => line.startsWith("Germany: ") && line.includes(`with words from Germany's court, as written: “${OFFER}”`)), JSON.stringify(waiting));
+      check("W56 Germany's own log says the words went with the offer", (await logOf("Germany", game.turn)).some((line) => line.text.includes(`We proposed a trade to England`) && line.text.endsWith(`, with the words: “${OFFER}”`)));
+      // 2. The bookkeeping enters it: the summons line carries the words, and it wakes England's advisor as an advised court's offer always has
+      const first = (await post("/advance", { turns: 1, wake: true })).json as { wake?: Record<string, string[]> };
+      const summons = (await logOf("England", game.turn)).find((line) => /^Germany \(an advised court\) offers a deal/.test(line.text));
+      check("W56 the summons line carries the words", !!summons && summons.text.includes(`; with the words: “${OFFER}” It waits for your answer`), summons?.text);
+      check("W56 and it wakes England's advisor, as an advised court's offer does", (first.wake?.England ?? []).some((line) => line.includes(OFFER)), JSON.stringify(first.wake?.England));
+      // 3. A refusal with words: Germany's line on the answer carries them
+      const refused = await orders("England", { answerOffers: [{ power: "Germany", answer: "refuse", terms: "we give nothing; they give Gold x10", words: ANSWER }] });
+      check("W56 a refusal with words: refused, and the reply says the words go back", (refused.json.done ?? []).some((line: string) => /^Refused Germany's offer/.test(line) && line.includes("(Your words go with it to Germany's court, as you wrote them.)")), JSON.stringify(refused.json));
+      const back = (await logOf("Germany", game.turn)).find((line) => /^Our proposal to England .* was refused/.test(line.text));
+      check("W56 Germany's log line on the answer carries England's words", !!back && back.text.endsWith(`; with England's words: “${ANSWER}”`), back?.text);
+      // 4. An envoy alone: in the briefing's envoys at once, told once in the log at the bookkeeping, no wake, and gone after the desk's wait
+      const sent = await orders("England", { envoy: [{ to: "Germany", words: ENVOY }] });
+      check("W56 an envoy alone is sent, and a second one the same year is refused", (sent.json.done ?? []).some((line: string) => /^An envoy carries your words to Germany's court/.test(line))
+        && ((await orders("England", { envoy: [{ to: "Germany", words: "Again." }] })).json.failed ?? []).some((line: string) => /already left this year/.test(line)), JSON.stringify(sent.json));
+      const fresh = ((await get("/briefing?civ=Germany")).json.envoys ?? []) as { from: string; words: string; sent: string; note: string }[];
+      check("W56 the envoy waits in Germany's briefing with who sent it, when, and its words verbatim", fresh.length === 1 && fresh[0].from === "England" && fresh[0].words === ENVOY && /^(?:AD \d+|\d+ BC)$/.test(fresh[0].sent) && /just arrived/.test(fresh[0].note), JSON.stringify(fresh));
+      const turn2 = (await post("/advance", { turns: 1, wake: true })).json as { wake?: Record<string, string[]> };
+      const told = (await logOf("Germany", game.turn)).filter((line) => line.text.includes(ENVOY) && /^England's court sends word by envoy/.test(line.text));
+      check("W56 the envoy is told in Germany's log once, in the sender's words", told.length === 1, JSON.stringify(told));
+      check("W56 an envoy wakes no one mid-age: it is read at the next look-in", !JSON.stringify(turn2.wake ?? {}).includes(ENVOY), JSON.stringify(turn2.wake));
+      // Kept across a restart, as the desk is
+      await stop(host);
+      const again = await start("run32-t216-peace", "", host.dir);
+      try {
+        const kept = ((await get("/briefing?civ=Germany")).json.envoys ?? []) as { words: string; note: string }[];
+        check("W56 after a restart the envoy still waits, with its lapse dated", kept.length === 1 && kept[0].words === ENVOY && /stays in the briefing until (?:AD \d+|\d+ BC), /.test(kept[0].note), JSON.stringify(kept));
+        // The desk's wait (DESK_WAITS, 8 turns) from the bookkeeping that told it; an advance may stop early on the world's news, so one turn at a time
+        const arrived = told[0]?.turn ?? game.turn + 2;
+        let at = (await get("/state")).json.turn as number;
+        const stays: number[] = [];
+        for (let step = 0; step < 14 && at < arrived + 9; step++) { if (((await get("/briefing?civ=Germany")).json.envoys ?? []).length) stays.push(at); await post("/advance", { turns: 1 }); at = (await get("/state")).json.turn; }
+        const later = (await get("/briefing?civ=Germany")).json;
+        check("W56 the envoy stays the desk's wait from its telling, then leaves the briefing, told no second time", Math.max(...stays) === arrived + 7 && (later.envoys ?? []).length === 0 && (await logOf("Germany", game.turn)).filter((line) => line.text.includes(ENVOY)).length === 1, JSON.stringify(later.envoys));
+        // 5. Words to an unadvised power: the trade goes, the words are dropped and the reply says so; an envoy alone is refused
+        if (unadvised) {
+          const toAi = await orders("Germany", { trade: [{ with: unadvised, give: [{ item: "Gold", amount: 5 }], words: "For your trouble." }] });
+          check("W56 words with an offer to an unadvised power: the offer goes, the reply says the words were not carried", (toAi.json.done ?? []).some((line: string) => line.startsWith(`Proposed to ${unadvised}`) && line.includes(`(${unadvised} has no advisor at court to read words: yours were not carried.)`)), JSON.stringify(toAi.json));
+          const envoyAi = await orders("Germany", { envoy: [{ to: unadvised, words: "Hear us." }] });
+          check("W56 an envoy to an unadvised power is refused with that reason", (envoyAi.json.failed ?? []).some((line: string) => line.includes(`${unadvised} has no advisor at court to read words: no envoy was sent`)), JSON.stringify(envoyAi.json));
+        } else check("W56 the fixture has an unadvised power Germany has met", false, JSON.stringify(known));
+        const long = await orders("Germany", { envoy: [{ to: "England", words: "x ".repeat(250) }] });
+        check("W56 words past a line or two are refused, and no envoy goes", (long.json.failed ?? []).some((line: string) => /at most 400 characters/.test(line)) && ((await get("/briefing?civ=England")).json.envoys ?? []).length === 0, JSON.stringify(long.json));
+        // 7. An answered offer's desk clock is forgotten at once, by the desk's own key (termsOf): since end-years the forget used the brief, whose dated end
+        // never matched, and the clock stayed until the bookkeeping swept it
+        const clocks = () => Object.keys(JSON.parse(readFileSync(join(dir, "host.json"), "utf8")).diplomacy?.dealOfferedOn ?? {}).filter((key) => key.startsWith("England<Germany: "));
+        await orders("Germany", { trade: [{ with: "England", give: [{ item: "Gold per turn", amount: 1 }] }] });
+        await post("/advance", { turns: 1 });
+        const entered = clocks();
+        const dated = (((await get("/briefing?civ=England")).json.tradeOffers ?? []) as string[]).find((line) => line.startsWith("Germany: ") && /Gold per turn/.test(line)) ?? "";
+        const terms = dated.slice("Germany: ".length).replace(/ \((?:waits until|lapses in) .*$/, "");
+        await orders("England", { answerOffers: [{ power: "Germany", answer: "refuse", terms }] });
+        check("W56 an answered offer's desk clock is forgotten at once, though its terms carry a dated end", entered.length === 1 && / - until (?:AD \d+|\d+ BC)/.test(terms) && clocks().length === 0, `entered ${JSON.stringify(entered)}; terms ${terms}; after ${JSON.stringify(clocks())}`);
+      } finally { await stop(again); }
+    } finally { await stop(host); }
+  },
+  async W57() { // the emergency letter's age (2026-11-07, from the dismissal-gate brief's finding): at AD 1942 an urgent council's letter went out with the plain map,
+    // because the emergency letter never asked for the age. It now carries the age so far, from the round's start to the stop, and the dispatch paints the
+    // campaign map from it; a failed /age leaves the plain map and is logged. The round runs on the real host of t100-world, its first advance stopped by war news
+    const host = await start("t100-world");
+    const agents = await import("../src/agents.ts");
+    const { state } = await import("../src/store.ts");
+    const { playRound } = await import("../src/round.ts");
+    const hostApi = (await import("../src/host.ts")).host as any;
+    const realAdvance = hostApi.advance, realAge = hostApi.age;
+    try {
+      const game = (await get("/state")).json as { year: string; majorCivs: { civ: string; alive: boolean }[] };
+      const [ours, other] = game.majorCivs.filter((each) => each.alive).map((each) => each.civ);
+      agents.standInForModels((asked) => ({ text: "Stand-in.", data: { summons: "War, Majesty.", dispatch: "The enemy marches.", question: "Do we fight?", journal: "War came.", image: null } }));
+      state.phase = "audience";
+      state.pendingRound = undefined;
+      state.seats = [{ civ: ours, bot: 0, chatId: 4242, rulerName: "the ruler", will: "", journal: [], chat: [], ready: true, character: { name: "Adiega", title: "Steward", sheet: "Careful." } } as any];
+      // The first advance plays its turns and comes back stopped by war news, with the age not yet run out
+      hostApi.advance = async (...args: unknown[]) => ({ ...(await realAdvance(...args)), stoppedEarly: `${other} has declared war on ${ours}!`, declaredBy: other });
+      const run = async () => {
+        const dispatched: any[] = [], logged: string[] = [];
+        await playRound(state.seats, { working: (_seat, work) => work, dispatch: async (_seat, dispatch) => { dispatched.push(dispatch); }, notice: async () => {}, chronicle: async () => {}, log: (...args) => logged.push(args.join(" ")) });
+        return { dispatched, logged };
+      };
+      const first = await run();
+      const urgent = first.dispatched[0];
+      check("W57 an urgent stop's letter carries the age so far, from the round's start", /^Emergency council/.test(urgent?.heading ?? "") && !!urgent?.age && Array.isArray(urgent.age.marches), JSON.stringify(urgent ? { heading: urgent.heading, age: urgent.age && Object.keys(urgent.age) } : first.logged.slice(-4)));
+      check("W57 and the dispatch paints the campaign map from an age that came, the plain map only without one", /traced\.then\(\(png\) => \{ if \(!age\) log\(`\$\{seat\.civ\}: no age summary came with the letter; plain map painted`\); return png && age \? campaignMap\(seat\.civ, age, png\) : paintedMap\(seat\.civ\); \}\)/.test(readFileSync("src/index.ts", "utf8")));
+      // A failed /age: the letter still goes, without an age, and the failure is logged
+      state.phase = "audience"; state.pendingRound = undefined; state.seats[0].ready = true;
+      hostApi.age = async () => { throw new Error("planted /age failure"); };
+      const second = await run();
+      check("W57 a failed /age: the emergency letter still goes, without an age, and the failure is logged", second.dispatched.length === 1 && second.dispatched[0].age === undefined && second.logged.some((line) => line.startsWith(`the age summary for ${ours} failed: planted /age failure`)), second.logged.filter((line) => /age summary/.test(line)).join(" | "));
+    } finally {
+      hostApi.advance = realAdvance; hostApi.age = realAge;
+      state.pendingRound = undefined; state.ageStarts = undefined; state.phase = "audience"; // what the stopped rounds left, not for the next case
+      agents.standInForModels(undefined);
+      await stop(host);
+    }
   },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
     // dismissed by its own call gets no loose-ends follow-up (a 600 BC list came after the closing, and the dismissal fired under it); a silent closing
