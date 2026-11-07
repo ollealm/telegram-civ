@@ -994,17 +994,6 @@ export const wonderBoon = (wonder: string, civ: string, rulebook: unknown) =>
     `${wonder}, completed by ${civ}.\n\nRulebook entry:\n${JSON.stringify(rulebook)}`,
   );
 
-/** What each age changed in daily life: the faces a painter may choose from, each taken once across all peoples */
-const ERA_FACES: Record<string, string> = {
-  Classical: "the forum on market day; the aqueduct or the paved road being laid; the theatre; a temple's steps; the scribes in a library; the phalanx drilling in bronze; the potters' quarter; the harbour of triremes",
-  Medieval: "the castle walls going up; the cathedral works; the scriptorium; the guild hall; the mill by the river; the fair; the knights' stable and tilt yard; the monastery garden; the town gate at dusk",
-  Renaissance: "the printing shop; the painter's workshop; the counting house; the university lecture; the star-gazer's tower; the gunpowder drill; the merchant's map room; the harbour of carracks; the anatomist's table",
-  Industrial: "the factory floor; the mine head; the canal barge; the steam pump; the mill town street; the public school; the ironworks at night; the cotton hall; the new bridge",
-  Modern: "the railway crowd; the telegraph office; the gaslit street; the newspaper press; the factory whistle at dawn; the harbour cranes; the hospital ward; the department store; the tram",
-  Atomic: "the airfield; the radio room; the cinema queue; the power station; the tractor in the field; the apartment blocks going up; the motor road; the football ground",
-  Information: "the computer hall; the container port; the television in the kitchen; the highway interchange; the laboratory; the satellite dish on the roof; the airport concourse",
-};
-
 /** A people's entry into a new age: the Chronicler paints the people in the age, in a place of theirs, choosing a face of the age no other people has had */
 export const eraScene = (civ: string, era: string, year: string, recent: PublicEvent[], cities: { name: string; capital: boolean; size: number; land: string }[] = [], paintedThisSeason: string[] = []) =>
   runStructured(
@@ -1012,7 +1001,7 @@ export const eraScene = (civ: string, era: string, year: string, recent: PublicE
     HERALD_MODEL,
     `You are the Chronicler, choosing the one picture that marks a people's entry into a new age. Not a monument, not a parade, not an allegory, and not the technology that opened the age: paint the people in the age - one instant of ordinary life in which the new age shows in the everyday, the dress, the tools, the buildings, the pace of the day.
 Set it in one of their cities, named below with the lie of its land, and let the land show: a river town under mountains and a coastal town among forests are different pictures before anything else differs.
-Choose one face of the age: ${ERA_FACES[era.replace(/ era$/i, "")] ?? "whatever this age changed in daily life"}. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year.
+Choose one face of the age, one thing it changed in daily life. A face already painted for another people entering this age (below, and in this same season) is taken - choose another, even when what this people has lately done points to the taken one; otherwise, if their late doings suggest the face, take that one. ${PICTURE_CRAFT} The age and the calendar do not always agree in this world - a people may reach an age early or late - and when they differ, the age wins for everything made: machines, tools, weapons, ships and buildings are true to the ${era}, never aged down or up to fit the year.
 The caption is read under the picture, after a heading set for you that names who entered which age and when: write no title, only one sentence (up to 25 words) on what the age looked like in this place and what came of it there - never the entry into the age, its year, or the learning that opened it, again. The reader can already see the picture: never describe it. In the world's words, no chancery terms.`,
     `${civ} entered the ${era} in ${year}.\n\n${ageLine(civ, era)}\n\nTheir cities:\n${cities.map((city) => `- ${city.name}${city.capital ? " (the capital)" : ""}, ${city.land}`).join("\n") || "(unknown)"}\n\nWhat they have lately done:\n${recent.map((event) => `${event.year}: ${event.text}`).join("\n") || "(nothing recorded)"}\n\n${paintedThisSeason.length ? `Painted for other peoples entering the ${era} earlier in this game, and this same season for other peoples entering an age (their faces are taken):\n${paintedThisSeason.map((line) => `- ${line}`).join("\n")}\n\n` : ""}${alreadyPainted(["chronicle"])}`,
     Picture.extend({ caption: z.string().describe("Read under the picture, after the heading set for you: one sentence (up to 25 words), no title - never the entry into the age, its year or the learning that opened it, and never a description of the picture") }),

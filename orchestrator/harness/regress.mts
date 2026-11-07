@@ -1629,6 +1629,8 @@ const CASES: Record<string, () => Promise<void>> = {
         && !eraCall.prompt.slice(eraCall.prompt.indexOf("Pictures already painted in recent years")).includes("printing shop"), block);
       check("W58 the age's writer is told the heading names the entry, and not to restate the entry, the year or the learning; no title asked", /after a heading set for you that names who entered which age and when: write no title, only one sentence \(up to 25 words\) on what the age looked like in this place and what came of it there - never the entry into the age, its year, or the learning that opened it, again/.test(eraCall.systemPrompt)
         && !eraCall.systemPrompt.includes("a short title, a full stop") && /no title - never the entry into the age/.test(JSON.stringify(eraCall.outputSchema)), eraCall.systemPrompt.slice(-700));
+      check("W59 no fixed list of faces: the writer is asked for one thing the age changed in daily life, and no face of the old lists is in the prompt (era-faces-list brief)", eraCall.systemPrompt.includes("Choose one face of the age, one thing it changed in daily life.")
+        && !/the printing shop|the star-gazer's tower|the airfield|a temple's steps|the railway crowd|the computer hall|the castle walls going up|the factory floor/.test(eraCall.systemPrompt), eraCall.systemPrompt.slice(-900));
       // The tag still keeps an age from being painted twice: a caption with the break, and one from before it (with "era")
       for (const kept of [aged[0], { ...oldFace, caption: `${ours} enter the Renaissance era, AD 900. Old. Old sentence.` }]) {
         state.pictures = [kept];
