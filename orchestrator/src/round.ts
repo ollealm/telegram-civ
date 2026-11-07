@@ -195,7 +195,7 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
 
     // One realm's failed letter must not cost the others theirs
     // What every realm's people did in the age, from the host: the letters are written from their own, the chapter from what the world could see of all of them
-    const ages = new Map(await Promise.all(seats.map(async (seat) => [seat.civ, await host.age(seat.civ, finished.fromTurn).catch(() => undefined)] as const)));
+    const ages = new Map(await Promise.all(seats.map(async (seat) => [seat.civ, await host.age(seat.civ, finished.fromTurn).catch((error) => { io.log(`the age summary for ${seat.civ} failed:`, error.message); return undefined; })] as const)));
     const campaigns = seats.flatMap((seat) => {
       const age = ages.get(seat.civ);
       if (!age) return [];

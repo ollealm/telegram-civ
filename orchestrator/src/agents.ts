@@ -342,7 +342,7 @@ function gameTools(seat: Seat, moment: Moment, schema: HostSchema) {
   tools.push(
     tool(
       "dismiss_court",
-      "Ends the audience exactly like the /onward command. Call it once, after any orders are set and your closing is written, when the ruler has let you know - in whatever words - that they are done for now and nothing of yours still needs their answer.",
+      "Ends the audience exactly like the /onward command. Yours only once you have offered /onward in this audience. Call it once, after any orders are set and your closing is written, when the ruler's word says the audience is over and nothing of yours still needs their answer. A word that answers a question of yours, names a loose end or a matter, or gives an order, a number or a choice is never that, whatever its tone.",
       {},
       async () => {
         seat.dismissed = true;
@@ -444,10 +444,17 @@ function gameTools(seat: Seat, moment: Moment, schema: HostSchema) {
  *  while the road and the matters wait: only the ruler's own /onward closes that audience. That reply tells what the advisor will do, and its
  *  orders wait too - for the ruler's next word, or the pass their /onward brings - unless the /onward came with the word */
 export const servedTools = (seat: Seat, { canRecordWill = false, readOnly = false, sideTools = [], audience = false, lastWord = false, brief = false }: Moment) =>
-  brief ? [...READ_TOOLS] : [...READ_TOOLS, ...(readOnly ? [] : [...(audience && firstWordWaits(seat) && !lastWord ? [] : ["set_orders"]), "update_plan", ...(canRecordWill ? ["record_rulers_will", ...(seat.kind === "agent" || firstWordWaits(seat) ? [] : ["dismiss_court"])] : [])]), ...sideTools];
+  brief ? [...READ_TOOLS] : [...READ_TOOLS, ...(readOnly ? [] : [...(audience && firstWordWaits(seat) && !lastWord ? [] : ["set_orders"]), "update_plan", ...(canRecordWill ? ["record_rulers_will", ...(seat.kind === "agent" || firstWordWaits(seat) || !onwardOffered(seat) ? [] : ["dismiss_court"])] : [])]), ...sideTools];
 
 /** The road and the matters the letter kept back still wait: the reply now due answers the ruler's first word */
 const firstWordWaits = (seat: Seat) => !!(seat.road || seat.agenda?.length);
+/** The word that ends an audience and lets the years pass */
+export const LEAVE = ["onward", "go"]; // the advisors offer /onward; /go is the quick way to type it
+/** The end of a closing: its fixed line ("Name any you want to raise, ask for a /brief, or /onward") or the bare /onward - taken off whole wherever it must go */
+export const CLOSING_TAIL = new RegExp(`(?:\\s*Name any you want to raise[^\\n]*?(?:\\n\\s*)?)?\\s*/(?:${LEAVE.join("|")})\\s*$`, "i");
+/** The advisor has offered /onward in this audience: one of its messages since the letter ended on the closing tail. Only then may it close the court by
+ *  its own call (Olle, 2026-11-07: a court closed on the ruler's "1", which took up loose end one) */
+const onwardOffered = (seat: Seat) => seat.chat.slice(Math.max(seat.chat.findLastIndex((entry) => entry.letter), 0)).some((entry) => entry.from === "advisor" && CLOSING_TAIL.test(entry.text));
 
 /** Everything one model call did - what the dev feed shows */
 export type Trace = {
@@ -708,6 +715,7 @@ export const advisorBrief = async (seat: Seat, command: BriefCommand, turnsPerRo
 export const advisorReply = async (seat: Seat, message: string, turnsPerRound: number, lastWord = false, brief = false) => {
   const firstWord = !brief && firstWordWaits(seat);
   const ordersWait = firstWord && !lastWord;
+  const mayDismiss = !firstWord && onwardOffered(seat);
   const briefing = await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)");
   // The picture paint_decision is given is written here: the people's age and its media come with the briefing
   const age = ageLine(seat.civ, await eraOf(seat.civ, briefing));
@@ -729,7 +737,7 @@ These few are not left to your judgement.
 - ${warRule(seat)}
 ${brief ? "- A brief ends on its last sentence: no closing line and no /onward." : `- Never among the loose ends: war, peace, alliances and pacts, anything costing more than about a third of the treasury, and anything that touches the age's open question - they belong in the conversation.${state.pendingRound?.urgent ? " This court sits in emergency council: there is no list at all." : ""}
 - The closing ends with the line "Name any you want to raise, ask for a /brief, or /onward". Offer only /onward to leave (a ruler may type /go; it means the same). Do not offer it while a question of yours still needs their word; a "yes" answers that one question and the audience goes on.
-- Time passes only when the ruler dismisses the court: with /onward, or by letting you know in their own way that they are done ("proceed", "sounds good, do that", a thumbs-up to your closing)${firstWord ? " - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience" : ""}. Read it as a person would. When their message reads as a close and nothing of yours is left open, set the orders, give your closing, settle any loose end still listed as you said it would be done in that same set_orders, and call dismiss_court; then do not end with the /onward line - your call dismisses the court - and list no loose ends: they are settled, and the ruler has read what you will do. If one deserves a word, it belongs in the closing's own sentences. When you are unsure whether they meant to leave, do not dismiss: end with the /onward line and let them tap it.`}
+- Time passes only when the ruler dismisses the court: with /onward, or by letting you know in their own way that they are done ("proceed", "sounds good, do that", a thumbs-up to your closing)${firstWord ? " - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience" : ""}. A word that answers a question of yours, names a loose end or a matter, or gives an order, a number or a choice is never a close, whatever its tone: only a word that says the audience is over counts.${mayDismiss ? " When their message says so and nothing of yours is left open, set the orders, give your closing, settle any loose end still listed as you said it would be done in that same set_orders, and call dismiss_court; then do not end with the /onward line - your call dismisses the court - and list no loose ends: they are settled, and the ruler has read what you will do. If one deserves a word, it belongs in the closing's own sentences." : firstWord ? "" : " You have not offered /onward in this audience yet, so the court is not yours to close: when their message says so, give your closing and end with the /onward line for them to tap."} When you are unsure whether they meant to leave, do not dismiss: end with the /onward line and let them tap it.`}
 ${seat.clerk ? `- Questions about the game's rules (what a wonder or a people's gift does) or about this court's workings (commands, ages, councils) are for ${seat.clerk.name}, ${seat.clerk.title}; you may send the ruler there ("ask ${seat.clerk.name}") rather than guess, and then end your message with a line that is exactly "/clerk" (the clerk holds the floor until the ruler calls you back with /advisor or your name).\n` : ""}- proclaim, once an audience at most: let something the ruler said leak to the heralds - a remark, a mood, a turn of phrase with their character in it - kept close to their own phrasing. Never a plan, the treasury, research or a weakness. If the ruler said nothing in their own voice, nothing leaks; but a ruler who speaks in character should be heard of in the world's history more often than not.
 Then the next age passes while you govern by the recorded will and look in on the realm every few years.`,
     // The realm does not change during an audience, so the briefing is handed over instead of fetched by tool each time

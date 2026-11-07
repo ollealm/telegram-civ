@@ -1315,7 +1315,7 @@ const CASES: Record<string, () => Promise<void>> = {
       await agents.advisorReply(seat, "Go on.", 12);
       const first = asked.find((each) => each.role === "advisor")!;
       check("W53 the reply to the first word is served neither dismiss_court nor set_orders, and is told that only /onward ends this audience", !!first.served?.includes("record_rulers_will") && !first.served.includes("dismiss_court") && !first.served.includes("set_orders") && seat.ordersOwed === true
-        && first.systemPrompt.includes('a thumbs-up to your closing) - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience. Read it as a person would.'), JSON.stringify(first.served));
+        && first.systemPrompt.includes('a thumbs-up to your closing) - but not in this reply to their first word: however it reads, the road and the matters come first, and only their /onward ends this audience. A word that answers a question of yours, names a loose end or a matter, or gives an order, a number or a choice is never a close, whatever its tone: only a word that says the audience is over counts. When you are unsure') && !first.systemPrompt.includes('call dismiss_court'), JSON.stringify(first.served));
       check("W53 the closing's fixed line offers a brief, and the old line is gone", first.systemPrompt.includes('- The closing ends with the line "Name any you want to raise, ask for a /brief, or /onward".')
         && !/Name any you want to raise; otherwise/.test(readFileSync("src/agents.ts", "utf8") + readFileSync("src/index.ts", "utf8")));
       check("W53 the ruler's first word puts the road and then the matters in the advisor's input, to be brought in their shape", first.prompt.includes("What you meant to bring to this audience, prepared before the ruler spoke. Their first word opens the audience, it does not close it: the road and the matters come before anything of yours is settled or the court closes.") && first.prompt.includes("Answer what the ruler said first; then bring all of it in this same reply")
@@ -1348,9 +1348,21 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W53 a second word does not carry them", !second.prompt.includes("What you meant to bring to this audience"));
       check("W53 the next word sets the orders the first reply told: it is served set_orders and told they are owed, and then they are not", !!second.served?.includes("set_orders")
         && second.prompt.includes("Your reply to the ruler's first word told them what you will do, and its orders are not set yet: set them in this reply, as you told them, with whatever the ruler's word now changes.\n\nThe ruler now says:\nAnd the harbour?") && seat.ordersOwed === undefined);
-      check("W53 from the second word on, plain words close the court again: dismiss_court is served, the rule has no first-word clause, and the call dismisses", !!second.served?.includes("dismiss_court")
-        && second.systemPrompt.includes("a thumbs-up to your closing). Read it as a person would.") && !second.systemPrompt.includes("not in this reply to their first word")
-        && (await agents.callRealmTool(seat, { canRecordWill: true }, schema, "dismiss_court", {}), seat.dismissed === true), JSON.stringify(second.served));
+      // The dismissal gate (2026-11-07, data/briefs/dismissal-gate-2026-11-07.md): dismiss_court is the advisor's only once it has offered /onward in this
+      // audience - a message of its own since the letter ending on the closing tail; a word that answers, names a loose end, orders or chooses is never a close
+      const CLOSE_RULE = "A word that answers a question of yours, names a loose end or a matter, or gives an order, a number or a choice is never a close, whatever its tone: only a word that says the audience is over counts.";
+      check("W53 the second word, before the advisor has offered /onward: dismiss_court is not served, a call cannot dismiss, and the rule says the court is not yet its to close", !second.served?.includes("dismiss_court")
+        && second.systemPrompt.includes(`a thumbs-up to your closing). ${CLOSE_RULE} You have not offered /onward in this audience yet, so the court is not yours to close: when their message says so, give your closing and end with the /onward line for them to tap. When you are unsure`)
+        && !second.systemPrompt.includes("call dismiss_court") && !second.systemPrompt.includes("Read it as a person would") && !second.systemPrompt.includes("not in this reply to their first word")
+        && (await agents.callRealmTool(seat, { canRecordWill: true }, schema, "dismiss_court", {}).catch(() => {}), !seat.dismissed), JSON.stringify(second.served));
+      seat.chat.push({ from: "ruler", text: "And the harbour?" }, { from: "advisor", text: "The harbour waits on the walls; both are set.\n\nName any you want to raise, ask for a /brief, or /onward" });
+      asked.length = 0;
+      await agents.advisorReply(seat, "Thank you, that is all for today.", 12);
+      const third = asked.find((each) => each.role === "advisor")!;
+      check("W53 once the advisor has offered /onward, plain words close the court again: dismiss_court is served, the rule tells it when, and the call dismisses", !!third.served?.includes("dismiss_court")
+        && third.systemPrompt.includes(`a thumbs-up to your closing). ${CLOSE_RULE} When their message says so and nothing of yours is left open, set the orders, give your closing`) && !third.systemPrompt.includes("not yours to close")
+        && (await agents.callRealmTool(seat, { canRecordWill: true }, schema, "dismiss_court", {}), seat.dismissed === true), JSON.stringify(third.served));
+      check("W53 the dismiss_court tool says it is the advisor's only once /onward is offered, and only on a word that says the audience is over", readFileSync("src/agents.ts", "utf8").includes("Yours only once you have offered /onward in this audience. Call it once, after any orders are set and your closing is written, when the ruler's word says the audience is over and nothing of yours still needs their answer. A word that answers a question of yours, names a loose end or a matter, or gives an order, a number or a choice is never that, whatever its tone."));
       seat.dismissed = false;
       // A first word that came with /onward is the ruler's last: its orders are set in that same reply, and none are owed
       Object.assign(seat, { road, agenda });
@@ -1523,6 +1535,7 @@ const CASES: Record<string, () => Promise<void>> = {
         if (/not sure they will accept/.test(said)) return { text: `Yes, then: the offer goes to the Maya this year. They may well refuse, being so much stronger, and we lose nothing by asking.\n\nLeft loose:\n1. Spare gold goes to the walls\n2. The idle Great Scientist settles in Kyoto's academy\n\nName any you want to raise, ask for a /brief, or /onward` };
         return { text: "The granary first, Majesty, then the walls. Kyoto eats before it arms." };
       }
+      if (/The ruler now says:\n1$/.test(said)) return { text: "The spare gold, then: the walls want 120 and a market 90. Which shall it be, Majesty?" };
       if (/Tail alone/.test(said)) return { text: "Name any you want to raise, ask for a /brief, or /onward" };
       if (/not sure they will accept/.test(said)) { Object.assign(seat, { matters: [{ item: "Spare gold", lean: "goes to the walls" }, { item: "An idle Great Scientist", lean: "settles in Kyoto's academy" }], closing: true }); return { text: "Both loose ends are listed.\n\nName any you want to raise, ask for a /brief, or /onward" }; }
       if (/Do as you see fit/.test(said)) { seat.dismissed = true; return { text: "Very well." }; }
@@ -1619,6 +1632,14 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W51 \"Both loose ends are listed.\" over the closing line counts as nothing: asked once, the ruler gets the mended reply once, and it replaces the held one in the transcript",
         guarded(beforeG2.calls).length === 1 && asked(beforeG2.calls) === 0 && JSON.stringify(sent.slice(beforeG2.sent)) === JSON.stringify([mended2])
         && seat.chat.at(-1)?.text === mended2 && !seat.chat.some((each: { text: string }) => each.text.startsWith("Both loose ends are listed.")), `guarded ${guarded(beforeG2.calls).length}; sent ${JSON.stringify(sent.slice(beforeG2.sent))}`);
+      // The dismissal gate (2026-11-07): "1" takes up loose end one of the closing just sent - the advisor has offered /onward, so dismiss_court is served,
+      // but the word is no close: the court stays open and the loose end is talked over (seen: a court closed on the ruler's "1")
+      const beforeG2b = { calls: calls.length, sent: sent.length };
+      say("1");
+      await until(() => sent.length > beforeG2b.sent);
+      await sleep(300);
+      check("W51 a ruler's \"1\" after a closing with loose ends leaves the court open: one reply, the loose end taken up, no dismissal", calls[beforeG2b.calls]?.served?.includes("dismiss_court") === true && !seat.ready && !seat.dismissed
+        && JSON.stringify(sent.slice(beforeG2b.sent)) === JSON.stringify(["The spare gold, then: the walls want 120 and a market 90. Which shall it be, Majesty?"]), `served ${JSON.stringify(calls[beforeG2b.calls]?.served)}; sent ${JSON.stringify(sent.slice(beforeG2b.sent))}`);
       // H: brief commands (2026-11-05, data/briefs/brief-commands-2026-11-05.md). /brief posts the six as buttons, two rows of three; a tap asks the advisor,
       // read-only, and the ask and the brief join the transcript; a brief before the first word leaves the road and the matters waiting; mid-age the clerk answers
       // The menu (2026-11-07, data/briefs/menu-and-long-messages-2026-11-07.md): set whole to these thirteen, in order - no /brief, no /saga

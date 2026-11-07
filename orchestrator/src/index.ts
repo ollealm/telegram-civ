@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, loadSchema, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, placePictures, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
+import { advisorGreeting, CLOSING_TAIL, LEAVE, loadSchema, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, placePictures, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
 import { card, draftCandidates, draftSovereign } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -232,10 +232,6 @@ async function sendMap(bot: Bot, seat: Seat) {
   await bot.api.sendPhoto(seat.chatId!, new InputFile(png, "map.png"));
 }
 
-/** The word that ends an audience and lets the years pass */
-const LEAVE = ["onward", "go"]; // the advisors offer /onward; /go is the quick way to type it
-/** The end of a closing: its fixed line ("Name any you want to raise, ask for a /brief, or /onward") or the bare /onward - taken off whole wherever it must go */
-const CLOSING_TAIL = new RegExp(`(?:\\s*Name any you want to raise[^\\n]*?(?:\\n\\s*)?)?\\s*/(?:${LEAVE.join("|")})\\s*$`, "i");
 
 async function broadcastHerald(text: string) {
   for (const chatId of state.heraldChats) await herald.api.sendMessage(chatId, text).catch((error) => log("herald send failed", error.message));
@@ -377,7 +373,7 @@ async function playRound() {
         const traced = host.map(seat.civ, "campaign", round.fromTurn, round.turn).catch((error) => { log("march map failed:", error.message); return null; });
         // An emergency council's letter gets the map too - the age so far, with the war's first marches on it - unless the game is over
         const painted = !PAINTED_MAPS || /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve(null)
-          : traced.then((png) => (png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ))).then((png) => { if (png) keepMap(seat.civ, png); else log(`the painted map for ${seat.civ} failed: no map goes with the letter`); return png; }).catch((error) => { log("campaign map failed:", error.message); return null; });
+          : traced.then((png) => { if (!age) log(`${seat.civ}: no age summary came with the letter; plain map painted`); return png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ); }).then((png) => { if (png) keepMap(seat.civ, png); else log(`the painted map for ${seat.civ} failed: no map goes with the letter`); return png; }).catch((error) => { log("campaign map failed:", error.message); return null; });
         // The host's own drawing goes with the letter only when asked for (MARCH_MAP=on): Olle, 2026-11-03, "turn off the bare map, so we only get the generated one"
         const marches = process.env.MARCH_MAP === "on" ? traced : Promise.resolve(null);
         letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
