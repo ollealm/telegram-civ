@@ -1011,8 +1011,8 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W50 each candidate's block in the tested form: first line, its events, its wonders, the owner's age", candidates.every((place) => call.prompt.includes(`${place.name}, a city of ${place.civ}, as the years up to ${game.year} have left it. What happened there:\n- ${place.events[0].year}: ${place.events[0].text}`))
         && call.prompt.includes(`Its wonders as they were painted when finished:\n- Colossus (AD 90): Oil painting. The Colossus at its harbour.\n- Petra (AD 95): Oil painting. Petra in its gorge.\nThe people's age: ${top.civ}, the ${era}.`), call.prompt.slice(0, 400));
       check("W50 the captions already going are in the input", call.prompt.includes("Already going with this chapter (never the same subject):\n- Going already. A sentence."));
-      check("W50 a chosen place: one picture for the chronicle, captioned by its prefix, of the age's end, with the wonders its description names (Petra is left out)", chosen.length === 1 && chosen[0].for === "chronicle"
-        && chosen[0].caption === `${top.name} as the years have left it, ${game.year}. A title. A sentence.` && chosen[0].year === game.year && chosen[0].wonders.join() === "Colossus", JSON.stringify(chosen));
+      check("W50 a chosen place: one picture for the chronicle, its prefix the heading, a break, the writer's caption the body, of the age's end, with the wonders its description names (Petra is left out)", chosen.length === 1 && chosen[0].for === "chronicle"
+        && chosen[0].caption === `${top.name} as the years have left it, ${game.year}\n\nA title. A sentence.` && chosen[0].year === game.year && chosen[0].wonders.join() === "Colossus", JSON.stringify(chosen));
       choice = null;
       const none = await agents.placePictures(round, [], (...args) => logged.push(args.join(" ")));
       check("W50 none: no picture, the why in the log", none.length === 0 && logged.some((line) => /^no place picture this age .*: stand-in why$/.test(line)), logged.join(" | "));
@@ -1589,6 +1589,77 @@ const CASES: Record<string, () => Promise<void>> = {
       agents.standInForModels(undefined);
       await stop(host);
     }
+  },
+  async W58() { // picture captions (2026-11-07, brief data/briefs/picture-captions-2026-11-07.md): every caption is a heading line, a blank line, then the body -
+    // the set heading where the code sets one, the writer's own title otherwise; the age picture's sentence says the age, not the entry; and a face is taken
+    // for the whole game (the Atomic airfield was painted twice, AD 1870 and AD 1938). On the real host of t100-world; no model is asked: a stand-in answers
+    const host = await start("t100-world");
+    const agents = await import("../src/agents.ts");
+    const store = await import("../src/store.ts");
+    const { host: api } = await import("../src/host.ts");
+    const { state } = store;
+    const game = (await get("/state")).json as { year: string; turn: number; majorCivs: { civ: string; alive: boolean; era: string }[] };
+    const [ours, other] = game.majorCivs.filter((each) => each.alive).map((each) => each.civ);
+    const saved = { pictures: state.pictures, ageStarts: state.ageStarts, hostState: api.state };
+    const calls: { systemPrompt: string; prompt: string; outputSchema?: Record<string, unknown> }[] = [];
+    let answer: unknown = {};
+    agents.standInForModels((asked) => { calls.push(asked); return { text: "", data: answer }; });
+    const logged: string[] = [];
+    const log = (...args: unknown[]) => logged.push(args.join(" "));
+    const round = { fromTurn: game.turn - 12, turn: game.turn, fromYear: "AD 1", year: game.year, rankings: [],
+      publicEvents: [{ turn: game.turn, year: "AD 900", text: `${ours} entered the Renaissance era with the learning of Astronomy.` }] } as any;
+    try {
+      // The helpers: one mechanism, the break stored in the caption
+      check("W58 a writer's caption: its first sentence the heading (no full stop), a break, then the rest", store.headed("The goat consul. A goat sat in the senate. It voted twice.") === "The goat consul\n\nA goat sat in the senate. It voted twice."
+        && store.headed("A title alone") === "A title alone" && store.headed("Heading\n\nA body. Its second sentence.") === "Heading\n\nA body. Its second sentence." && store.captioned("Angkor Wat, completed by the Maya in AD 650") === "Angkor Wat, completed by the Maya in AD 650");
+      check("W58 a caption on one line for the writers' lists: the break a full stop and a space", store.oneLine("The goat consul\n\nA goat sat in the senate.") === "The goat consul. A goat sat in the senate." && store.oneLine("Heading?\n\nBody.") === "Heading? Body.");
+      check("W58 a note: after the body, or as the body under a heading alone", store.withNote("Angkor Wat, completed by the Maya in AD 650", "Its builders gain a free policy.") === "Angkor Wat, completed by the Maya in AD 650\n\nIts builders gain a free policy."
+        && store.withNote("Heading\n\nBody", "Note.") === "Heading\n\nBody. Note." && store.withNote("Heading\n\nBody", "") === "Heading\n\nBody");
+      // The age picture: the heading set, the sentence alone; an earlier age's picture of the same era, two ages back, is a taken face
+      state.ageStarts = [game.turn - 24, game.turn - 12];
+      const oldFace = { turn: 1, year: "AD 500", for: "chronicle", caption: `${other} enter the Renaissance era, AD 500. The printers. Presses ran all night.`, description: "Oil painting. A printing shop by the river." };
+      const otherAge = { turn: 1, year: "AD 300", for: "chronicle", caption: `${other} enter the Medieval, AD 300\n\nThe monks copied.`, description: "Oil painting. A scriptorium." };
+      state.pictures = [oldFace, otherAge];
+      answer = { caption: "Counting houses opened on every quay, and the river carried ledgers as often as grain.", description: "Oil painting. A quay of counting houses.", year: "AD 905" };
+      const aged = await agents.eraPictures(round, log);
+      const eraCall = calls.at(-1)!;
+      const block = eraCall.prompt.slice(eraCall.prompt.indexOf("Painted for other peoples entering the Renaissance era earlier in this game"), eraCall.prompt.indexOf("Pictures already painted in recent years"));
+      check("W58 an age picture's caption: the heading set, without \"era\", a break, then the writer's sentence alone", aged.length === 1 && aged[0].caption === `${ours} enter the Renaissance, AD 900\n\nCounting houses opened on every quay, and the river carried ledgers as often as grain.`, JSON.stringify(aged));
+      check("W58 an earlier age's picture of the same era is a taken face, on one line; another era's is not", block.includes(`- ${other} enter the Renaissance era, AD 500. The printers. Presses ran all night. - Oil painting. A printing shop by the river.`) && !block.includes("scriptorium")
+        && !eraCall.prompt.slice(eraCall.prompt.indexOf("Pictures already painted in recent years")).includes("printing shop"), block);
+      check("W58 the age's writer is told the heading names the entry, and not to restate the entry, the year or the learning; no title asked", /after a heading set for you that names who entered which age and when: write no title, only one sentence \(up to 25 words\) on what the age looked like in this place and what came of it there - never the entry into the age, its year, or the learning that opened it, again/.test(eraCall.systemPrompt)
+        && !eraCall.systemPrompt.includes("a short title, a full stop") && /no title - never the entry into the age/.test(JSON.stringify(eraCall.outputSchema)), eraCall.systemPrompt.slice(-700));
+      // The tag still keeps an age from being painted twice: a caption with the break, and one from before it (with "era")
+      for (const kept of [aged[0], { ...oldFace, caption: `${ours} enter the Renaissance era, AD 900. Old. Old sentence.` }]) {
+        state.pictures = [kept];
+        const before = calls.length;
+        check(`W58 an age already painted is not painted again (${kept === aged[0] ? "the new caption" : "a caption from before"})`, (await agents.eraPictures(round, log)).length === 0 && calls.length === before);
+      }
+      // The victory: its title the heading, the Chronicler's sentence the body
+      api.state = async () => ({ ...(await saved.hostState()), winner: ours, victoryType: "Scientific" });
+      state.pictures = [];
+      answer = { caption: "The world would remember the morning the sky was left behind.", description: "Photograph. A launch.", year: game.year };
+      const won = await agents.victoryPictures({ ...round, stoppedEarly: `${ours} has won a Scientific victory` }, log);
+      check("W58 the victory picture: its title the heading, a break, the sentence", won.length === 1 && won[0].caption === `${ours} wins the world: Scientific victory, ${game.year}\n\nThe world would remember the morning the sky was left behind.`, JSON.stringify(won));
+      api.state = saved.hostState;
+      // The oddity: the writer's first sentence the heading; the list it reads on one line; one painted before, in either form, is not painted again
+      answer = { oddity: { caption: "The goat consul. A goat sat in the senate and voted twice.", description: "Etching. A goat on a bench.", year: game.year }, why: "stand-in" };
+      const odd = await agents.oddityPictures(round, { campaigns: [], curiosities: [] }, [`${ours} enter the Renaissance, AD 900\n\nCounting houses opened.`], log);
+      check("W58 an oddity: the writer's title the heading, a break, the sentence; the pictures going with the chapter on one line in its input", odd.length === 1 && odd[0].caption === "The goat consul\n\nA goat sat in the senate and voted twice." && odd[0].note === ""
+        && calls.at(-1)!.prompt.includes(`Already going with this chapter (never the oddity):\n- ${ours} enter the Renaissance, AD 900. Counting houses opened.`), JSON.stringify(odd));
+      for (const caption of [odd[0].caption, "The oddity of the age. The goat consul. A goat sat in the senate and voted twice."]) {
+        state.pictures = [{ turn: 1, year: "AD 1", for: "chronicle", caption, description: "" }];
+        check(`W58 an oddity painted before is not painted again (${caption.includes("\n") ? "the new caption" : "a caption from before"})`, (await agents.oddityPictures(round, { campaigns: [], curiosities: [] }, [], log)).length === 0 && logged.at(-1)?.startsWith("the Chronicler's oddity was painted before") === true, logged.at(-1));
+      }
+      // The lists the writers read: each caption on one line
+      state.pictures = [{ turn: game.turn, year: game.year, for: "chronicle", caption: "The goat consul\n\nA goat sat in the senate.", description: "Etching." }];
+      check("W58 the recent pictures list shows each caption on one line", store.recentPictures(["chronicle"]) === `${game.year}: The goat consul. A goat sat in the senate. - Etching.`, store.recentPictures(["chronicle"]));
+      // The sends: the break goes as stored - the herald's with its note, the scene under the letter, the decision, the chapter's own images headed when made
+      const index = readFileSync("src/index.ts", "utf8");
+      check("W58 the herald sends the caption with its note through withNote; the chapter's images, the letter's scene and the decision (the painter's call or the fallback) are headed when made",
+        /herald\.api\.sendPhoto\(chatId, new InputFile\(png!, "scene\.png"\), \{ caption: withNote\(picture\.caption, picture\.note\) \}\)/.test(index) && /\.\.\.image, caption: headed\(image\.caption\) \}/.test(index)
+        && /caption: headed\(dispatch\.image\.caption\)/.test(index) && /const decided: Picture = \{ \.\.\.drawn, caption: headed\(drawn\.caption\) \};/.test(index));
+    } finally { agents.standInForModels(undefined); state.pictures = saved.pictures; state.ageStarts = saved.ageStarts; api.state = saved.hostState; await stop(host); }
   },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
     // dismissed by its own call gets no loose-ends follow-up (a 600 BC list came after the closing, and the dismissal fired under it); a silent closing

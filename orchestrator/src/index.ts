@@ -1,17 +1,17 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, CLOSING_TAIL, LEAVE, loadSchema, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, eraScene, oddityScene, placePictures, pronounLine, realmSaga, victoryScene, wonderBoon, wonderPictures } from "./agents.ts";
+import { advisorGreeting, eraPictures, oddityPictures, victoryPictures, CLOSING_TAIL, LEAVE, loadSchema, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, placePictures, pronounLine, realmSaga, wonderBoon, wonderPictures } from "./agents.ts";
 import { card, draftCandidates, draftSovereign, shortenToCard } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
 import { devFeedInChat, flushDevFeed } from "./devfeed.ts";
 import { LIMIT, splitLongMessages } from "./longMessages.ts";
 import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, forgetMaps, forgetWonderPictures, generateImage, imagesIdle, keepMap, keepWonderPicture, keptMap, onImageLog, paintedMap, picturePrompt, wonderReferences, type Reference } from "./images.ts";
-import { host, type GameState, type PublicEvent, type RoundResult } from "./host.ts";
+import { host, type GameState, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
 import { letterOf, playRound as runRound, turnsAhead } from "./round.ts";
-import { diedPassing, forgetPicture, persist, recordPicture, remember, state, type Annal, type Picture, type Seat } from "./store.ts";
+import { diedPassing, forgetPicture, headed, oneLine, persist, recordPicture, remember, state, withNote, type Annal, type Picture, type Seat } from "./store.ts";
 
 /** Rival realms played by the game itself, chosen at random; 0 for an all-human world */
 const AI_CIVS = Number(process.env.AI_CIVS ?? 2);
@@ -157,7 +157,7 @@ const PAINTED_MAPS = process.env.PAINTED_MAPS !== "off";
 /** Paints and returns the picture (or null), keeping the ledger honest either way */
 async function paintAndKeep(picture: Picture, attached: { shown: string[]; references: Reference[] } = { shown: [], references: [] }): Promise<Buffer | null> {
   recordPicture(picture);
-  const png = await generateImage(picturePrompt(picture, attached.shown), attached.references).catch((error) => { log(`picture failed (${picture.caption}):`, error.message); return null; });
+  const png = await generateImage(picturePrompt(picture, attached.shown), attached.references).catch((error) => { log(`picture failed (${oneLine(picture.caption)}):`, error.message); return null; });
   if (!png) forgetPicture(picture);
   return png;
 }
@@ -166,55 +166,8 @@ function paint(picture: Picture, send: (png: Buffer) => Promise<unknown>) {
   recordPicture(picture);
   void generateImage(picturePrompt(picture))
     .then((png) => (png ? send(png) : forgetPicture(picture)))
-    .catch((error) => log(`picture failed (${picture.caption}):`, error.message));
+    .catch((error) => log(`picture failed (${oneLine(picture.caption)}):`, error.message));
 }
-
-/** A people's entry into a new age always gets its picture - once; the Chronicler chooses the instant from what that people has lately done */
-const eraPictures = async (round: RoundResult): Promise<Picture[]> => {
-  const entries = round.publicEvents.flatMap((event) => {
-    const [, civ, era] = /^(.+?) entered the (.+?)(?: with the learning of (?:.+?))?\.?$/.exec(event.text) ?? [];
-    return !era || /^Ancient/i.test(era) ? [] : [{ event, civ, era }];
-  });
-  if (!entries.length) return [];
-  const all = await host.events().catch(() => [] as PublicEvent[]);
-  // One people at a time: two peoples entering the same age in the same round would otherwise be painted with the same face, neither picture yet known to the other
-  const pictures: Picture[] = [];
-  for (const { event, civ, era } of entries) {
-    const tag = `${civ} enter the ${era}`;
-    if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(tag))) continue;
-    const recent = all.filter((entry) => entry.turn <= event.turn && entry.text.startsWith(civ)).slice(-12);
-    const cities = await host.cities(civ).catch(() => []);
-    const scene = await eraScene(civ, era, event.year, recent, cities, pictures.map((picture) => `${picture.caption} - ${picture.description.slice(0, 200)}`)).catch((error) => { log(`era picture failed (${civ}):`, error.message); return null; });
-    if (scene) pictures.push(dated({ turn: event.turn, for: "chronicle", caption: `${tag}, ${event.year}. ${scene.caption}`, description: scene.description, year: scene.year }, event.year));
-  }
-  return pictures;
-};
-
-/** The world is won: the Chronicler paints the moment - once - and it leads the last age's pictures */
-const victoryPictures = async (round: RoundResult): Promise<Picture[]> => {
-  if (!/has won/.test(round.stoppedEarly ?? "")) return [];
-  const game = await host.state();
-  if (!game.winner) return [];
-  const title = `${game.winner} wins the world: ${game.victoryType} victory, ${round.year}`;
-  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.startsWith(`${game.winner} wins the world`))) return [];
-  const era = game.majorCivs.find((civ) => civ.civ === game.winner)?.era ?? "age it had reached";
-  const cities = await host.cities(game.winner).catch(() => []);
-  const scene = await victoryScene(game.winner, game.victoryType ?? "", era, round.year, cities).catch((error) => { log("victory picture failed:", error.message); return null; });
-  if (!scene) return [];
-  return [dated({ turn: round.turn, for: "chronicle", caption: `${title}. ${scene.caption.trim()}`, description: scene.description, year: scene.year }, round.year)];
-};
-
-/** The oddity of the age: none most ages, by the Chronicler's own judgement. Every decision is logged, so a game's worth can be counted */
-const oddityPictures = async (round: RoundResult, seen: { campaigns: string[]; curiosities: string[] }, painting: string[]): Promise<(Picture & { note: string })[]> => {
-  const answer = await oddityScene(round, round.publicEvents, seen.campaigns, seen.curiosities, painting).catch((error) => { log("the oddity of the age failed:", error.message); return null; });
-  if (!answer) return [];
-  if (!answer.oddity) { log(`no oddity this age (${round.fromYear} to ${round.year}): ${answer.why}`); return []; }
-  // The caption stands on its own: no fixed opening (Olle, 2026-10-04: it reads better and funnier without)
-  const caption = answer.oddity.caption.trim();
-  if ((state.pictures ?? []).some((picture) => picture.for === "chronicle" && picture.caption.replace(/^The oddity of the age\. /, "") === caption)) { log(`the Chronicler's oddity was painted before: ${answer.why}`); return []; }
-  log(`the Chronicler found an oddity (${round.fromYear} to ${round.year}): ${answer.why}`);
-  return [dated({ turn: round.turn, for: "chronicle", caption, description: answer.oddity.description, year: answer.oddity.year, note: "" }, round.year)];
-};
 
 /** /map: the realm's last painted map, the one that came with the latest letter; before any letter has had one, a map is painted now. Never our own drawing */
 async function sendMap(bot: Bot, seat: Seat) {
@@ -361,7 +314,8 @@ async function playRound() {
         if (!bot || !seat.chatId) return;
         const letter = letterOf(dispatch);
         const game = await host.state();
-        const scene = dispatch.image ? paintAndKeep(dated({ turn: game.turn, for: seat.civ, ...dispatch.image }, game.year)) : Promise.resolve(null);
+        const image = dispatch.image && { ...dispatch.image, caption: headed(dispatch.image.caption) };
+        const scene = image ? paintAndKeep(dated({ turn: game.turn, for: seat.civ, ...image }, game.year)) : Promise.resolve(null);
         // The map of the age, always in one style: the painted world with the age's movements drawn as an atlas would - or with none, in a quiet age.
         // The host draws the age's campaigns as arrows and the painter repaints exactly those; only the painted map is sent, none when it fails
         const age = dispatch.age;
@@ -371,7 +325,7 @@ async function playRound() {
           : traced.then((png) => { if (!age) log(`${seat.civ}: no age summary came with the letter; plain map painted`); return png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ); }).then((png) => { if (png) keepMap(seat.civ, png); else log(`the painted map for ${seat.civ} failed: no map goes with the letter`); return png; }).catch((error) => { log("campaign map failed:", error.message); return null; });
         // The host's own drawing goes with the letter only when asked for (MARCH_MAP=on): Olle, 2026-11-03, "turn off the bare map, so we only get the generated one"
         const marches = process.env.MARCH_MAP === "on" ? traced : Promise.resolve(null);
-        letters.push({ seat, annal, letter, caption: dispatch.image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
+        letters.push({ seat, annal, letter, caption: image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
       },
       notice: tell,
       chronicle: async (chapter, images, round, seen) => {
@@ -384,10 +338,10 @@ async function playRound() {
           return { ...picture, note: boon.trim() };
         }));
         // All of the age's pictures are painted together and then sent in the order of the years they show
-        const pictures = [...images.map((image) => dated({ turn: round.turn, for: "chronicle", note: "", ...image }, round.year)), ...wonders, ...(await eraPictures(round)).map((picture) => ({ ...picture, note: "" }))];
+        const pictures = [...images.map((image) => dated({ turn: round.turn, for: "chronicle", note: "", ...image, caption: headed(image.caption) }, round.year)), ...wonders, ...(await eraPictures(round, log)).map((picture) => ({ ...picture, note: "" }))];
         const yearOf = (picture: Picture) => { const m = /\b(\d{3,4})\b(?:\s*(BC))?/i.exec(picture.caption); return m ? (m[2] ? -Number(m[1]) : Number(m[1])) : Number.MAX_SAFE_INTEGER; };
         // A victory's picture leads the last age's pictures, whatever the years of the others
-        const victory = (await victoryPictures(round)).map((picture) => ({ ...picture, note: "" }));
+        const victory = (await victoryPictures(round, log)).map((picture) => ({ ...picture, note: "" }));
         // A place as the years have left it, rarely: chosen once the others are known (their captions go in), never in the victory's age; it joins the
         // pictures before painting, its year the age's end, and its wonders' kept pictures go to the painter with it
         const place = await placePictures(round, [...victory, ...pictures].map((picture) => picture.caption), log);
@@ -397,7 +351,7 @@ async function playRound() {
           Promise.all(list.map(async (picture) => ({ picture, png: await paintAndKeep(picture, picture.wonders ? wonderReferences(picture.wonders) : undefined) })));
         const [painted, odd] = await Promise.all([
           paintAll([...victory, ...pictures, ...place]),
-          /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve([]) : oddityPictures(round, seen, [...victory, ...pictures, ...place].map((picture) => picture.caption)).then(paintAll),
+          /has won/.test(round.stoppedEarly ?? "") ? Promise.resolve([]) : oddityPictures(round, seen, [...victory, ...pictures, ...place].map((picture) => picture.caption), log).then(paintAll),
         ]);
         // A wonder's picture is kept, PNG and description, for the place pictures of later ages
         for (const { picture, png } of painted) {
@@ -438,7 +392,7 @@ async function playRound() {
       await broadcastHerald(post.chapter);
       if (post.record) { post.record.undelivered = undefined; persist(); }
       for (const { picture, png } of post.pictures)
-        for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: [picture.caption, picture.note].filter(Boolean).join(". ") }).catch(() => {});
+        for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: withNote(picture.caption, picture.note) }).catch(() => {});
     }
     state.phase = "audience";
     persist();
@@ -776,7 +730,8 @@ function setUpAdvisor(bot: Bot, index: number) {
       const civ = seat().civ;
       void (async () => {
         const game = await host.state();
-        const decided: Picture = asked ? { ...asked, for: civ } : dated({ turn: game.turn, for: civ, ...(await describeDecision(seat())) }, game.year);
+        const drawn: Picture = asked ? { ...asked, for: civ } : dated({ turn: game.turn, for: civ, ...(await describeDecision(seat())) }, game.year);
+        const decided: Picture = { ...drawn, caption: headed(drawn.caption) };
         // A court reopened and dismissed again has a newer decision, and its own picture: this one is overtaken
         paint(decided, async (png) => { if (court === courtsRisen) await bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }); else forgetPicture(decided); });
       })().catch((error) => log("decision picture failed:", error.message));
