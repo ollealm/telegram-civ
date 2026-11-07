@@ -1517,13 +1517,22 @@ const CASES: Record<string, () => Promise<void>> = {
       if (/asks you for a brief on/.test(asked.prompt)) { briefs.push({ role: asked.role, said: asked.prompt.slice(asked.prompt.lastIndexOf("The ruler asks you for a brief")), served: asked.served }); return { text: asked.role === "clerk" ? "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." : /a brief on our learning/.test(asked.prompt) ? "The academies lead the world.\n\nName any you want to raise, ask for a /brief, or /onward" : "The host is three spearmen and a catapult." }; }
       const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
       calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED), served: asked.served, owedNote: asked.prompt.includes("its orders are not set yet") });
+      // The closing-only guard's ask (2026-11-07): the closing proper, answering the ruler's words; for the doubt, with the loose ends; for the bare tail, without
+      if (/only the closing line/.test(said)) {
+        if (/Do as you see fit/.test(said)) return { text: "Then the granary goes up before the walls. Kyoto eats this winter, and the walls follow in spring." };
+        if (/not sure they will accept/.test(said)) return { text: `Yes, then: the offer goes to the Maya this year. They may well refuse, being so much stronger, and we lose nothing by asking.\n\nLeft loose:\n1. Spare gold goes to the walls\n2. The idle Great Scientist settles in Kyoto's academy\n\nName any you want to raise, ask for a /brief, or /onward` };
+        return { text: "The granary first, Majesty, then the walls. Kyoto eats before it arms." };
+      }
+      if (/Tail alone/.test(said)) return { text: "Name any you want to raise, ask for a /brief, or /onward" };
+      if (/not sure they will accept/.test(said)) { Object.assign(seat, { matters: [{ item: "Spare gold", lean: "goes to the walls" }, { item: "An idle Great Scientist", lean: "settles in Kyoto's academy" }], closing: true }); return { text: "Both loose ends are listed.\n\nName any you want to raise, ask for a /brief, or /onward" }; }
+      if (/Do as you see fit/.test(said)) { seat.dismissed = true; return { text: "Very well." }; }
       if (/The ruler now says:\nGo on\.$/.test(said)) return { text: "Learning stays our road. I will send the warrior east and buy Kyoto its granary." };
-      if (/Do it all/.test(said)) { seat.dismissed = true; return { text: "Walls and granary both, then.\n\nName any you want to raise, ask for a /brief, or /onward" }; }
-      if (/Sounds good, do that/.test(said)) { seat.dismissed = true; return { text: "Then the granary first and the walls after; Kyoto grows before it arms." }; }
+      if (/Do it all/.test(said)) { seat.dismissed = true; return { text: "Walls and granary both, then. The gold goes to the walls first.\n\nName any you want to raise, ask for a /brief, or /onward" }; }
+      if (/Sounds good, do that/.test(said)) { seat.dismissed = true; return { text: "Then the granary first and the walls after; Kyoto grows before it arms. The warrior stays home." }; }
       if (/Carry on then/.test(said)) return { text: "The granary first, then the walls. Anything else, or shall we go on? /onward" };
-      if (/That will do/.test(said)) return { text: "Then the granary.\n\n/onward" };
-      if (/As you say/.test(said)) return { text: "As you say: the granary.\n/onward" };
-      if (/So be it/.test(said)) return { text: "Walls it is.\n\nName any you want to raise, ask for a /brief, or /onward" };
+      if (/That will do/.test(said)) return { text: "Then the granary. Kyoto eats first.\n\n/onward" };
+      if (/As you say/.test(said)) return { text: "As you say: the granary. The walls wait.\n/onward" };
+      if (/So be it/.test(said)) return { text: "Walls it is. Kyoto waits for its granary.\n\nName any you want to raise, ask for a /brief, or /onward" };
       if (/Fine by me/.test(said)) { Object.assign(seat, { matters: [{ item: "Spare gold", lean: "goes to the walls" }], closing: true }); return { text: "The granary first.\n\nLeft loose:\n1. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward" }; }
       if (/without weighing the loose ends/.test(said)) return looseEnds();
       if (/dismisses the court without another word/.test(said)) return { text: /leaving the loose ends to you/.test(said) ? "Settled as listed." : "I went with the granary, for the winter." };
@@ -1560,7 +1569,7 @@ const CASES: Record<string, () => Promise<void>> = {
       say("That will do.");
       await until(() => asked(beforeA2.calls) > 0 && sent.length > beforeA2.sent);
       await sleep(300);
-      check("W51 nothing left loose and no /onward in the answer: one message, the closing's /onward put back at the end", JSON.stringify(sent.slice(beforeA2.sent)) === JSON.stringify(["Then the granary.\n\nNothing is left loose.\n\n/onward"]), JSON.stringify(sent.slice(beforeA2.sent)));
+      check("W51 nothing left loose and no /onward in the answer: one message, the closing's /onward put back at the end", JSON.stringify(sent.slice(beforeA2.sent)) === JSON.stringify(["Then the granary. Kyoto eats first.\n\nNothing is left loose.\n\n/onward"]), JSON.stringify(sent.slice(beforeA2.sent)));
       // A3: the follow-up comes back empty: the closing goes out as it was
       looseEnds = () => ({ text: "  " });
       seat.matters = undefined;
@@ -1568,7 +1577,7 @@ const CASES: Record<string, () => Promise<void>> = {
       say("As you say.");
       await until(() => asked(beforeA3.calls) > 0 && sent.length > beforeA3.sent);
       await sleep(300);
-      check("W51 an empty follow-up: the closing is sent as it was, once, and remembered once", JSON.stringify(sent.slice(beforeA3.sent)) === JSON.stringify(["As you say: the granary.\n/onward"]) && JSON.stringify(seat.chat.at(-1)) === JSON.stringify({ from: "advisor", text: "As you say: the granary.\n/onward" }),
+      check("W51 an empty follow-up: the closing is sent as it was, once, and remembered once", JSON.stringify(sent.slice(beforeA3.sent)) === JSON.stringify(["As you say: the granary. The walls wait.\n/onward"]) && JSON.stringify(seat.chat.at(-1)) === JSON.stringify({ from: "advisor", text: "As you say: the granary. The walls wait.\n/onward" }),
         `${JSON.stringify(sent.slice(beforeA3.sent))}; ${JSON.stringify(seat.chat.at(-1))}`);
       // A4: a closing that weighed its loose ends itself is not asked: one message, unchanged
       seat.matters = undefined;
@@ -1584,8 +1593,32 @@ const CASES: Record<string, () => Promise<void>> = {
       say("So be it.");
       await until(() => asked(beforeA5.calls) > 0 && sent.length > beforeA5.sent);
       await sleep(300);
-      check("W51 a closing on the fixed line: one message, the closing, the list, and the fixed line once at the end", JSON.stringify(sent.slice(beforeA5.sent)) === JSON.stringify([`Walls it is.\n\n${listed}`])
+      check("W51 a closing on the fixed line: one message, the closing, the list, and the fixed line once at the end", JSON.stringify(sent.slice(beforeA5.sent)) === JSON.stringify([`Walls it is. Kyoto waits for its granary.\n\n${listed}`])
         && sent.at(-1)!.split("Name any you want to raise").length === 2, JSON.stringify(sent.slice(beforeA5.sent)));
+      // G1: a reply that is only the closing line is asked once for the closing proper (2026-11-07, data/briefs/closing-only-guard-2026-11-07.md; AD 1916:
+      // "Both loose ends are listed." and the fixed line, the answer to the ruler's doubt gone into the plan). The closings above were never asked
+      const guarded = (from: number) => calls.slice(from).filter((each) => /only the closing line/.test(each.said));
+      check("W51 a closing with words of its own above its line is never asked for the closing", guarded(0).length === 0, guarded(0).map((each) => each.said.slice(0, 80)).join(" | "));
+      looseEnds = () => { seat.matters = []; return { text: "Nothing is left loose." }; };
+      seat.matters = undefined;
+      const beforeG1 = { calls: calls.length, sent: sent.length };
+      say("Tail alone, please.");
+      await until(() => sent.length > beforeG1.sent);
+      await sleep(300);
+      const mended1 = `The granary first, Majesty, then the walls. Kyoto eats before it arms.\n\nNothing is left loose.\n\n${"Name any you want to raise, ask for a /brief, or /onward"}`;
+      check("W51 a reply that is the closing line alone is asked once for the closing, in the court's voice with the ruler's words, and the loose ends follow on the mended reply: one message",
+        guarded(beforeG1.calls).length === 1 && /They said:\nTail alone, please\./.test(guarded(beforeG1.calls)[0]?.said ?? "") && /This note is the court's, not the ruler's words/.test(guarded(beforeG1.calls)[0]?.said ?? "") && asked(beforeG1.calls) === 1
+        && JSON.stringify(sent.slice(beforeG1.sent)) === JSON.stringify([mended1]) && JSON.stringify(seat.chat.slice(-2).map((each: { text: string }) => each.text)) === JSON.stringify(["Tail alone, please.", mended1]),
+        `guarded ${guarded(beforeG1.calls).length}, asked ${asked(beforeG1.calls)}; sent ${JSON.stringify(sent.slice(beforeG1.sent))}; chat ${JSON.stringify(seat.chat.slice(-2))}`);
+      seat.matters = undefined;
+      const beforeG2 = { calls: calls.length, sent: sent.length };
+      say("I say yes, but I'm not sure they will accept considering how much weaker they are.");
+      await until(() => sent.length > beforeG2.sent);
+      await sleep(300);
+      const mended2 = `Yes, then: the offer goes to the Maya this year. They may well refuse, being so much stronger, and we lose nothing by asking.\n\nLeft loose:\n1. Spare gold goes to the walls\n2. The idle Great Scientist settles in Kyoto's academy\n\n${"Name any you want to raise, ask for a /brief, or /onward"}`;
+      check("W51 \"Both loose ends are listed.\" over the closing line counts as nothing: asked once, the ruler gets the mended reply once, and it replaces the held one in the transcript",
+        guarded(beforeG2.calls).length === 1 && asked(beforeG2.calls) === 0 && JSON.stringify(sent.slice(beforeG2.sent)) === JSON.stringify([mended2])
+        && seat.chat.at(-1)?.text === mended2 && !seat.chat.some((each: { text: string }) => each.text.startsWith("Both loose ends are listed.")), `guarded ${guarded(beforeG2.calls).length}; sent ${JSON.stringify(sent.slice(beforeG2.sent))}`);
       // H: brief commands (2026-11-05, data/briefs/brief-commands-2026-11-05.md). /brief posts the six as buttons, two rows of three; a tap asks the advisor,
       // read-only, and the ask and the brief join the transcript; a brief before the first word leaves the road and the matters waiting; mid-age the clerk answers
       // The menu (2026-11-07, data/briefs/menu-and-long-messages-2026-11-07.md): set whole to these thirteen, in order - no /brief, no /saga
@@ -1663,14 +1696,22 @@ const CASES: Record<string, () => Promise<void>> = {
       say("Sounds good, do that.");
       await until(() => sent.slice(beforeB.sent).includes(DISMISSED));
       const afterB = calls.slice(beforeB.calls).filter((each) => !/Sounds good/.test(each.said));
-      check("W51 a court the advisor dismissed by its own call gets no follow-up: the closing, then the dismissal", afterB.length === 0 && JSON.stringify(sent.slice(beforeB.sent)) === JSON.stringify(["Then the granary first and the walls after; Kyoto grows before it arms.", DISMISSED]) && seat.ready,
+      check("W51 a court the advisor dismissed by its own call gets no follow-up: the closing, then the dismissal", afterB.length === 0 && JSON.stringify(sent.slice(beforeB.sent)) === JSON.stringify(["Then the granary first and the walls after; Kyoto grows before it arms. The warrior stays home.", DISMISSED]) && seat.ready,
         `calls after: ${afterB.map((each) => each.said.slice(20, 90)).join(" | ")}; sent: ${JSON.stringify(sent.slice(beforeB.sent))}`);
       // B2: dismissed by its own call under the fixed line: the whole line comes off, not the /onward alone
       Object.assign(seat, { ready: false, dismissed: false, matters: undefined });
       const beforeB2 = sent.length;
       say("Do it all.");
       await until(() => sent.slice(beforeB2).includes(DISMISSED));
-      check("W51 a court the advisor dismissed under the fixed line: the closing goes out without that line, then the dismissal", JSON.stringify(sent.slice(beforeB2)) === JSON.stringify(["Walls and granary both, then.", DISMISSED]), JSON.stringify(sent.slice(beforeB2)));
+      check("W51 a court the advisor dismissed under the fixed line: the closing goes out without that line, then the dismissal", JSON.stringify(sent.slice(beforeB2)) === JSON.stringify(["Walls and granary both, then. The gold goes to the walls first.", DISMISSED]), JSON.stringify(sent.slice(beforeB2)));
+      // G3: a court the advisor dismissed on one short line still owes its closing: asked once, told to list nothing and give no /onward; then the dismissal
+      Object.assign(seat, { ready: false, dismissed: false, matters: undefined });
+      const beforeG3 = { calls: calls.length, sent: sent.length };
+      say("Do as you see fit.");
+      await until(() => sent.slice(beforeG3.sent).includes(DISMISSED));
+      check("W51 a dismissal on one short line is asked once for the closing, with no list and no /onward: the mended closing, then the dismissal",
+        guarded(beforeG3.calls).length === 1 && /You have closed the court: list no loose ends/.test(guarded(beforeG3.calls)[0]?.said ?? "")
+        && JSON.stringify(sent.slice(beforeG3.sent)) === JSON.stringify(["Then the granary goes up before the walls. Kyoto eats this winter, and the walls follow in spring.", DISMISSED]), JSON.stringify(sent.slice(beforeG3.sent)));
       // C: a bare /onward under a closing with loose ends: the dismissal goes out before the silent pass, and the court rises only after it
       Object.assign(seat, { ready: false, dismissed: false, matters: [{ item: "An idle Great Scientist", lean: "settles in Kyoto's academy" }, { item: "Spare gold", lean: "goes to the walls" }] });
       plant("The granary first.\n\nLeft loose:\n1. An idle Great Scientist: he settles in Kyoto's academy\n2. Spare gold goes to the walls\n\nName any you want to raise; otherwise\n/onward", true);
@@ -1724,6 +1765,7 @@ const CASES: Record<string, () => Promise<void>> = {
       say("Go on. /onward");
       await until(() => seat.ready && sent.slice(beforeG.sent).includes(DISMISSED));
       const lastWordReply = calls[beforeG.calls];
+      check("W51 the guard asked three times in all - never for a brief, a short word mid-audience, the first word's reply or a silent pass", guarded(0).length === 3, guarded(0).map((each) => each.said.slice(0, 120)).join(" | "));
       check("W51 a first word with /onward: served set_orders, nothing owed, no pass, the court rises", !!lastWordReply?.served?.includes("set_orders") && calls.length === beforeG.calls + 1 && seat.ordersOwed === undefined && seat.ready,
         `served ${JSON.stringify(lastWordReply?.served)}; calls ${calls.length - beforeG.calls}; said ${lastWordReply?.said.slice(0, 120)}`);
     } finally {

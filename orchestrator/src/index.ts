@@ -829,16 +829,37 @@ function setUpAdvisor(bot: Bot, index: number) {
       }
       try {
         const game = await host.state();
+        const toFirstWord = !!(seat().road || seat().agenda?.length);
         let reply = await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), thenGo ? `${message}\n\n[The ruler added /onward: this is their last word for this audience. Act on it, decide anything still open yourself as they would wish, and give your closing now - ask nothing further, and do not end with the /onward line: the court is dismissed as soon as you finish.]` : message, turnsAhead(game.turn), thenGo));
         // A closing's picture of the decision and the ruler's words for the Chronicler went by the advisor's own tools. The picture is painted once
         // the court is dismissed - a closing can still be talked over, and only the last one stands.
         // A court the advisor dismissed by its own call is not also offered the tap
         if (seat().dismissed) reply = reply.replace(CLOSING_TAIL, "");
         remember(seat(), { from: "ruler", text: message });
-        const held = { from: "advisor" as const, text: reply };
+        let held = { from: "advisor" as const, text: reply };
         remember(seat(), held);
         seat().forCouncil = undefined; // what was left with the clerk was before the advisor in this reply
         persist();
+        // A reply that is only the closing line - nothing, or one short line, above its tail - is asked once for the closing proper (AD 1916: "Both loose
+        // ends are listed." and the fixed line, the answer to the ruler's doubt gone into the plan). Not the reply to the first word, which brings the road
+        // and the matters, nor a short word mid-audience with no closing line under it; a court dismissed, by the advisor's call or the ruler's /onward,
+        // still owes its closing. The mended reply takes the held one's place, in the transcript and to the ruler, and the loose ends follow it as before
+        const bare = reply.replace(CLOSING_TAIL, "").trim();
+        if (!toFirstWord && (CLOSING_TAIL.test(reply) || seat().dismissed || thenGo) && (!bare || (!bare.includes("\n") && bare.length < 200 && (bare.match(/[.!?…](?=\s|$)/g) ?? []).length <= 1))) {
+          log(`${seat().civ}: the reply was only the closing line; asked once for the closing`);
+          const ends = seat().dismissed || thenGo ? " You have closed the court: list no loose ends and do not end with the /onward line." : " Then the loose ends, as the rules have them.";
+          const mended = (await whileTyping(bot, ctx.chat!.id, advisorReply(seat(), `[Your reply to the ruler was only the closing line. They said:\n${message}\nAnswer what they said, then give the closing: what this audience changed and what it now sets in motion, in three or four sentences.${ends} This note is the court's, not the ruler's words.]`, turnsAhead(game.turn), thenGo))
+            .catch((error) => { log(`${seat().civ}: the closing follow-up failed:`, error.message); return ""; })).trim();
+          if (mended) {
+            const tail = reply.match(CLOSING_TAIL);
+            reply = seat().dismissed || thenGo ? mended.replace(CLOSING_TAIL, "") : `${mended}${tail && !CLOSING_TAIL.test(mended) ? `\n\n${tail[0].trim()}` : ""}`;
+            const at = seat().chat.lastIndexOf(held);
+            if (at >= 0) seat().chat.splice(at, 1);
+            held = { from: "advisor", text: reply };
+            remember(seat(), held);
+            persist();
+          }
+        }
         // A closing that never weighed its loose ends is asked once: list them, or say there are none (an empty list counts as considered).
         // A court the advisor dismissed by its own call is not asked: it settled them by lean in its orders, and the dismissal follows at once.
         // The closing is held while it is asked, and the ruler gets one message: the closing without its /onward, then the list under it
