@@ -1177,9 +1177,10 @@ await loadSchema();
 advisors.forEach(setUpAdvisor);
 setUpHerald();
 await recover().catch((error) => log("recovering from the restart failed:", error));
-// A game that ended with its closing words untold (a stall, a restart, a failed epic) has them told now, once, for its real ending
+// A game that ended with its closing words untold (a stall, a restart, a failed epic) has them told now, once, for its real ending.
+// Not during setup: the host then still holds the last world, whose ending /newgame's reset of the flags would have told again (a restart mid-setup, 2026-11-07)
 void host.state().then(async (game) => {
-  if (state.epicTold || !gameOver(game, await standing())) return;
+  if (state.epicTold || state.phase === "setup" || !gameOver(game, await standing())) return;
   log("The game is over and its ending was never told: telling it now");
   await tellTheEnding(game);
 }).catch((error) => log("telling the ending at startup failed:", error.message));
