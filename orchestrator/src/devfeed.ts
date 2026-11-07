@@ -24,7 +24,7 @@ const asMarkdown = (trace: Trace) =>
     `## ${trace.role}${trace.civ ? ` - ${trace.civ}` : ""}`,
     `${trace.model} - ${Math.round(trace.inputTokens / 1000)}k in, ${trace.outputTokens} out, ${money(dollars(trace))}, ${(trace.ms / 1000).toFixed(1)}s`,
     `### System prompt\n${trace.systemPrompt}`,
-    `### Prompt\n${trace.prompt.length > 6000 ? trace.prompt.slice(0, 6000) + "\n…(cut)" : trace.prompt}`,
+    `### Prompt\n${trace.prompt}`,
     ...trace.toolCalls.map((call) => `### Tool: ${call.name}\n\`\`\`json\n${JSON.stringify(call.input, null, 1)}\n\`\`\`\nResult: ${call.result ?? "(none)"}`),
     `### Reply\n${trace.reply}`,
   ].join("\n\n");
