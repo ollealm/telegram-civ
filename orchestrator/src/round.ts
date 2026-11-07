@@ -170,6 +170,8 @@ export async function playRound(allSeats: Seat[], io: RoundIO): Promise<RoundRes
             : finished.declaredBy === seat.civ ? "declarer" : news.includes(seat.civ) ? "struck" : "other";
           const briefing = await host.briefing(seat.civ).catch(() => ({ note: `${seat.civ} is no more.` }));
           const dispatch = await io.working(seat, advisorUrgent(seat, news, briefing, part, pact));
+          // The age so far, from the round's start to the stop: the emergency letter's campaign map shows the war's first marches (a failed /age leaves the plain map, logged)
+          dispatch.age = await host.age(seat.civ, fromTurn).catch((error) => { io.log(`the age summary for ${seat.civ} failed:`, error.message); return undefined; });
           // The ruler must see at a glance that this is not the regular audience, and may dismiss it with one tap
           dispatch.heading = `Emergency council, ${finished.year}: ${news.replace(/[.!]+$/, "")}.`;
           dispatch.question = [dispatch.question, "/onward"].filter(Boolean).join("\n\n");
