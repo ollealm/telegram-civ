@@ -412,17 +412,18 @@ async function playRound() {
       },
       log,
     });
-    // The age is complete and painted: every ruler's letter goes out now, then the Chronicler's chapter, all within the same minute.
+    // The age is complete and painted: the Chronicler's chapter goes out first, with its pictures, then every ruler's letter, all within the same minute -
+    // the ruler reads the world's history before their own call to court (Olle, 2026-11-08).
     // Time keeps passing until they are delivered: a word sent meanwhile goes to the clerk, not to an advisor who has read a letter the ruler has not
     state.phase = "passing";
     persist();
-    for (const post of letters) await deliverLetter(post);
     for (const post of chapters) {
       await broadcastHerald(post.chapter);
       if (post.record) { post.record.undelivered = undefined; persist(); }
       for (const { picture, png } of post.pictures)
         for (const chatId of state.heraldChats) await herald.api.sendPhoto(chatId, new InputFile(png!, "scene.png"), { caption: withNote(picture.caption, picture.note) }).catch(() => {});
     }
+    for (const post of letters) await deliverLetter(post);
     state.phase = "audience";
     persist();
     delivered = true;
