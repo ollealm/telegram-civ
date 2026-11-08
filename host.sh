@@ -4,7 +4,10 @@ cd "${0:A:h}"
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21
 if [[ "$1" == "--build" || ! -s data/classpath.txt ]]; then
   mkdir -p data
-  (cd unciv && ./gradlew desktop:rulerClasspath --console=plain -q 2>/dev/null | grep "^CLASSPATH=" | cut -d= -f2- > ../data/classpath.txt)
+  # A failed compile fails the build (2026-11-08: stderr went to /dev/null and the script exited 0 on a Kotlin error)
+  out=$(cd unciv && ./gradlew desktop:rulerClasspath --console=plain -q 2>&1) || { echo "$out" | tail -40; echo "host.sh: the build failed"; exit 1; }
+  echo "$out" | grep "^CLASSPATH=" | cut -d= -f2- > data/classpath.txt
+  [[ -s data/classpath.txt ]] || { echo "$out" | tail -20; echo "host.sh: no classpath came out of the build"; exit 1; }
   [[ "$1" == "--build" ]] && exit 0
 fi
 DATA="${1:-$PWD/data/game}"; PORT="${2:-8765}"
