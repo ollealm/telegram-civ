@@ -11,7 +11,7 @@ import { advisorPortrait, asJpeg, campaignMap, chroniclerEmblem, forgetMaps, for
 import { host, type GameState, type RoundResult } from "./host.ts";
 import { dollars } from "./prices.ts";
 import { letterOf, playRound as runRound, turnsAhead } from "./round.ts";
-import { diedPassing, forgetPicture, headed, oneLine, persist, recordPicture, remember, state, withNote, type Annal, type Picture, type Seat } from "./store.ts";
+import { diedPassing, forgetPicture, headed, oneLine, persist, recordPicture, remember, state, withNote, type Annal, type Candidate, type Picture, type Seat } from "./store.ts";
 
 /** Rival realms played by the game itself, chosen at random; 0 for an all-human world */
 const AI_CIVS = Number(process.env.AI_CIVS ?? 2);
@@ -440,6 +440,7 @@ async function playRound() {
       }
     }
     persist();
+    await carryOutHeldTakes();
     await flushDevFeed(herald, `Round to ${game.year} (turn ${game.turn})${state.pendingRound ? " - interrupted by urgent news" : ""}`);
     // The game is over when someone has won, or when no ruler is left at the table. Only then, after the last chapter, comes the epic of the whole world.
     if (gameOver(game, await standing()) && !state.epicTold) await tellTheEnding(game);
@@ -449,6 +450,7 @@ async function playRound() {
     persist();
     // Once the letters are out, the rulers are in audience as usual: what failed after that (a saga, the epic) is the log's business
     if (!delivered) for (const seat of seated) await tell(seat, "Something went wrong while time was passing. Send /onward to try again.");
+    await carryOutHeldTakes();
   }
 }
 
@@ -473,6 +475,18 @@ function usageSummary() {
 
 /** Each advisor bot's name-changer, so that a new game can re-dress them all */
 const wearNames: (() => Promise<void>)[] = [];
+/** Each advisor bot's way of seating a chosen candidate, from the seat alone: a take held while time passed is carried out through it when the age is done */
+const advisorTakers: ((chosen: Candidate, held?: boolean) => Promise<void>)[] = [];
+
+/** Time has stopped: every take a ruler made while it passed is carried out now, after the letters - the age is told by the advisor who played it,
+ *  then the chosen one greets the ruler. Called wherever the phase becomes audience: the round's close, a failed round, and the recovery at startup */
+export async function carryOutHeldTakes() {
+  for (const seat of state.seats) {
+    if (!seat.heldTake || seat.bot === undefined) continue;
+    if (seat.fallen) { seat.heldTake = undefined; persist(); continue; } // no realm left to counsel
+    await advisorTakers[seat.bot]?.(seat.heldTake, true).catch((error) => log(`carrying out ${seat.civ}'s held take failed:`, error));
+  }
+}
 
 /** Whether a message opens by calling someone by their first name */
 const addressed = (name: string, text: string) => new RegExp(`^[^\\p{L}\\p{N}]*${name.split(" ")[0].replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![\\p{L}\\p{N}])`, "iu").test(text);
@@ -574,39 +588,48 @@ function setUpAdvisor(bot: Bot, index: number) {
       return presentCandidates(ctx);
     }
     const chosen = seat().candidates?.[Number(choice)];
-    if (!chosen) return;
+    if (chosen) await takeAdvisor(chosen);
+  };
+
+  /** The chosen candidate takes the seat: at setup, on a Take in an open audience, or - held - when the age the take was made in is done. It works from
+   *  the seat alone, every word through tell, so the round's close can call it. A held take is carried out once: only while it is still the seat's */
+  const takeAdvisor = async (chosen: Candidate, held = false) => {
     const replaced = seat().character?.name;
     try {
-      if (seat().character) (seat().formerAdvisors ??= []).push({ name: seat().character!.name, title: seat().character!.title, pronouns: seat().character!.pronouns, until: (await host.state()).year });
+      const until = seat().character ? (await host.state()).year : "";
+      if (held && seat().heldTake !== chosen) return;
+      if (seat().character) (seat().formerAdvisors ??= []).push({ name: seat().character!.name, title: seat().character!.title, pronouns: seat().character!.pronouns, until });
       seat().character = { name: chosen.name, title: chosen.title, pronouns: chosen.pronouns, sheet: chosen.sheet, pitch: chosen.pitch, walk: chosen.walk, manner: chosen.manner };
       void wearName();
       if (!seat().clerk) draftClerk(seat().civ, ADVISOR_MODEL, chosen.name).then((made) => { seat().clerk = made; persist(); }).catch((error) => log("clerk drafting failed:", error.message));
       seat().setup = undefined;
       seat().candidates = undefined;
       seat().rerolled = undefined;
+      seat().heldTake = undefined;
       persist();
-      const greeting = await whileTyping(bot, ctx.chat!.id, advisorGreeting(seat(), replaced));
+      const greeting = await whileTyping(bot, seat().chatId!, advisorGreeting(seat(), replaced));
       remember(seat(), { from: "advisor", text: greeting });
-      await ctx.reply(`${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely - nothing in the world moves while we speak.`);
+      await tell(seat(), `${greeting}\n\n— ${seat().character!.name}\n\nTalk to me freely - nothing in the world moves while we speak.`);
       await flushDevFeed(herald, `Character for ${seat().civ}: ${seat().character!.name}, ${chosen.title}`, [chosen.sheet]);
       if (state.phase === "setup") {
         const missing = state.seats.filter((other) => other.kind !== "agent" && (!other.civ || !other.character)).length;
         if (missing === 0) await createWorld();
-        else await ctx.reply(`The world will be made once every ruler has assembled a court - ${missing} still to come.`);
+        else await tell(seat(), `The world will be made once every ruler has assembled a court - ${missing} still to come.`);
       }
       const era = String((await host.briefing(seat().civ).catch(() => ({ era: "Ancient era" }))).era);
       void advisorPortrait(seat().civ, seat().character!.sheet + pronounLine(seat().character!.pronouns), era).then(async (png) => {
         if (!png) return;
-        await ctx.replyWithPhoto(new InputFile(png, "portrait.png"), { caption: seat().character!.name });
+        await bot.api.sendPhoto(seat().chatId!, new InputFile(png, "portrait.png"), { caption: seat().character!.name });
         // The advisor's face is the bot's face: the portrait becomes its profile photo (one advisor per bot, so one face per game)
         await bot.api.setMyProfilePhoto({ type: "static", photo: new InputFile(await asJpeg(png), "portrait.jpg") })
           .catch((error) => log(`setting the profile photo for ${seat().civ}'s advisor failed:`, error.message));
       }).catch((error) => log(`portrait for ${seat().civ} failed:`, error.message));
     } catch (error) {
       log("taking on the advisor failed:", error);
-      await ctx.reply("Your advisor is delayed on the road. Send /start to try again.");
+      await tell(seat(), "Your advisor is delayed on the road. Send /start to try again.");
     }
   };
+  advisorTakers[index] = takeAdvisor;
 
   /** Only the first person to speak to this advisor becomes its ruler */
   const isRuler = (ctx: Context) => {
@@ -677,11 +700,12 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.callbackQuery(/^advisors:(take:\d+|keep)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
-    if (ctx.match[1] !== "keep" && state.phase === "passing" && !seat().setup && seat().character) return void (await ctx.reply("Wait until time stops passing."));
     await takeUp(ctx);
     if (seat().setup || !seat().character) return;
+    // Keep sends the three away, and calls back a take held for the age's end: the present advisor stays
     if (ctx.match[1] === "keep") {
       seat().candidates = undefined;
+      seat().heldTake = undefined;
       persist();
       return void (await ctx.reply(`${seat().character!.name} stays at your side.`));
     }
@@ -690,6 +714,13 @@ function setUpAdvisor(bot: Bot, index: number) {
     const tapped = tappedLabel(ctx);
     const candidate = seat().candidates?.[Number(choice)];
     if (!candidate || (tapped && tapped !== `Take ${candidate.name}`)) return void (await ctx.reply("Those candidates have gone their way. Send /advisors to call others."));
+    // While time passes the take is held (Olle, 2026-11-08): the advisor playing the age plays it to the end, and the chosen one takes the seat once it is
+    // done, after its letter. A copy, so that a later draw cannot change who was chosen; a later Take replaces it
+    if (state.phase === "passing") {
+      seat().heldTake = { ...candidate };
+      persist();
+      return void (await ctx.reply(`${candidate.name} takes the seat when this age is done, Majesty. ${seat().character!.name} governs it to the end.`));
+    }
     await chooseAdvisor(ctx, choice);
   });
 
@@ -1207,7 +1238,7 @@ function setUpHerald() {
 }
 
 /** After a restart: letters and chapters that were written but never sent go out now, and an age a restart cut short is taken up again */
-async function recover() {
+export async function recover() {
   const resent = new Set<Seat>();
   for (const seat of state.seats)
     for (const annal of seat.annals ?? [])
@@ -1222,19 +1253,22 @@ async function recover() {
       chapter.undelivered = undefined;
     }
   persist();
-  if (!diedPassing) return;
-  // Died while the age was being played: it is played on, as if the courts had just risen
-  if (state.pendingRound && !state.pendingRound.urgent) {
+  // Died while the age was being played: it is played on, as if the courts had just risen (its close carries out any take held meanwhile)
+  if (diedPassing && state.pendingRound && !state.pendingRound.urgent) {
     log("Taking up the age a restart cut short");
     return maybeStartRound();
   }
   // Died while the letters were being written or sent: the courts are in session again, and a ruler whose letter never came is told so
-  for (const seat of await standing()) {
-    if (!seat.ready) continue;
-    seat.ready = false;
-    if (!resent.has(seat) && seat.kind !== "agent") await tell(seat, "My letter for these years was lost on the road, Majesty - the realm ran on your standing wishes meanwhile. Ask me anything of these years, and /onward when you are ready.");
+  if (diedPassing) {
+    for (const seat of await standing()) {
+      if (!seat.ready) continue;
+      seat.ready = false;
+      if (!resent.has(seat) && seat.kind !== "agent") await tell(seat, "My letter for these years was lost on the road, Majesty - the realm ran on your standing wishes meanwhile. Ask me anything of these years, and /onward when you are ready.");
+    }
+    persist();
   }
-  persist();
+  // A take held while time passed that a restart kept from being carried out: carried out now, after any letter resent above - once, as the switch clears it
+  if (state.phase === "audience") await carryOutHeldTakes();
 }
 
 await ensureGame();
