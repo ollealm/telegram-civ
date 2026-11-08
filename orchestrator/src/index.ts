@@ -440,10 +440,11 @@ async function playRound() {
       }
     }
     persist();
-    await carryOutHeldTakes();
     await flushDevFeed(herald, `Round to ${game.year} (turn ${game.turn})${state.pendingRound ? " - interrupted by urgent news" : ""}`);
     // The game is over when someone has won, or when no ruler is left at the table. Only then, after the last chapter, comes the epic of the whole world.
     if (gameOver(game, await standing()) && !state.epicTold) await tellTheEnding(game);
+    // A take held while time passed: the advisor who played the age tells it, its ending included; then the chosen one takes the seat
+    await carryOutHeldTakes();
   } catch (error) {
     log("Round failed:", error);
     state.phase = "audience"; // whatever failed, the rulers must be able to speak again
