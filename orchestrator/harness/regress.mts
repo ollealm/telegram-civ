@@ -2155,14 +2155,6 @@ const CASES: Record<string, () => Promise<void>> = {
       // Take: the existing replace path - the advisor goes to formerAdvisors, the will and the clerk stay, the greeting is sent and joins the transcript
       const third = await advisorsMessage();
       const thirdAt = sent.lastIndexOf(third.texts[0]);
-      // A Take while time passes is only told to wait: the message keeps its buttons
-      state.phase = "passing";
-      const beforeW = { sent: sent.length, actions: actions.length };
-      tap("advisors:take:1", shownAt(thirdAt));
-      await until(() => sent.length > beforeW.sent);
-      await sleep(300);
-      state.phase = "audience";
-      check("W51 a Take while time passes: the message is not edited, the wait line is sent, the candidates kept", JSON.stringify(actions.slice(beforeW.actions)) === JSON.stringify(["send Wait until time stops passing."]) && seat.candidates?.length === 3, JSON.stringify(actions.slice(beforeW.actions)));
       // But first a Take under the earlier message: it names one of that draw, and takes no one from this one
       const beforeOld = sent.length;
       const beforeOldA = actions.length;
@@ -2188,6 +2180,60 @@ const CASES: Record<string, () => Promise<void>> = {
       tap("advisors:take:0");
       await until(() => sent.length > beforeStale);
       check("W51 a Take tapped after the candidates are gone changes nothing", seat.character.name === name && (seat.formerAdvisors ?? []).length === beforeT.former + 1 && JSON.stringify(sent.slice(beforeStale)) === JSON.stringify(["Those candidates have gone their way. Send /advisors to call others."]), JSON.stringify(sent.slice(beforeStale)));
+      // A Take while time passes is held (2026-11-08, data/briefs/held-take-2026-11-08.md): taken up at once, kept on the seat as a copy, and carried out when
+      // the age is done - after its letter, then the greeting. A second Take replaces it, a Keep calls it back; the recovery at startup carries it out once
+      const present = seat.character.name;
+      const stateSeat = () => (JSON.parse(readFileSync(process.env.RULER_STATE_FILE!, "utf8")) as { seats: any[] }).seats.find((each) => each.civ === ours);
+      const draw = async () => { const drawn = await advisorsMessage(); return { ...drawn, at: sent.lastIndexOf(drawn.texts[0]) }; };
+      const tapUnder = async (data: string, on: { at: number }) => { const before = { sent: sent.length, actions: actions.length }; tap(data, shownAt(on.at)); await until(() => sent.length > before.sent); await sleep(300); return actions.slice(before.actions); };
+      state.phase = "passing";
+      const d1 = await draw();
+      const c1 = { ...seat.candidates![1] };
+      const held1 = await tapUnder("advisors:take:1", d1);
+      check("W51 a Take while time passes: the card is edited with \"Take <name>\" last and no buttons, one line says when they take the seat; the advisor unchanged, the take held and persisted",
+        JSON.stringify(held1) === JSON.stringify([`edit ${d1.at + 1}: ${d1.texts[0]}\n\nTake ${c1.name}`, `send ${c1.name} takes the seat when this age is done, Majesty. ${present} governs it to the end.`])
+        && seat.character.name === present && JSON.stringify(seat.heldTake) === JSON.stringify(c1) && stateSeat()?.heldTake?.name === c1.name, JSON.stringify(held1));
+      const d2 = await draw();
+      check("W51 a held take is a copy: a new /advisors draw while it is held leaves it as chosen", JSON.stringify(seat.heldTake) === JSON.stringify(c1) && !seat.candidates!.some((each: { name: string }) => each.name === c1.name), JSON.stringify(seat.heldTake));
+      const c2 = { ...seat.candidates![2] };
+      await tapUnder("advisors:take:2", d2);
+      check("W51 a second Take while held replaces the first", JSON.stringify(seat.heldTake) === JSON.stringify(c2) && seat.character.name === present, JSON.stringify(seat.heldTake));
+      const d3 = await draw();
+      const kept3 = await tapUnder("advisors:keep", d3);
+      check("W51 a Keep while held calls it back: the present advisor stays, said as today", seat.heldTake === undefined && stateSeat()?.heldTake === undefined && kept3.at(-1) === `send ${present} stays at your side.` && seat.character.name === present, JSON.stringify(kept3));
+      const d4 = await draw();
+      const c4 = { ...seat.candidates![0] };
+      await tapUnder("advisors:take:0", d4);
+      // The age is done, as the round's close does it: the phase is audience, the letter goes through deliverLetter, then the held takes are carried out
+      state.phase = "audience";
+      const formerBefore = (seat.formerAdvisors ?? []).length;
+      const beforeAge = sent.length;
+      await bots.deliverLetter({ seat, letter: "AD 1000 - the age is done.", caption: "A scene", scene: Promise.resolve(null), marches: Promise.resolve(null), painted: Promise.resolve(null) } as any);
+      await bots.carryOutHeldTakes();
+      const closedAge = sent.slice(beforeAge);
+      check("W51 the age done: the letter first, then the held one's greeting with the signature line", closedAge.length === 2 && closedAge[0] === "AD 1000 - the age is done."
+        && closedAge[1] === `I am candidate ${c4.name.slice("Ninurta".length)}, at your service.\n\n— ${c4.name}\n\nTalk to me freely - nothing in the world moves while we speak.`, JSON.stringify(closedAge));
+      check("W51 the age done: the held one is the advisor, card and all; the old one in formerAdvisors with the year; the candidates and the held take gone, in the state file too",
+        seat.character.name === c4.name && seat.character.pitch === c4.pitch && (seat.formerAdvisors ?? []).length === formerBefore + 1 && JSON.stringify(seat.formerAdvisors!.at(-1)) === JSON.stringify({ name: present, title: "the Seer", pronouns: "he", until: game.year })
+        && seat.candidates === undefined && seat.heldTake === undefined && stateSeat()?.heldTake === undefined && stateSeat()?.character?.name === c4.name, JSON.stringify({ character: seat.character.name, former: seat.formerAdvisors?.at(-1) }));
+      // A restart: a held take and a letter never sent, found by the recovery with the courts in audience - the letter, then the switch, and only once
+      state.phase = "passing";
+      const d5 = await draw();
+      const c5 = { ...seat.candidates![1] };
+      await tapUnder("advisors:take:1", d5);
+      state.phase = "audience";
+      seat.annals.push({ years: "AD 1000 to AD 1100", heading: "AD 1100 - come to court.", story: "A lost age.", undelivered: true });
+      const beforeR = sent.length;
+      await bots.recover();
+      await bots.recover();
+      const recovered = sent.slice(beforeR);
+      check("W51 a restart with a held take: the recovery sends the lost letter, then the greeting - once; a second recovery carries out nothing", recovered.length === 2 && recovered[0] === "AD 1100 - come to court.\n\nA lost age."
+        && recovered[1].startsWith(`I am candidate ${c5.name.slice("Ninurta".length)}, at your service.`) && seat.character.name === c5.name && seat.formerAdvisors!.at(-1)!.name === c4.name && stateSeat()?.heldTake === undefined, JSON.stringify(recovered));
+      const playing = source.slice(source.indexOf("async function playRound()"), source.indexOf("/** Time passes once every standing ruler"));
+      const recovering = source.slice(source.indexOf("export async function recover()"), source.indexOf("await ensureGame();"));
+      check("W51 a held take is carried out wherever time stops: the round's close after its letters, a failed round, and the recovery after the letters it resends",
+        source.split("await carryOutHeldTakes();").length - 1 === 3 && playing.indexOf("for (const post of letters) await deliverLetter(post);") < playing.indexOf("await carryOutHeldTakes();")
+        && /catch \(error\) \{\n    log\("Round failed:"[\s\S]*await carryOutHeldTakes\(\);\n  \}\n\}/.test(playing) && recovering.indexOf("annal.undelivered = undefined") < recovering.indexOf("await carryOutHeldTakes();") && recovering.includes("await carryOutHeldTakes();"), "the call sites");
       // The workshop's aside (2026-11-08, data/briefs/ooc-aside-2026-11-08.md): the door open, a word that opens out of character reaches the model behind the
       // advisor while time passes and after the court has risen; in an open audience it is the advisor's as any word; with the door closed, or without the opening, the clerk's
       const READ = ["get_briefing", "get_options", "look_up", "get_log"];

@@ -29,6 +29,9 @@ export type Annal = { years: string; heading?: string; story: string; course?: s
   /** Written but not yet sent: a restart in between sends it at startup rather than let the advisor believe the ruler read it */
   undelivered?: boolean };
 
+/** One who offers themselves as chief advisor: at setup, or on /advisors */
+export type Candidate = { name: string; title: string; pitch: string; sheet: string; pronouns?: string; walk?: string; manner?: string };
+
 export type Seat = {
   civ: string;
   /** Which advisor bot speaks for this seat (its place in ADVISOR_n_BOT_TOKEN order); a sovereign's realm has none */
@@ -75,7 +78,9 @@ export type Seat = {
   plan?: string;
   character?: Character;
   /** Advisors to choose from during setup or on /advisors, and whether the ruler has already sent for a second three at setup */
-  candidates?: { name: string; title: string; pitch: string; sheet: string; pronouns?: string; walk?: string; manner?: string }[];
+  candidates?: Candidate[];
+  /** The candidate a ruler took under /advisors while time passed: a copy, not a place in the draw. They take the seat once the age is done, after its letter */
+  heldTake?: Candidate;
   rerolled?: boolean;
   /** War is the ruler's alone unless they have said, in plain words, that the advisor may declare it */
   mayDeclareWar?: boolean;
