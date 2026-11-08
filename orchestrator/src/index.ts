@@ -1,7 +1,7 @@
 // Telegram front: one advisor bot per seat, one herald bot for the world newspaper
 
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { advisorGreeting, eraPictures, oddityPictures, victoryPictures, CLOSING_TAIL, LEAVE, loadSchema, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, placePictures, pronounLine, realmSaga, wonderBoon, wonderPictures } from "./agents.ts";
+import { advisorGreeting, eraPictures, oddityPictures, victoryPictures, CLOSING_TAIL, LEAVE, loadSchema, advisorAside, advisorBrief, advisorReply, BRIEF_LENS, clerkBrief, dated, type BriefCommand, textModel, chroniclerEpic, clerkReply, describeDecision, draftClerk, placePictures, pronounLine, realmSaga, wonderBoon, wonderPictures } from "./agents.ts";
 import { card, draftCandidates, draftSovereign, shortenToCard } from "./characters.ts";
 
 const ADVISOR_MODEL = process.env.ADVISOR_MODEL ?? "claude-opus-5";
@@ -67,6 +67,8 @@ const tell = async (seat: Seat, text: string, options?: { reply_markup: InlineKe
 };
 
 /** Telegram's command menu, in this order (Olle, 2026-11-07: the age, the six briefs and the advisors; /map /will /status /character /clerk /advisor and the rest still work, off the menu); the lens words are fixed, not BRIEF_LENS's */
+/** A word that plainly opens out of character, loosely, at its start (the workshop's aside) */
+const OUT_OF_CHARACTER = /^\W*(out[ -]of[ -]character|ooc|debug|as the model)\b/i;
 const MENU = [
   { command: "onward", description: "Let the age pass" },
   { command: "cities", description: "A brief on the cities" },
@@ -836,6 +838,26 @@ function setUpAdvisor(bot: Bot, index: number) {
     });
   };
 
+  /** The workshop door open, a word that plainly opens out of character reaches the model behind the advisor between audiences too (Olle, 2026-11-08):
+   *  while time passes and after the court has risen, where the clerk would answer. In an open audience the advisor answers it as any word */
+  const asideFor = (text: string) => !!state.workshop && OUT_OF_CHARACTER.test(text) && !!seat().character && !seat().fallen && state.phase !== "setup";
+  const aside = (ctx: Context, message: string) => {
+    enqueue(async () => {
+      try {
+        const reply = await whileTyping(bot, ctx.chat!.id, advisorAside(seat(), message));
+        // Its own thread, never the court's record: not the audience's transcript, not the journal
+        (seat().workshopChat ??= []).push({ from: "ruler", text: message }, { from: "advisor", text: reply });
+        if (seat().workshopChat!.length > 24) seat().workshopChat!.splice(0, seat().workshopChat!.length - 24);
+        persist();
+        await ctx.reply(reply || "(no answer)");
+        await flushDevFeed(herald, `Workshop aside - ${seat().civ}`);
+      } catch (error) {
+        log("workshop aside failed:", error);
+        await ctx.reply("The aside failed; ask again in a moment.").catch(() => {});
+      }
+    });
+  };
+
   /** One audience at a time per seat, so replies stay in order */
   /** thenGo: the ruler ended their message with /go - answer it, act on it, and let time pass without another word from them */
   const audience = (ctx: Pick<Context, "reply"> & { chat?: { id: number } }, message: string, thenGo = false, waiting?: { text: string; thenGo: boolean }) => {
@@ -846,7 +868,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     const answered = () => { seat().unanswered = seat().unanswered?.filter((other) => other !== entry); if (!seat().unanswered?.length) seat().unanswered = undefined; persist(); };
     enqueue(async () => {
       // Decided when the reply is due, not when the message came: a court dismissed or a round begun meanwhile changes who answers
-      if (state.phase === "passing" && seat().character) { answered(); return clerk(ctx as Context, message); }
+      if (state.phase === "passing" && seat().character) { answered(); return asideFor(message) ? aside(ctx as Context, message) : clerk(ctx as Context, message); }
       if (seat().ready && state.phase === "audience") {
         seat().ready = false;
         const annal = seat().annals?.at(-1);
@@ -1098,6 +1120,7 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.on("message:text", async (ctx) => {
     if (seat().fallen) return ctx.reply(`${seat().civ} is no more, Majesty. Only the Chronicler writes of it now.`);
+    if ((state.phase === "passing" || (state.phase === "audience" && seat().ready)) && asideFor(ctx.message.text)) return aside(ctx, ctx.message.text);
     if (state.phase === "passing" && seat().character) return clerk(ctx, ctx.message.text);
     if (state.phase === "passing") return ctx.reply("Time is passing, Majesty - I will report as soon as there is news.");
     // The floor: the clerk's once called, the advisor's once called back - by command or by name
