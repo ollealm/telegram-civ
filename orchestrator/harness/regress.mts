@@ -1344,6 +1344,7 @@ const CASES: Record<string, () => Promise<void>> = {
       check("W53 set_orders serves words with a trade and with an answer, and the envoy order the host takes", schema.orderFields.immediate.includes("envoy") && agents.schemaProblems(schema).length === 0
         && /want: z\.array[^\n]*\n\s*words: z\.string\(\)\.optional\(\)/.test(tools) && /answerOffers: z\.array\(z\.object\(\{[^\n]*words: z\.string\(\)\.optional\(\)/.test(tools) && /envoy: z\.array\(z\.object\(\{ to: z\.string\(\), words: z\.string\(\)/.test(tools),
         JSON.stringify(agents.schemaProblems(schema)));
+      check("W53 set_orders' renew takes withdraw, and its description says a renewal is called back with it (renewal-withdraw brief)", /renew: z\.array\(z\.object\(\{[^\n]*withdraw: z\.boolean\(\)\.optional\(\) \}\)\)[^\n]*A standing renewal is called back with withdraw: true\."\),/.test(tools));
       check("W53 the rule line on words between courts is in the audience's prompt and the letter writer's", [first.systemPrompt, report.systemPrompt].every((prompt) => prompt.includes("Words may go with an offer or an answer, or alone by envoy, to another court; they reach that court's advisor as written, and nothing else does. A peace or a friendship carries none of its own: its words go by an envoy beside it.")));
       check("W53 the audience's rules count no turns: the age passes, and the look-ins are every few years", !/\b\d+ turns\b|turns pass|every few turns/.test(first.systemPrompt) && first.systemPrompt.includes("Then the next age passes while you govern by the recorded will and look in on the realm every few years."));
       check("W53 the advisor's reply clears them", seat.agenda === undefined && seat.road === undefined);
@@ -1722,6 +1723,55 @@ const CASES: Record<string, () => Promise<void>> = {
     const folded = await brief("Iroquois");
     check("W60 an acknowledged thin warning folds to its first clause, as before", acknowledged.status === 200 && (folded.warningsAcknowledged ?? []).includes("The people's mood is thin (+2)") && !folded.warnings.some((line: string) => /mood is thin/.test(line)),
       JSON.stringify({ done: acknowledged.json.done, folded: folded.warningsAcknowledged }));
+    await stop(host);
+  },
+  async W61() { // a renewal called back (2026-11-08, brief data/briefs/renewal-withdraw-2026-11-08.md): renew with withdraw: true removes the standing renewal, picked
+    // as orderRenewal picks a deal; nothing standing is refused with the list; a proposal already out is said to be out. Run 36 at T300, Siam, with a friendship
+    // planted with Greece (30 turns) and Greece's Open Borders ending next turn
+    const host = await start("run36-t300", "", undefined, (game) => {
+      const civOf = (name: string) => game.civilizations.find((c: any) => c.civName === name);
+      for (const [a, b] of [["Siam", "Greece"], ["Greece", "Siam"]]) { const manager = civOf(a).diplomacy[b]; manager.flagsCountdown = { ...(manager.flagsCountdown ?? {}), DeclarationOfFriendship: 30 }; }
+    });
+    const awaiting = async () => ((await get(`/briefing?civ=Siam`)).json.standingOrders?.awaiting ?? []) as string[];
+    const renewing = (lines: string[], partner: string) => lines.filter((line) => line.includes(` with ${partner} `) && /to be (offered|proposed) again/.test(line));
+    // Two with one power: no terms is refused with both; withdrawn by terms, one goes and the other stands; terms that stand for none are refused with the list
+    const twoOrdered = await orders("Siam", { renew: [{ power: "Persia", terms: "we give Truffles x1; they give Cotton x1" }, { power: "Persia", terms: "we give Gold x150; they give Silk x1" }] });
+    const unnamed = await orders("Siam", { renew: [{ power: "Persia", withdraw: true }] });
+    const bySilk = await orders("Siam", { renew: [{ power: "Persia", terms: "Silk", withdraw: true }] });
+    const left = renewing(await awaiting(), "Persia");
+    check("W61 two renewals with one power: without terms the withdrawal is refused with both; by terms the Silk one goes and the Truffles one stands", (twoOrdered.json.done as string[]).length === 2
+        && /^2 renewals stand with Persia; say which with terms, as listed: we give Truffles x1; they give Cotton x1; we give Gold x150; they give Silk x1$/.test((unnamed.json.failed as string[])[0] ?? "")
+        && (bySilk.json.done as string[])[0] === "Withdrawn: The Silk deal with Persia is no longer to be offered again when it ends (we give Gold x150; they give Silk x1)."
+        && left.length === 1 && left[0].includes("Truffles"), JSON.stringify({ unnamed: unnamed.json.failed, bySilk: bySilk.json, left }));
+    const notStanding = await orders("Siam", { renew: [{ power: "Persia", terms: "Copper", withdraw: true }, { power: "England", withdraw: true }] });
+    check("W61 nothing standing to withdraw: refused with the renewals standing with that power, or that none stands", JSON.stringify(notStanding.json.failed) === JSON.stringify([
+        "No renewal with Persia reads 'Copper'; standing: we give Truffles x1; they give Cotton x1", "No renewal stands with England"]), JSON.stringify(notStanding.json.failed));
+    // The friendship's renewal, withdrawn by its terms
+    const friendship = await orders("Siam", { renew: [{ power: "Greece", terms: "Declaration of Friendship" }] });
+    const before = renewing(await awaiting(), "Greece");
+    const unfriend = await orders("Siam", { renew: [{ power: "Greece", terms: "Declaration of Friendship", withdraw: true }] });
+    check("W61 the friendship's renewal withdrawn by its terms", (friendship.json.done as string[]).length === 1 && before.some((line) => /Declaration of Friendship with Greece is to be proposed again/.test(line))
+        && (unfriend.json.done as string[])[0] === "Withdrawn: The Declaration of Friendship with Greece is no longer to be proposed again when it lapses." && !renewing(await awaiting(), "Greece").some((line) => /Friendship/.test(line)),
+      JSON.stringify({ before, unfriend: unfriend.json }));
+    // A proposal already out is an offer, not a renewal: the refusal says it is on their desk
+    const proposed = await orders("Siam", { trade: [{ with: "Austria", give: [{ item: "Open Borders" }], want: [{ item: "Open Borders" }] }] });
+    const out = await orders("Siam", { renew: [{ power: "Austria", terms: "Open Borders", withdraw: true }] });
+    check("W61 a proposal already out is not this order's business: the refusal says it is on their desk", (proposed.json.done as string[]).length === 1
+        && (out.json.failed as string[])[0] === "No renewal stands with Austria; our proposal is already on Austria's desk, answered as any proposal - this order cannot call it back", JSON.stringify({ proposed: proposed.json, out: out.json.failed }));
+    // renew, then withdraw: the list is empty for Greece, the log line and the reply; the deal ends next turn and no proposal goes out
+    const ordered = await orders("Siam", { renew: [{ power: "Greece", terms: "Open Borders" }] });
+    const withdrawn = await orders("Siam", { renew: [{ power: "Greece", terms: "Open Borders", withdraw: true }] });
+    const logged = (await logOf("Siam", 299)).map((line) => line.text);
+    check("W61 renew, then withdraw: no renewal stands with Greece, the log line and the reply", (ordered.json.done as string[]).length === 1 && renewing(await awaiting(), "Greece").length === 0
+        && (withdrawn.json.done as string[])[0] === "Withdrawn: The Open Borders deal with Greece is no longer to be offered again when it ends (we give Open Borders; they give Open Borders)."
+        && logged.includes("By your order: the Open Borders deal with Greece is no longer to be offered again when it ends."), JSON.stringify({ withdrawn: withdrawn.json, log: logged.filter((line) => /Greece/.test(line)) }));
+    await post("/advance", { turns: 1 });
+    const after = (await get(`/briefing?civ=Siam`)).json;
+    const greece = (after.knownCivs as { civ: string; dealsInForce?: string[] }[]).find((each) => each.civ === "Greece");
+    // What a renewal sent says, or a refused one (the orders' own line of the same year still names what was ordered, and the withdrawal follows it)
+    const sent = (await logOf("Siam", 299)).map((line) => line.text).filter((line) => /deal with Greece/.test(line) && /ended and was|ended and were|was to be offered again when it ended/.test(line));
+    check("W61 the deal's end passes and no proposal goes out", !(greece?.dealsInForce ?? []).some((deal) => /Open Borders/.test(deal)) && sent.length === 0
+        && !((after.standingOrders?.awaiting ?? []) as string[]).some((line) => /^Our proposal to Greece .*Open Borders/.test(line)), JSON.stringify({ deals: greece?.dealsInForce, sent }));
     await stop(host);
   },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
