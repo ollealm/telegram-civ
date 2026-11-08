@@ -49,6 +49,8 @@ export type Seat = {
   floor?: "clerk";
   /** The last few exchanges with the clerk */
   clerkChat?: { from: "ruler" | "clerk"; text: string }[];
+  /** The workshop's asides between audiences (2026-11-08): the ruler and the model behind the advisor, the last twelve exchanges - never the court's record */
+  workshopChat?: { from: "ruler" | "advisor"; text: string }[];
   /** Things said to the clerk that sounded like orders: handed to the advisor at the next dispatch */
   forCouncil?: string[];
   /** The ruler's messages waiting for an answer, oldest first - kept until the reply is sent, so a restart answers them rather than swallow them */

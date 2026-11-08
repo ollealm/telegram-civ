@@ -1849,7 +1849,10 @@ const CASES: Record<string, () => Promise<void>> = {
     // /advisors (2026-11-07): the character writer's calls - the sheet shortened to a card, and the candidates drafted, each numbered - and a new advisor's greeting
     const shortenings: string[] = [];
     let drafted = 0;
+    const seen: { role: string; system: string; served?: string[]; prompt: string }[] = []; // every call, for the workshop's aside (2026-11-08)
     agents.standInForModels((asked) => {
+      seen.push({ role: asked.role, system: asked.systemPrompt, served: asked.served, prompt: asked.prompt });
+      if (/\nTHE WORKSHOP\n/.test(asked.systemPrompt)) return { text: "As the model: the granary came first because Kyoto was a turn from starving." };
       if (asked.role === "character") {
         if (/Shorten it to the card/.test(asked.systemPrompt)) { shortenings.push(asked.prompt); return { text: "", data: { pitch: "I count the grain and say little of it.", walk: "a keeper of granaries", manner: "sparing and exact" } }; }
         drafted++;
@@ -2185,6 +2188,51 @@ const CASES: Record<string, () => Promise<void>> = {
       tap("advisors:take:0");
       await until(() => sent.length > beforeStale);
       check("W51 a Take tapped after the candidates are gone changes nothing", seat.character.name === name && (seat.formerAdvisors ?? []).length === beforeT.former + 1 && JSON.stringify(sent.slice(beforeStale)) === JSON.stringify(["Those candidates have gone their way. Send /advisors to call others."]), JSON.stringify(sent.slice(beforeStale)));
+      // The workshop's aside (2026-11-08, data/briefs/ooc-aside-2026-11-08.md): the door open, a word that opens out of character reaches the model behind the
+      // advisor while time passes and after the court has risen; in an open audience it is the advisor's as any word; with the door closed, or without the opening, the clerk's
+      const READ = ["get_briefing", "get_options", "look_up", "get_log"];
+      const ask = async (text: string) => { const before = { sent: sent.length, seen: seen.length }; say(text); await until(() => sent.length > before.sent); await sleep(400); return { sent: sent.slice(before.sent), calls: seen.slice(before.seen) }; };
+      const asideCalls = (calls: typeof seen) => calls.filter((each) => /\nTHE WORKSHOP\n/.test(each.system));
+      const untouched = () => JSON.stringify({ chat: seat.chat, journal: seat.journal });
+      Object.assign(seat, { ready: false, dismissed: false, matters: undefined, floor: undefined, workshopChat: undefined });
+      state.workshop = true;
+      state.phase = "passing";
+      const beforeKept = untouched();
+      const whilePassing = await ask("Out of character: why did you build the granary first?");
+      const aside = asideCalls(whilePassing.calls)[0];
+      check("W51 workshop, time passing: \"Out of character: ...\" goes to the aside - the advisor's persona, the workshop's words, the read tools only - and its reply is sent",
+        whilePassing.calls.length === 1 && aside?.role === "advisor" && aside.system.includes(`You are ${seat.character.name}`) && aside.system.includes("This is not an audience.") && aside.system.includes("while the years pass")
+        && JSON.stringify(aside.served) === JSON.stringify(READ) && JSON.stringify(whilePassing.sent) === JSON.stringify(["As the model: the granary came first because Kyoto was a turn from starving."]),
+        JSON.stringify({ calls: whilePassing.calls.map((each) => `${each.role}: ${each.served}`), sent: whilePassing.sent }));
+      check("W51 the aside is kept in workshopChat, and the audience's transcript and the journal are as they were", JSON.stringify(seat.workshopChat) === JSON.stringify([
+          { from: "ruler", text: "Out of character: why did you build the granary first?" }, { from: "advisor", text: "As the model: the granary came first because Kyoto was a turn from starving." }]) && untouched() === beforeKept,
+        JSON.stringify(seat.workshopChat));
+      // The aside's moment as advisorAside gives it: its tool server holds the read tools alone, so a set_orders call finds no such tool
+      const unserved = await agents.callRealmTool(seat, { readOnly: true }, (await get("/schema")).json, "set_orders", { goldReserve: 0 }).catch((error: Error) => error.message);
+      check("W51 the aside's tools hold no set_orders: an orders call cannot be made from it", /set_orders not found/i.test(unserved) && !aside?.served?.includes("set_orders") && readFileSync("src/agents.ts", "utf8").includes("    { seat, readOnly: true },\n  );\n};\n\n/** The picture the ruler carries off"), unserved);
+      state.phase = "audience";
+      seat.ready = true;
+      const risen = await ask("ooc - what did you make of my last word?");
+      const second = asideCalls(risen.calls)[0];
+      check("W51 workshop, the court risen: the aside answers, with the thread so far in its prompt", risen.calls.length === 1 && !!second && second.system.includes("after the court has risen")
+        && second.prompt.includes("The workshop so far:\nRuler: Out of character: why did you build the granary first?") && seat.workshopChat?.length === 4 && untouched() === beforeKept && seat.ready,
+        JSON.stringify(risen.calls.map((each) => each.role)));
+      const plain = await ask("What does the treasury hold?");
+      check("W51 workshop, the court risen, a word without the opening: the clerk's", plain.calls.length === 1 && plain.calls[0].role === "clerk" && asideCalls(plain.calls).length === 0, JSON.stringify(plain.calls.map((each) => each.role)));
+      state.phase = "passing";
+      const plainPassing = await ask("How many cities do we have?");
+      check("W51 workshop, time passing, a word without the opening: the clerk's", plainPassing.calls.length === 1 && plainPassing.calls[0].role === "clerk", JSON.stringify(plainPassing.calls.map((each) => each.role)));
+      state.workshop = false;
+      const closed = await ask("Out of character: why the granary?");
+      check("W51 the door closed, time passing, the same opening: the clerk's, as before", closed.calls.length === 1 && closed.calls[0].role === "clerk" && seat.workshopChat?.length === 4, JSON.stringify(closed.calls.map((each) => each.role)));
+      state.workshop = true;
+      state.phase = "audience";
+      seat.ready = false;
+      const open = await ask("Out of character: why the granary?");
+      check("W51 workshop, an open audience: the advisor's reply as any word, no aside", open.calls.length === 1 && open.calls[0].role === "advisor" && asideCalls(open.calls).length === 0 && seat.workshopChat?.length === 4
+        && open.calls[0].served?.includes("set_orders") === true, JSON.stringify(open.calls.map((each) => `${each.role}: ${each.served}`)));
+      state.workshop = false;
+      Object.assign(seat, { ready: false, dismissed: false, matters: undefined });
       // Letter order (2026-11-08, data/briefs/letter-order-2026-11-08.md): the closing picture of the last audience, then the letter with its pictures. A
       // stand-in painter holds each closing picture until the case lets it go; the round's own loop sends each letter through deliverLetter
       const PNG = Buffer.from("png");

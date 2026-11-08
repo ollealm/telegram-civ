@@ -909,6 +909,22 @@ ${HOUSE_RULES}`,
     { seat, readOnly: true, sideTools: ["note_for_council"], onText },
   );
 
+/** The workshop's aside (2026-11-08, data/briefs/ooc-aside-2026-11-08.md): with the workshop door open, a ruler's word that opens out of character reaches the
+ *  model behind the advisor between audiences too - read-only, one reply, kept apart from the court's record */
+export const advisorAside = async (seat: Seat, message: string) => {
+  const briefing = await host.briefing(seat.civ).catch(() => "(unavailable - use get_briefing)");
+  return run(
+    "advisor",
+    ADVISOR_MODEL,
+    `${persona(seat)}
+
+THE WORKSHOP
+This is not an audience. The workshop door is open for this game, and the ruler has called the model behind the person out between audiences - ${state.phase === "passing" ? "while the years pass and the person governs" : "after the court has risen, while the other rulers finish theirs"}. Answer plainly and briefly as that model, not as the person: what you see in the record and why you did what you did. Check a fact with the tools before you state it. You give no orders and close no court here, and whatever is said here is not the court's record: the person does not remember it at the next audience.`,
+    `${memory(seat, true)}\n\nThe last audience, its final exchanges:\n${seat.chat.slice(-12).map((entry) => `${entry.from === "ruler" ? "Ruler" : "You"}: ${entry.text}`).join("\n\n") || "(none yet)"}\n\nThe realm as it stands now:\n${JSON.stringify(briefing)}\n\nThe workshop so far:\n${(seat.workshopChat ?? []).map((entry) => `${entry.from === "ruler" ? "Ruler" : "You"}: ${entry.text}`).join("\n\n") || "(this is the ruler's first word here)"}\n\nThe ruler now says:\n${message}`,
+    { seat, readOnly: true },
+  );
+};
+
 /** The picture the ruler carries off when the advisor closed without asking the painter for one: what was decided, or the realm's next step */
 export const describeDecision = async (seat: Seat) =>
   runStructured(
