@@ -4,7 +4,7 @@
 // Run:  npx tsx harness/regress.mts [case ...]        (all cases when none named; e.g. F1 W2)
 // REGRESS_PORT (default 8772; never 8765 or 8790), FIXTURES_DIR (default ../data/fixtures), HOST_SH (default ../host.sh). Sequential; about a minute on this machine (each host answers in a few seconds).
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
@@ -249,7 +249,8 @@ const CASES: Record<string, () => Promise<void>> = {
     for (const name of ["Greece", "Babylon", "Japan", "Inca", "Iroquois", "The Ottomans"]) {
       const brief = (await get(`/briefing?civ=${civ(name)}`)).json;
       const size = JSON.stringify(brief).length;
-      check(`W9 ${name}: briefing at most 16 KB, without score, goldBreakdown or victory.note`, size <= 16000 && !("score" in brief) && !("goldBreakdown" in brief) && !("note" in (brief.victory ?? {})), `${size}`);
+      // 16,000 until the mood block (2026-11-08): about 1.25 KB at every sign, the size the researcher's report gave for Olle's yes, less the warnings it shortened
+      check(`W9 ${name}: briefing at most 16.5 KB, without score, goldBreakdown or victory.note`, size <= 16500 && !("score" in brief) && !("goldBreakdown" in brief) && !("note" in (brief.victory ?? {})), `${size}`);
       check(`W9 ${name}: the spaceship and the vote are one line before they matter`, typeof brief.spaceship === "string" && Object.keys(brief.victory?.diplomatic ?? {}).join() === "unitedNations");
     }
     await stop(host);
@@ -258,7 +259,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const host = await start("run22-t234-greece");
     for (const name of ["Greece", "Babylon", "Japan"]) {
       const size = JSON.stringify((await get(`/briefing?civ=${civ(name)}`)).json).length;
-      check(`W9b ${name}: late briefing at most 30 KB`, size <= 30000, `${size}`);
+      check(`W9b ${name}: late briefing at most 31 KB (30 before the mood block)`, size <= 31000, `${size}`);
     }
     await stop(host);
   },
@@ -758,13 +759,15 @@ const CASES: Record<string, () => Promise<void>> = {
       for (const name of hydro) for (const city of civ(name).cities) if (!city.cityConstructions.builtBuildings.includes("Hydro Plant")) city.cityConstructions.builtBuildings.push("Hydro Plant");
     });
     const briefings = Object.fromEntries(await Promise.all(courts.map(async (name) => [name, (await get(`/briefing?civ=${civ(name)}`)).json])));
-    const parts = new Set(["cities", "population", "luxuries", "buildings", "policiesWondersAndFaith", "other"]);
-    const moods = courts.map((name) => ({ name, happiness: briefings[name].happiness as number, breakdown: briefings[name].happinessBreakdown as Record<string, number> | undefined }));
-    check("W41 the mood's parts only below zero", moods.some((m) => m.happiness < 0) && moods.every((m) => (m.happiness < 0) === (m.breakdown !== undefined)), moods.map((m) => `${m.name} ${m.happiness} ${m.breakdown ? "parts" : "-"}`).join(", "));
-    const sums = moods.filter((m) => m.breakdown).map((m) => ({ ...m, sum: Object.values(m.breakdown!).reduce((a, b) => a + b, 0) }));
-    check("W41 the parts are the six kinds and sum to the mood", sums.every((m) => Object.keys(m.breakdown!).every((key) => parts.has(key)) && Math.abs(m.sum - m.happiness) <= 3), sums.map((m) => `${m.name} ${m.happiness} = ${m.sum} ${JSON.stringify(m.breakdown)}`).join(" | "));
+    // The mood block (2026-11-08): at every sign, its parts summing to the figure exactly; below zero the warning is its first sentence, the rest in the block
+    const parts = new Set(["base", "cities", "citizens", "luxuries", "buildings", "policies", "faith", "cityStates", "naturalWonders", "other"]);
+    const moods = courts.map((name) => ({ name, happiness: briefings[name].happiness as number, mood: briefings[name].mood as Record<string, any> | undefined }));
+    check("W41 the mood block at every sign, happinessBreakdown gone", moods.some((m) => m.happiness < 0) && moods.some((m) => m.happiness > 2) && moods.every((m) => !!m.mood && briefings[m.name].happinessBreakdown === undefined),
+      moods.map((m) => `${m.name} ${m.happiness} ${m.mood ? "mood" : "-"}`).join(", "));
+    const sums = moods.map((m) => ({ ...m, sum: Object.values(m.mood!.parts as Record<string, number>).reduce((a, b) => a + b, 0) }));
+    check("W41 the parts are the kinds and sum to the mood exactly", sums.every((m) => Object.keys(m.mood!.parts).every((key) => parts.has(key)) && m.sum === m.happiness), sums.map((m) => `${m.name} ${m.happiness} = ${m.sum} ${JSON.stringify(m.mood!.parts)}`).join(" | "));
     const unhappy = moods.filter((m) => m.happiness < 0).map((m) => (briefings[m.name].warnings as string[]).find((w) => /people are unhappy/.test(w)) ?? "");
-    check("W41 the mood warning says what one more luxury adds", unhappy.every((w) => /each distinct luxury not yet ours would add \d+/.test(w)), unhappy.map((w) => w.slice(0, 120)).join(" | "));
+    check("W41 below zero the warning is its first sentence alone", unhappy.length > 0 && unhappy.every((w) => /^The people are unhappy \(-\d+\): (every city's growth is cut by three quarters|no city grows at all) while the mood is below zero, and production suffers - farming for food does little until the mood is mended\.$/.test(w)), unhappy.map((w) => w.slice(0, 200)).join(" | "));
     // The rivals' ships are the race view's lines since 2026-10-10 (spaceship.others said the same, and is gone)
     const others = courts.flatMap((name) => ((briefings[name].victory?.race?.Scientific ?? []) as string[]).filter((line) => !line.startsWith("us: ")));
     check("W41 the rivals' ships name the learning each lacks, never 'not yet known to them'", others.some((line) => /it has yet to learn [^;]+ \(for the SS [A-Za-z ]+\)/.test(line)) && !others.some((line) => /known to them/.test(line)) &&
@@ -1663,6 +1666,63 @@ const CASES: Record<string, () => Promise<void>> = {
         /herald\.api\.sendPhoto\(chatId, new InputFile\(png!, "scene\.png"\), \{ caption: withNote\(picture\.caption, picture\.note\) \}\)/.test(index) && /\.\.\.image, caption: headed\(image\.caption\) \}/.test(index)
         && /caption: headed\(dispatch\.image\.caption\)/.test(index) && /const decided: Picture = \{ \.\.\.drawn, caption: headed\(drawn\.caption\) \};/.test(index));
     } finally { agents.standInForModels(undefined); state.pictures = saved.pictures; state.ageStarts = saved.ageStarts; api.state = saved.hostState; await stop(host); }
+  },
+  async W60() { // the mood block (2026-11-08, brief data/briefs/mood-block-2026-11-08.md): at every sign, its parts adding up to the figure; what a city founded
+    // or taken would leave, against the engine itself (harness/mood-engine.jsh: addCity, puppetCity and annexCity on in-memory copies of the save); the last
+    // copy of a luxury marked in ourLuxuries and in the trade options; the luxuries we lack as the powers offer them; the mood buildings, now or next; the warnings
+    const host = await start("t100-world");
+    const save = join(host.dir, "save.unciv");
+    const brief = async (name: string) => (await get(`/briefing?civ=${civ(name)}`)).json;
+    const [greece, babylon, iroquois] = [await brief("Greece"), await brief("Babylon"), await brief("Iroquois")];
+    const fields = ["now", "parts", "aNewCity", "aTakenCity", "ourLuxuries", "luxuriesWeLack", "moodBuildings"];
+    check("W60 the block at +6, -2 and +2, every field, right after happiness, and happinessBreakdown gone", [greece, babylon, iroquois].every((b) => fields.every((field) => b.mood?.[field] !== undefined) && b.happinessBreakdown === undefined
+        && Object.keys(b).indexOf("mood") === Object.keys(b).indexOf("happiness") + 1) && greece.happiness === 6 && babylon.happiness === -2 && iroquois.happiness === 2,
+      [greece, babylon, iroquois].map((b) => `${b.civ} ${b.happiness} ${Object.keys(b.mood ?? {}).join(",")}`).join(" | "));
+    check("W60 the parts add up to the figure, with the city-states and natural wonders apart", [greece, babylon, iroquois].every((b) => Object.values(b.mood.parts as Record<string, number>).reduce((a, n) => a + n, 0) === b.happiness)
+      && greece.mood.parts.cityStates === 3 && greece.mood.parts.naturalWonders === 1 && greece.mood.parts.other === undefined, JSON.stringify(greece.mood.parts));
+    check("W60 now: the figure and the growth rule, either side of zero", greece.mood.now === "+6; below zero every city's growth is cut by three quarters, and at -10 none grows"
+      && babylon.mood.now === "-2: below zero every city's growth is cut by three quarters, and production suffers; at -10 none grows", `${greece.mood.now} | ${babylon.mood.now}`);
+    // The engine's own figures, for each realm and the three cities its block names
+    const classpath = readFileSync(join(HOST_SH, "../data/classpath.txt"), "utf8").trim().split(":").filter((entry) => existsSync(entry)).join(":");
+    const engine = (name: string, cities: string[]) => {
+      const out = execFileSync("/opt/homebrew/opt/openjdk@21/bin/jshell", ["--class-path", classpath, resolve("harness/mood-engine.jsh")],
+        { cwd: join(HOST_SH, "../unciv/android/assets"), env: { ...process.env, SAVE: save, CIV: name, CITIES: cities.join(",") }, encoding: "utf8", timeout: 120_000 });
+      const value = (key: string) => Number(new RegExp(`^${key} (-?\\d+)`, "m").exec(out)?.[1]);
+      return { now: value("now"), one: value("one"), two: value("two"), out,
+        cities: Object.fromEntries(cities.map((city) => { const m = new RegExp(`^city ${city} puppet (-?\\d+) annexed (-?\\d+)`, "m").exec(out); return [city, m ? { puppet: Number(m[1]), annexed: Number(m[2]) } : undefined]; })) };
+    };
+    for (const b of [greece, babylon]) {
+      const leaves = /one new city leaves ([+-]?\d+), two leave ([+-]?\d+)$/.exec(b.mood.aNewCity);
+      const taken = [...(b.mood.aTakenCity as string).matchAll(/(?:: |; )([A-Z][\w' -]*?) \([^)]+\) ([+-]?\d+)(?: as a puppet,| and) ([+-]?\d+)/g)].map((m) => ({ city: m[1], puppet: Number(m[2]), annexed: Number(m[3]) }));
+      const truth = engine(b.civ, taken.map((each) => each.city));
+      check(`W60 ${b.civ}: what one and two new cities leave is what the engine's addCity leaves`, !!leaves && truth.now === b.happiness && Number(leaves[1]) === truth.one && Number(leaves[2]) === truth.two,
+        `${b.mood.aNewCity.slice(-45)}; engine ${truth.now} -> ${truth.one}, ${truth.two}`);
+      // The buildings the capture's roll takes included: the host plays the same seeded roll
+      check(`W60 ${b.civ}: each of the three nearest cities, puppet and annexed, as the engine's puppetCity and annexCity leave it`, taken.length === 3 && taken.every((each) => {
+          const real = truth.cities[each.city]; return !!real && each.puppet === real.puppet - truth.now && each.annexed === real.annexed - truth.now; }),
+        `${JSON.stringify(taken)}; engine ${JSON.stringify(truth.cities)} from ${truth.now}`);
+    }
+    // The last copy: ours, one held, none traded in - marked where it is offered; a luxury with copies to spare is not
+    const options = (await get(`/options?civ=Greece`)).json;
+    const offered = (options.diplomacy.with as { weCanOffer: string[]; theyCanOffer: string[] }[]).flatMap((power) => power.weCanOffer);
+    check("W60 ourLuxuries tells our own from the city-states', and marks each last copy", greece.mood.ourLuxuries === "Incense and Porcelain from city-states; Salt, Ivory, Sugar and Gems our own; Ivory, Sugar and Gems each the last copy: trading one away loses its +4", greece.mood.ourLuxuries);
+    check("W60 weCanOffer marks a last copy, and not a luxury with copies to spare", offered.includes("Ivory (our last: trading it away loses its +4)") && offered.some((line) => /^Salt x\d+$/.test(line)) && !offered.some((line) => /^Salt.*our last/.test(line)),
+      offered.filter((line) => /Ivory|Salt|Sugar|Gems/.test(line)).join(" | "));
+    const theyOffer = new Set((options.diplomacy.with as { theyCanOffer: string[] }[]).flatMap((power) => power.theyCanOffer).map((line) => line.replace(/ x\d+$/, "")));
+    const lacked = (greece.mood.luxuriesWeLack as string).replace(/^each \+4: /, "").split("; ").map((part) => part.split(" from ")[0]);
+    check("W60 luxuriesWeLack: what each adds, then only luxuries a power we know offers, none of ours, each with who offers it", /^each \+4: [A-Z][\w ]+ from /.test(greece.mood.luxuriesWeLack)
+      && lacked.length > 1 && lacked.every((name) => theyOffer.has(name) && !greece.mood.ourLuxuries.includes(name)), greece.mood.luxuriesWeLack);
+    check("W60 moodBuildings: what can be raised now with its +N, and with none the next and the technology each waits for", greece.mood.moodBuildings === "Colosseum +2 (Argos)"
+      && iroquois.mood.moodBuildings === "none to build now. Next: Notre Dame +10 (a wonder, once Physics is ours), Theatre +3 (in each city, once Printing Press is ours)", `${greece.mood.moodBuildings} | ${iroquois.mood.moodBuildings}`);
+    // The warnings, shortened; an acknowledged one still folds to its first clause
+    check("W60 the thin warning points at the block; the unhappy one is its first sentence", iroquois.warnings.includes("The people's mood is thin (+2): mood.aNewCity says what one more city would do.")
+      && babylon.warnings.includes("The people are unhappy (-2): every city's growth is cut by three quarters while the mood is below zero, and production suffers - farming for food does little until the mood is mended."),
+      [...iroquois.warnings, ...babylon.warnings].filter((line: string) => /mood|unhappy/.test(line)).join(" | "));
+    const acknowledged = await orders("Iroquois", { acknowledge: ["The people's mood is thin"] });
+    const folded = await brief("Iroquois");
+    check("W60 an acknowledged thin warning folds to its first clause, as before", acknowledged.status === 200 && (folded.warningsAcknowledged ?? []).includes("The people's mood is thin (+2)") && !folded.warnings.some((line: string) => /mood is thin/.test(line)),
+      JSON.stringify({ done: acknowledged.json.done, folded: folded.warningsAcknowledged }));
+    await stop(host);
   },
   async W51() { // the court's close (2026-11-03): the whole bot runs here against a stand-in for Telegram and a stand-in advisor. A court the advisor
     // dismissed by its own call gets no loose-ends follow-up (a 600 BC list came after the closing, and the dismissal fired under it); a silent closing
