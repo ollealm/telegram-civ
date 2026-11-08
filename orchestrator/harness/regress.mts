@@ -19,7 +19,8 @@ const HOST_SH = resolve(process.env.HOST_SH ?? "../host.sh");
 const BASE = `http://127.0.0.1:${PORT}`;
 // Every orchestrator module a case imports talks to the case's own host, never the live one (host.ts reads this once, at its first import)
 process.env.RULER_HOST_URL = BASE;
-// No case paints: one that reaches a painter (W51's dismissal) gets no picture, and no image is ever asked of a provider (images.ts reads this once)
+// No case paints: one that reaches a painter (W51's dismissal) gets no picture unless the case stands in for the painter, and no image is ever asked of a
+// provider (images.ts reads this once)
 process.env.IMAGES = "off";
 
 const results: { name: string; ok: boolean; detail: string }[] = [];
@@ -1677,6 +1678,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const markups: unknown[] = []; // each sent message's buttons, by its place in sent
     const menus: { command: string }[][] = [];
     const edits: { id: number; text: string; buttons: boolean }[] = [];
+    const order: string[] = []; // every message and picture sent, in the order Telegram got them: a picture by its file name
     const queued: unknown[] = [];
     let updateId = 1;
     const telegram = createServer((request, response) => {
@@ -1695,7 +1697,8 @@ const CASES: Record<string, () => Promise<void>> = {
         }
         // As Telegram: a text past 4096 characters is refused whole
         if ((method === "sendMessage" || method === "editMessageText") && String(params.text ?? "").length > 4096) { response.statusCode = 400; response.setHeader("content-type", "application/json"); return response.end(JSON.stringify({ ok: false, error_code: 400, description: "Bad Request: message is too long" })); }
-        if (method === "sendMessage") { sent.push(String(params.text ?? "")); markups[sent.length - 1] = params.reply_markup; }
+        if (method === "sendMessage") { sent.push(String(params.text ?? "")); markups[sent.length - 1] = params.reply_markup; order.push(String(params.text ?? "")); }
+        if (method === "sendPhoto") order.push(/;filename=([\w.-]+)\r\n/.exec(body)?.[1] ?? "a photo");
         if (method === "editMessageText") edits.push({ id: Number(params.message_id), text: String(params.text ?? ""), buttons: !!params.reply_markup });
         if (method === "setMyCommands") menus.push(params.commands as { command: string }[]);
         if (method.startsWith("send")) return reply({ message_id: sent.length, date: Math.floor(Date.now() / 1000), chat: { id: Number(params.chat_id), type: "private" } });
@@ -1764,7 +1767,7 @@ const CASES: Record<string, () => Promise<void>> = {
     });
     Object.assign(process.env, { HERALD_BOT_TOKEN: "1:herald", ADVISOR_1_BOT_TOKEN: "2:advisor", TELEGRAM_API_ROOT: `http://127.0.0.1:${tgPort}`, PAINTED_MAPS: "off" });
     try {
-      await import("../src/index.ts");
+      const bots = await import("../src/index.ts");
       await until(() => sent.includes("AD 800 - come to court.\n\nThe story of the age.\n\nDo we hold the course?"));
       // The letter ends on the door's question, with no buttons under it to divert from it (Olle, 2026-11-07): the one resent at a restart, and the round's own
       const letterAt = sent.indexOf("AD 800 - come to court.\n\nThe story of the age.\n\nDo we hold the course?");
@@ -2045,6 +2048,76 @@ const CASES: Record<string, () => Promise<void>> = {
       tap("advisors:take:0");
       await until(() => sent.length > beforeStale);
       check("W51 a Take tapped after the candidates are gone changes nothing", seat.character.name === name && (seat.formerAdvisors ?? []).length === beforeT.former + 1 && JSON.stringify(sent.slice(beforeStale)) === JSON.stringify(["Those candidates have gone their way. Send /advisors to call others."]), JSON.stringify(sent.slice(beforeStale)));
+      // Letter order (2026-11-08, data/briefs/letter-order-2026-11-08.md): the closing picture of the last audience, then the letter with its pictures. A
+      // stand-in painter holds each closing picture until the case lets it go; the round's own loop sends each letter through deliverLetter
+      const PNG = Buffer.from("png");
+      const held: { resolve: (png: Buffer | null) => void; reject: (error: Error) => void }[] = [];
+      bots.standInForPainter(() => new Promise<Buffer | null>((resolve, reject) => held.push({ resolve, reject })));
+      const rise = async (word = "/onward") => {
+        Object.assign(seat, { ready: false, dismissed: false, matters: undefined, decisionPicture: undefined });
+        plant("Granary or walls, Majesty?");
+        const paints = held.length;
+        say(word);
+        await until(() => seat.ready && held.length > paints);
+        return held[paints];
+      };
+      const post = (text: string, scene: Promise<Buffer | null> = Promise.resolve(PNG)) => ({ seat, letter: text, caption: "A scene", scene, marches: Promise.resolve(PNG), painted: Promise.resolve(PNG) });
+      const delivering = (letter: ReturnType<typeof post>) => ({ sending: bots.deliverLetter(letter) });
+      try {
+        // L1: an emergency council's letter, written while the dismissal's picture is still painting: nothing goes until the picture has been sent
+        const closing1 = await rise();
+        const beforeL1 = order.length;
+        const war = await delivering(post("AD 900 - war with Russia."));
+        await sleep(1500);
+        const whileHeld = order.slice(beforeL1);
+        closing1.resolve(PNG);
+        await war.sending;
+        check("W51 letter order: a letter written while the closing picture paints waits for it - nothing is sent until it is, then picture, letter, scene, marches, map",
+          whileHeld.length === 0 && JSON.stringify(order.slice(beforeL1)) === JSON.stringify(["decision.png", "AD 900 - war with Russia.", "scene.png", "marches.png", "map.png"])
+          && !/post\.urgent/.test(source) && /for \(const post of letters\) await deliverLetter\(post\);/.test(source), `while held ${JSON.stringify(whileHeld)}; then ${JSON.stringify(order.slice(beforeL1))}`);
+        // L2: an ordinary letter with no closing picture in flight: sent once its scene is done, not before
+        let sceneDone: (png: Buffer | null) => void = () => {};
+        const beforeL2 = order.length;
+        const calm = await delivering(post("AD 950 - come to court.", new Promise<Buffer | null>((resolve) => (sceneDone = resolve))));
+        await sleep(1000);
+        const whilePainting = order.slice(beforeL2);
+        sceneDone(PNG);
+        await calm.sending;
+        check("W51 letter order: a letter waits for its own scene, then goes with its pictures straight after it", whilePainting.length === 0
+          && JSON.stringify(order.slice(beforeL2)) === JSON.stringify(["AD 950 - come to court.", "scene.png", "marches.png", "map.png"]), `while painting ${JSON.stringify(whilePainting)}; then ${JSON.stringify(order.slice(beforeL2))}`);
+        // L3: a court reopened and dismissed again before its first picture is done: the later picture is waited for, the earlier holds nothing and is dropped
+        const earlier = await rise();
+        const later = await rise();
+        const beforeL3 = order.length;
+        const again = await delivering(post("AD 1000 - come to court."));
+        await sleep(1000);
+        const whileLater = order.slice(beforeL3);
+        later.resolve(PNG);
+        await again.sending;
+        const sentBeforeEarlier = order.slice(beforeL3);
+        earlier.resolve(PNG);
+        await sleep(1000);
+        check("W51 letter order: overtaken by a second court, the later picture is waited for and the earlier holds nothing and is never sent",
+          whileLater.length === 0 && JSON.stringify(sentBeforeEarlier) === JSON.stringify(["decision.png", "AD 1000 - come to court.", "scene.png", "marches.png", "map.png"])
+          && JSON.stringify(order.slice(beforeL3)) === JSON.stringify(sentBeforeEarlier), `while later ${JSON.stringify(whileLater)}; before the earlier ${JSON.stringify(sentBeforeEarlier)}; after ${JSON.stringify(order.slice(beforeL3))}`);
+        // L4: a closing picture that fails - the painter rejects, or paints nothing - holds no letter
+        const failing = await rise();
+        const beforeL4 = order.length;
+        const afterFail = await delivering(post("AD 1050 - come to court."));
+        failing.reject(new Error("the painter is down"));
+        await afterFail.sending;
+        const empty = await rise();
+        const beforeL4b = order.length;
+        const afterNull = await delivering(post("AD 1100 - come to court."));
+        empty.resolve(null);
+        await afterNull.sending;
+        check("W51 letter order: a closing picture that fails or paints nothing holds no letter, and none is sent",
+          JSON.stringify(order.slice(beforeL4, beforeL4b).filter((each) => !each.startsWith("I went with") && each !== DISMISSED)) === JSON.stringify(["AD 1050 - come to court.", "scene.png", "marches.png", "map.png"])
+          && JSON.stringify(order.slice(beforeL4b)) === JSON.stringify(["AD 1100 - come to court.", "scene.png", "marches.png", "map.png"]), `${JSON.stringify(order.slice(beforeL4))}`);
+      } finally {
+        bots.standInForPainter(undefined);
+        for (const each of held) each.resolve(null);
+      }
       // While time passes: nothing is drafted
       state.phase = "passing";
       const beforeP = { sent: sent.length, drafted };
