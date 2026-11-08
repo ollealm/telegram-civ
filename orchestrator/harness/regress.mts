@@ -1679,6 +1679,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const menus: { command: string }[][] = [];
     const edits: { id: number; text: string; buttons: boolean }[] = [];
     const order: string[] = []; // every message and picture sent, in the order Telegram got them: a picture by its file name
+    const actions: string[] = []; // messages sent, edits and typing, in the order Telegram got them (button taps, 2026-11-08)
     const queued: unknown[] = [];
     let updateId = 1;
     const telegram = createServer((request, response) => {
@@ -1700,6 +1701,10 @@ const CASES: Record<string, () => Promise<void>> = {
         if (method === "sendMessage") { sent.push(String(params.text ?? "")); markups[sent.length - 1] = params.reply_markup; order.push(String(params.text ?? "")); }
         if (method === "sendPhoto") order.push(/;filename=([\w.-]+)\r\n/.exec(body)?.[1] ?? "a photo");
         if (method === "editMessageText") edits.push({ id: Number(params.message_id), text: String(params.text ?? ""), buttons: !!params.reply_markup });
+        if (method === "sendMessage") actions.push(`send ${params.text}`);
+        if (method === "editMessageText") actions.push(`edit ${params.message_id}${params.reply_markup ? " with buttons" : ""}: ${params.text}`);
+        if (method === "editMessageReplyMarkup") actions.push(`buttons off ${params.message_id}`);
+        if (method === "sendChatAction") actions.push("typing");
         if (method === "setMyCommands") menus.push(params.commands as { command: string }[]);
         if (method.startsWith("send")) return reply({ message_id: sent.length, date: Math.floor(Date.now() / 1000), chat: { id: Number(params.chat_id), type: "private" } });
         return reply(true);
@@ -1709,8 +1714,10 @@ const CASES: Record<string, () => Promise<void>> = {
     await new Promise<void>((done) => telegram.listen(tgPort, "127.0.0.1", done));
     const say = (text: string) => queued.push({ update_id: updateId++, message: { message_id: updateId, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, from: { id: 7, is_bot: false, first_name: "Ruler" }, text,
       ...(text.startsWith("/") && { entities: [{ type: "bot_command", offset: 0, length: text.split(" ")[0].length }] }) } });
-    const tap = (data: string) => queued.push({ update_id: updateId++, callback_query: { id: String(updateId), chat_instance: "1", data, from: { id: 7, is_bot: false, first_name: "Ruler" },
-      message: { message_id: 1, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, text: "Which brief, Majesty?" } } });
+    // A tap under a message: by default a bare one with no buttons kept; shownAt(i) is the message sent at sent[i], with its buttons, as Telegram hands it back
+    const tap = (data: string, message: { id: number; text: string; markup?: unknown } = { id: 1, text: "Which brief, Majesty?" }) => queued.push({ update_id: updateId++, callback_query: { id: String(updateId), chat_instance: "1", data, from: { id: 7, is_bot: false, first_name: "Ruler" },
+      message: { message_id: message.id, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, text: message.text, ...(message.markup ? { reply_markup: message.markup } : {}) } } });
+    const shownAt = (at: number) => ({ id: at + 1, text: sent[at], markup: markups[at] });
     const until = async (done: () => boolean, ms = 30_000) => { for (let waited = 0; !done() && waited < ms; waited += 100) await sleep(100); return done(); };
     const DISMISSED = "The court is dismissed. Until next time.";
     // Our seat, and another ruler's still in council, so that no round starts behind the dismissals
@@ -1728,7 +1735,7 @@ const CASES: Record<string, () => Promise<void>> = {
     const calls: { said: string; sentBefore: number; ready: boolean; dismissedTold: boolean; served?: string[]; owedNote: boolean }[] = [];
     // The loose-ends follow-up's answer, set by each case: a list, "nothing is left loose" with no /onward of its own, or nothing at all
     let looseEnds = (): { text: string } => ({ text: "" });
-    const briefs: { role: string; said: string; served?: string[] }[] = [];
+    const briefs: { role: string; said: string; served?: string[]; actionsBefore?: number }[] = [];
     // /advisors (2026-11-07): the character writer's calls - the sheet shortened to a card, and the candidates drafted, each numbered - and a new advisor's greeting
     const shortenings: string[] = [];
     let drafted = 0;
@@ -1740,7 +1747,7 @@ const CASES: Record<string, () => Promise<void>> = {
       }
       if (asked.role === "greeting") return { text: `I am candidate ${/You are candidate (\d+)/.exec(asked.systemPrompt)?.[1] ?? "?"}, at your service.` };
       if (asked.outputSchema) return { text: "", data: { caption: "The granary. Grain comes in.", description: "Oil painting. A granary.", year: game.year } }; // the decision's picture
-      if (/asks you for a brief on/.test(asked.prompt)) { briefs.push({ role: asked.role, said: asked.prompt.slice(asked.prompt.lastIndexOf("The ruler asks you for a brief")), served: asked.served }); return { text: asked.role === "clerk" ? "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." : /a brief on our learning/.test(asked.prompt) ? "The academies lead the world.\n\nName any you want to raise, ask for a /brief, or /onward" : "The host is three spearmen and a catapult." }; }
+      if (/asks you for a brief on/.test(asked.prompt)) { briefs.push({ role: asked.role, said: asked.prompt.slice(asked.prompt.lastIndexOf("The ruler asks you for a brief")), served: asked.served, actionsBefore: actions.length }); return { text: asked.role === "clerk" ? "Gisela, Keeper of the Rolls\nThe treasury holds 210 gold." : /a brief on our learning/.test(asked.prompt) ? "The academies lead the world.\n\nName any you want to raise, ask for a /brief, or /onward" : "The host is three spearmen and a catapult." }; }
       const said = asked.prompt.slice(asked.prompt.lastIndexOf("The ruler now says:"));
       calls.push({ said, sentBefore: sent.length, ready: seat.ready, dismissedTold: sent.includes(DISMISSED), served: asked.served, owedNote: asked.prompt.includes("its orders are not set yet") });
       // The closing-only guard's ask (2026-11-07): the closing proper, answering the ruler's words; for the doubt, with the loose ends; for the bare tail, without
@@ -1899,11 +1906,15 @@ const CASES: Record<string, () => Promise<void>> = {
       await until(() => sent.length > beforeH);
       const rows = (markups[beforeH] as { inline_keyboard?: { text: string; callback_data: string }[][] } | undefined)?.inline_keyboard;
       check("W51 /brief posts the six as buttons, two rows of three", JSON.stringify(rows?.map((row) => row.map((button) => button.callback_data))) === JSON.stringify([["brief:cities", "brief:military", "brief:science"], ["brief:culture", "brief:trade", "brief:rivals"]]), JSON.stringify(rows));
-      const beforeH2 = { sent: sent.length, briefs: briefs.length, calls: calls.length };
-      tap("brief:military");
+      const beforeH2 = { sent: sent.length, briefs: briefs.length, calls: calls.length, actions: actions.length };
+      tap("brief:military", shownAt(beforeH));
       await until(() => sent.length > beforeH2.sent);
       await sleep(300);
       const military = briefs[beforeH2.briefs];
+      // Button taps (2026-11-08, data/briefs/button-taps-2026-11-08.md): taken up, the message keeps its text, gains the label as its last line and loses its buttons
+      const atTap = actions.slice(beforeH2.actions, military?.actionsBefore);
+      check("W51 a brief tap: before the brief is written, the question is edited to its text with \"/military\" as the last line and no buttons, and typing is sent",
+        atTap[0] === `edit ${beforeH + 1}: Which brief, Majesty?\n\n/military` && atTap.includes("typing") && !atTap.some((each) => each.startsWith("send")) && actions.slice(beforeH2.actions).includes("send The host is three spearmen and a catapult."), JSON.stringify(actions.slice(beforeH2.actions)));
       check("W51 a tap asks the advisor for that brief, read-only; the brief is sent once and starts no loose-ends pass", military?.role === "advisor" && /a brief on the host - its strength/.test(military.said) && JSON.stringify(military.served) === JSON.stringify(["get_briefing", "get_options", "look_up", "get_log"])
         && JSON.stringify(sent.slice(beforeH2.sent)) === JSON.stringify(["The host is three spearmen and a catapult."]) && calls.length === beforeH2.calls && !seat.ready, `${JSON.stringify(military)}; sent ${JSON.stringify(sent.slice(beforeH2.sent))}`);
       const beforeH2b = sent.length;
@@ -2021,27 +2032,43 @@ const CASES: Record<string, () => Promise<void>> = {
       const again = await advisorsMessage();
       check("W51 /advisors again: three new candidates, the sheet not shortened again", shortenings.length - beforeV.shortenings === 1 && drafted - beforeV.drafted === 6 && again.texts.length === 1 && again.texts[0].startsWith(advisorCard) && again.texts[0].includes("Ninurta6"), JSON.stringify(again.texts));
       const beforeK = sent.length;
-      tap("advisors:keep");
+      const beforeKa = actions.length;
+      const againAt = sent.lastIndexOf(again.texts[0]);
+      tap("advisors:keep", shownAt(againAt));
       await until(() => sent.length > beforeK);
       await sleep(300);
+      check("W51 Keep: the card is edited with \"Keep Adiega\" as its last line and no buttons, then the one line", JSON.stringify(actions.slice(beforeKa)) === JSON.stringify([`edit ${againAt + 1}: ${again.texts[0]}\n\nKeep Adiega`, "send Adiega stays at your side."]), JSON.stringify(actions.slice(beforeKa)));
       check("W51 Keep: the advisor stays, the candidates are cleared, one line answers", seat.character.name === "Adiega" && seat.candidates === undefined && JSON.stringify(sent.slice(beforeK)) === JSON.stringify(["Adiega stays at your side."]), JSON.stringify(sent.slice(beforeK)));
       // Take: the existing replace path - the advisor goes to formerAdvisors, the will and the clerk stay, the greeting is sent and joins the transcript
-      await advisorsMessage();
+      const third = await advisorsMessage();
+      const thirdAt = sent.lastIndexOf(third.texts[0]);
+      // A Take while time passes is only told to wait: the message keeps its buttons
+      state.phase = "passing";
+      const beforeW = { sent: sent.length, actions: actions.length };
+      tap("advisors:take:1", shownAt(thirdAt));
+      await until(() => sent.length > beforeW.sent);
+      await sleep(300);
+      state.phase = "audience";
+      check("W51 a Take while time passes: the message is not edited, the wait line is sent, the candidates kept", JSON.stringify(actions.slice(beforeW.actions)) === JSON.stringify(["send Wait until time stops passing."]) && seat.candidates?.length === 3, JSON.stringify(actions.slice(beforeW.actions)));
       // But first a Take under the earlier message: it names one of that draw, and takes no one from this one
       const beforeOld = sent.length;
+      const beforeOldA = actions.length;
       queued.push({ update_id: updateId++, callback_query: { id: String(updateId), chat_instance: "1", data: "advisors:take:0", from: { id: 7, is_bot: false, first_name: "Ruler" },
         message: { message_id: 1, date: Math.floor(Date.now() / 1000), chat: { id: 4242, type: "private" }, text: again.texts[0], reply_markup: again.markup } } });
       await until(() => sent.length > beforeOld);
       check("W51 a Take under an earlier /advisors message takes no one from the later draw", seat.character.name === "Adiega" && seat.candidates?.length === 3 && JSON.stringify(sent.slice(beforeOld)) === JSON.stringify(["Those candidates have gone their way. Send /advisors to call others."]), JSON.stringify(sent.slice(beforeOld)));
+      check("W51 a stale Take is finally refused: its message is edited with the label and no buttons, then the refusal", JSON.stringify(actions.slice(beforeOldA)) === JSON.stringify([`edit 1: ${again.texts[0]}\n\n${buttons(again.markup)[0]}`, "send Those candidates have gone their way. Send /advisors to call others."]), JSON.stringify(actions.slice(beforeOldA)));
       const taken = seat.candidates![1] as { name: string; pitch: string; walk?: string; manner?: string };
-      const beforeT = { sent: sent.length, former: (seat.formerAdvisors ?? []).length, will: seat.will, clerk: JSON.stringify(seat.clerk) };
-      tap("advisors:take:1");
+      const beforeT = { sent: sent.length, former: (seat.formerAdvisors ?? []).length, will: seat.will, clerk: JSON.stringify(seat.clerk), actions: actions.length };
+      tap("advisors:take:1", shownAt(thirdAt));
       await until(() => sent.length > beforeT.sent && seat.character.name !== "Adiega");
       await sleep(400);
       const greeting = sent.slice(beforeT.sent).find((each) => each.includes("at your service"));
       check("W51 Take: the candidate replaces the advisor - formerAdvisors grows by one with Adiega, the will and the clerk kept, the card kept on the new character",
         seat.character.name === taken.name && (seat.formerAdvisors ?? []).length === beforeT.former + 1 && seat.formerAdvisors!.at(-1)!.name === "Adiega" && seat.will === beforeT.will && JSON.stringify(seat.clerk) === beforeT.clerk
         && seat.character.pitch === taken.pitch && seat.character.walk === taken.walk && seat.character.manner === taken.manner && seat.candidates === undefined, `${JSON.stringify(seat.character)}; former ${JSON.stringify(seat.formerAdvisors)}`);
+      const tookAt = actions.slice(beforeT.actions);
+      check("W51 Take: the card is edited with \"Take <name>\" as its last line and no buttons, before the greeting", tookAt[0] === `edit ${thirdAt + 1}: ${third.texts[0]}\n\nTake ${taken.name}` && tookAt.findIndex((each) => each.includes("at your service")) > 0, JSON.stringify(tookAt));
       check("W51 Take: the new advisor's greeting is sent and joins the transcript", !!greeting && greeting.startsWith(`I am candidate ${taken.name.slice("Ninurta".length)}, at your service.`) && seat.chat.some((each: { from: string; text: string }) => each.from === "advisor" && greeting.startsWith(each.text)) && !seat.ready, JSON.stringify(sent.slice(beforeT.sent)));
       const name = seat.character.name;
       const beforeStale = sent.length;
@@ -2126,6 +2153,30 @@ const CASES: Record<string, () => Promise<void>> = {
       await sleep(300);
       state.phase = "audience";
       check("W51 /advisors while time passes: \"Wait until time stops passing.\", nothing drafted", JSON.stringify(sent.slice(beforeP.sent)) === JSON.stringify(["Wait until time stops passing."]) && drafted === beforeP.drafted, JSON.stringify(sent.slice(beforeP.sent)));
+      // Setup's buttons, from /character's: dismissing the advisor (the people unset here, so the setup asks for one), the people, then a candidate
+      const waitFor = async (starts: string) => { await until(() => sent.some((each, at) => each.startsWith(starts) && !!markups[at]), 60_000); return sent.findLastIndex((each, at) => each.startsWith(starts) && !!markups[at]); };
+      Object.assign(seat, { ready: false, dismissed: false, candidates: undefined, setup: undefined, rerolled: undefined });
+      say("/character");
+      const characterAt = await waitFor(seat.character.name);
+      seat.civ = undefined;
+      const beforeN = actions.length;
+      tap("advisor:new", shownAt(characterAt));
+      const peoplesAt = await waitFor("Which people will you lead?");
+      check("W51 /character's dismiss button: its message is edited with the label as its last line and no buttons, then the setup begins", actions[beforeN] === `edit ${characterAt + 1}: ${sent[characterAt]}\n\nDismiss them and send for candidates`
+        && actions.slice(beforeN).filter((each) => each.startsWith("send")).map((each) => each.slice(5, 30)).join("|") === "A new history is about to|Which people will you lea", JSON.stringify(actions.slice(beforeN)));
+      const beforeQ = actions.length;
+      tap("people:?", shownAt(peoplesAt));
+      const candidatesAt = await waitFor("Three have come to offer themselves");
+      const chosenCiv = seat.civ;
+      check("W51 setup's peoples: the message is edited with \"Let fate decide\" and no buttons before the people is told and the candidates come", actions[beforeQ] === `edit ${peoplesAt + 1}: ${sent[peoplesAt]}\n\nLet fate decide`
+        && actions.slice(beforeQ).filter((each) => each.startsWith("send")).map((each) => each.slice(5)).join("|").startsWith(`${chosenCiv} it is`), JSON.stringify(actions.slice(beforeQ)).slice(0, 600));
+      const firstCandidate = buttons(markups[candidatesAt] as never)[0];
+      const beforeC2 = actions.length;
+      tap("advisor:0", shownAt(candidatesAt));
+      await until(() => actions.slice(beforeC2).some((each) => each.includes("at your service")), 60_000);
+      check("W51 setup's candidates: the message is edited with the candidate's name and no buttons before the greeting", actions[beforeC2] === `edit ${candidatesAt + 1}: ${sent[candidatesAt]}\n\n${firstCandidate}`
+        && seat.character.name === firstCandidate && seat.setup === undefined, JSON.stringify(actions.slice(beforeC2)).slice(0, 600));
+      seat.civ = ours;
     } finally {
       agents.standInForModels(undefined);
       await stop(host);

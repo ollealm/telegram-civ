@@ -86,6 +86,21 @@ const briefButtons = () => {
   return keyboard;
 };
 
+/** The tapped button's own label, read from the message that held it */
+const tappedLabel = (ctx: Context) => ctx.callbackQuery?.message?.reply_markup?.inline_keyboard.flat().find((button) => "callback_data" in button && button.callback_data === ctx.callbackQuery?.data)?.text;
+/** A tap taken up - acted on, or finally refused - shows the ruler's choice and the buttons go (Olle, 2026-11-08): the message that held them keeps its
+ *  text, gains the tapped button's label as its last line, as a typed command would show, and loses its keyboard. A tap only told to wait is not taken up */
+async function takeUp(ctx: Context) {
+  const message = ctx.callbackQuery?.message;
+  if (!message?.reply_markup) return;
+  const label = tappedLabel(ctx);
+  const text = "text" in message ? message.text : undefined;
+  // Past Telegram's limit, or a message with no text: the buttons go all the same
+  await (text && label ? ctx.editMessageText(`${text}\n\n${label}`) : Promise.reject(new Error("no text")))
+    .catch(() => ctx.editMessageReplyMarkup({ reply_markup: undefined }))
+    .catch((error) => log("the tapped buttons could not be taken off:", error.message));
+}
+
 /** Show "typing…" for as long as the work takes */
 async function whileTyping<T>(bot: Bot, chatId: number, work: Promise<T>): Promise<T> {
   const tick = () => bot.api.sendChatAction(chatId, "typing").catch(() => {});
@@ -518,7 +533,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     await ctx.reply("Which people will you lead?\n\n(Pick one, or name any people you like - Persia, the Aztecs, Sweden... Send the word list to see them all.)", { reply_markup: keyboard });
   };
 
-  const choosePeople = async (ctx: Context, wish: string) => {
+  const choosePeople = async (ctx: Context, wish: string, chosenFrom?: () => Promise<unknown>) => {
     const taken = state.seats.map((other) => other.civ).filter(Boolean);
     const nations = (await host.nations()).filter((nation) => !taken.includes(nation.name));
     const clean = wish.trim().toLowerCase().replace(/^the\s+/, "");
@@ -527,6 +542,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (!chosen) return ctx.reply(`I know of no free people by that name. These are all who are still without a ruler - name one, or tap a button above:\n\n${nations.map((nation) => `${nation.name} (${nation.leader})`).sort().join("\n")}`);
     seat().civ = chosen.name;
     persist();
+    await chosenFrom?.();
     await ctx.reply(`${chosen.name} it is - the people of ${chosen.leader}.`);
     await presentCandidates(ctx);
   };
@@ -658,16 +674,17 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.callbackQuery(/^advisors:(take:\d+|keep)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
+    if (ctx.match[1] !== "keep" && state.phase === "passing" && !seat().setup && seat().character) return void (await ctx.reply("Wait until time stops passing."));
+    await takeUp(ctx);
     if (seat().setup || !seat().character) return;
     if (ctx.match[1] === "keep") {
       seat().candidates = undefined;
       persist();
       return void (await ctx.reply(`${seat().character!.name} stays at your side.`));
     }
-    if (state.phase === "passing") return void (await ctx.reply("Wait until time stops passing."));
     const choice = ctx.match[1].slice("take:".length);
     // A button under an earlier /advisors names one of that draw: it takes no one from a later draw who happens to stand in the same place
-    const tapped = ctx.callbackQuery.message?.reply_markup?.inline_keyboard.flat().find((button) => "callback_data" in button && button.callback_data === ctx.callbackQuery.data)?.text;
+    const tapped = tappedLabel(ctx);
     const candidate = seat().candidates?.[Number(choice)];
     if (!candidate || (tapped && tapped !== `Take ${candidate.name}`)) return void (await ctx.reply("Those candidates have gone their way. Send /advisors to call others."));
     await chooseAdvisor(ctx, choice);
@@ -675,12 +692,15 @@ function setUpAdvisor(bot: Bot, index: number) {
 
   bot.callbackQuery(/^people:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
-    if (seat().setup && !seat().civ) await choosePeople(ctx, ctx.match[1]);
+    // Taken up once the people is chosen, or when the seat has one already; a people taken meanwhile leaves the buttons for another tap
+    if (seat().setup && !seat().civ) await choosePeople(ctx, ctx.match[1], () => takeUp(ctx));
+    else await takeUp(ctx);
   });
 
   bot.callbackQuery(/^advisor:(\d+|others|new)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {}); // a press from before a restart is too old to acknowledge, but still counts
-    if (ctx.match[1] === "new") return state.phase === "passing" ? void (await ctx.reply("Wait until time stops passing.")) : beginSetup(ctx);
+    if (ctx.match[1] === "new") return state.phase === "passing" ? void (await ctx.reply("Wait until time stops passing.")) : (await takeUp(ctx), beginSetup(ctx));
+    await takeUp(ctx);
     if (seat().setup) await chooseAdvisor(ctx, ctx.match[1]);
   });
 
@@ -932,7 +952,11 @@ function setUpAdvisor(bot: Bot, index: number) {
   bot.command("brief", (ctx) => ctx.reply("Which brief, Majesty?", { reply_markup: briefButtons() }));
   bot.callbackQuery(/^brief:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
-    if (BRIEFS.includes(ctx.match[1] as BriefCommand)) brief(ctx, ctx.match[1] as BriefCommand);
+    if (!BRIEFS.includes(ctx.match[1] as BriefCommand)) return;
+    await takeUp(ctx);
+    // Typing from the tap, not only once the advisor's queue reaches the brief (whileTyping keeps it up then)
+    void ctx.api.sendChatAction(ctx.chat!.id, "typing").catch(() => {});
+    brief(ctx, ctx.match[1] as BriefCommand);
   });
   // Telegram's command menu is this list, set whole; /brief, /saga and the rest still work off it
   void bot.api.setMyCommands(MENU).catch((error) => log("the command menu could not be set with Telegram:", error.message));
