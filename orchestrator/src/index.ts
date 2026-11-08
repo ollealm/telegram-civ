@@ -653,7 +653,7 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().setup && seat().civ) return ctx.reply(seat().candidates ? "Choose one of the three, Majesty - the buttons above." : "A moment - your court is assembling.");
     if (!seat().civ || !seat().character || seat().setup) return beginSetup(ctx);
     if (state.phase === "setup") return ctx.reply("The world is not made yet, Majesty - it begins once every ruler has assembled a court.");
-    if (state.phase === "passing") return ctx.reply("Wait until time stops passing.");
+    // While time passes the card and the candidates are drafted all the same - the advisor is not spoken to (Olle, 2026-11-08); only the Take waits
     const advisor = seat().character!;
     const takenNames = state.seats.flatMap((other) => (other.character ? [other.character.name.split(/[ ,]/)[0]] : []));
     // An advisor chosen before the card was kept: the sheet is shortened once, and the card kept on the character

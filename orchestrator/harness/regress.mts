@@ -2205,19 +2205,19 @@ const CASES: Record<string, () => Promise<void>> = {
         bots.standInForPainter(undefined);
         for (const each of held) each.resolve(null);
       }
-      // While time passes: nothing is drafted
+      // While time passes: the card and three candidates all the same (Olle, 2026-11-08: /advisors does not speak to the advisor); only a Take waits
       state.phase = "passing";
       const beforeP = { sent: sent.length, drafted };
-      say("/advisors");
-      await until(() => sent.length > beforeP.sent);
-      await sleep(300);
+      const passing = await advisorsMessage();
+      check("W51 /advisors while time passes: the card and three fresh candidates, with the four buttons", passing.texts.length === 1 && drafted - beforeP.drafted === 3 && passing.texts[0].includes(`These three would serve in ${seat.character.name}'s place:`) && buttons(passing.markup).length === 4, JSON.stringify(passing.texts));
       state.phase = "audience";
-      check("W51 /advisors while time passes: \"Wait until time stops passing.\", nothing drafted", JSON.stringify(sent.slice(beforeP.sent)) === JSON.stringify(["Wait until time stops passing."]) && drafted === beforeP.drafted, JSON.stringify(sent.slice(beforeP.sent)));
       // Setup's buttons, from /character's: dismissing the advisor (the people unset here, so the setup asks for one), the people, then a candidate
-      const waitFor = async (starts: string) => { await until(() => sent.some((each, at) => each.startsWith(starts) && !!markups[at]), 60_000); return sent.findLastIndex((each, at) => each.startsWith(starts) && !!markups[at]); };
+      // Only messages from here on: the /advisors card while time passed starts with the advisor's name and has buttons too
+      const waitFor = async (starts: string, from = sent.length) => { await until(() => sent.some((each, at) => at >= from && each.startsWith(starts) && !!markups[at]), 60_000); return sent.findLastIndex((each, at) => at >= from && each.startsWith(starts) && !!markups[at]); };
       Object.assign(seat, { ready: false, dismissed: false, candidates: undefined, setup: undefined, rerolled: undefined });
+      const characterFrom = sent.length;
       say("/character");
-      const characterAt = await waitFor(seat.character.name);
+      const characterAt = await waitFor(seat.character.name, characterFrom);
       seat.civ = undefined;
       const beforeN = actions.length;
       tap("advisor:new", shownAt(characterAt));
