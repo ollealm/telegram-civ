@@ -162,11 +162,41 @@ async function paintAndKeep(picture: Picture, attached: { shown: string[]; refer
   return png;
 }
 
-function paint(picture: Picture, send: (png: Buffer) => Promise<unknown>) {
+/** Settles once the picture was sent, dropped or failed; never rejects */
+function paint(picture: Picture, send: (png: Buffer) => Promise<unknown>): Promise<void> {
   recordPicture(picture);
-  void generateImage(picturePrompt(picture))
+  return painter(picturePrompt(picture))
     .then((png) => (png ? send(png) : forgetPicture(picture)))
-    .catch((error) => log(`picture failed (${oneLine(picture.caption)}):`, error.message));
+    .then(() => undefined, (error) => log(`picture failed (${oneLine(picture.caption)}):`, error.message));
+}
+/** The closing picture's painter: the regress stands in for it to hold a picture as long as a case needs */
+let painter: (prompt: string) => Promise<Buffer | null> = generateImage;
+export const standInForPainter = (standIn?: (prompt: string) => Promise<Buffer | null>) => (painter = standIn ?? generateImage);
+
+/** The closing picture each seat's last dismissal is painting, in memory only: a letter to the seat waits for it, so the ruler gets the audience's picture
+ *  before the letter that follows it (Olle, 2026-11-08: it came under an emergency council's letter). A court that rises again replaces it; a restart loses it */
+const closingPictures = new Map<Seat, Promise<void>>();
+async function closingPictureOut(seat: Seat) {
+  for (let closing = closingPictures.get(seat); closing; closing = closingPictures.get(seat)) {
+    await closing;
+    if (closingPictures.get(seat) === closing) return;
+  }
+}
+
+type Painting = Promise<Buffer | null>;
+type Post = { seat: Seat; annal?: Annal; letter: string; caption?: string; scene: Painting; marches: Painting; painted: Painting };
+/** One letter to its ruler: after the closing picture of the last audience, and once its own scene, marches and map are done - the emergency letter
+ *  too (Olle, 2026-11-08) - so that letter and pictures arrive together, the pictures straight after it */
+export async function deliverLetter(post: Post) {
+  const bot = botOf(post.seat)!;
+  const chatId = post.seat.chatId!;
+  const [, scene, marches, painted] = await Promise.all([closingPictureOut(post.seat), post.scene, post.marches, post.painted]);
+  await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
+  if (post.annal) { post.annal.undelivered = undefined; }
+  post.seat.floor = undefined; persist(); // a letter opens the court with the advisor speaking
+  if (scene) await bot.api.sendPhoto(chatId, new InputFile(scene, "scene.png"), { caption: post.caption }).catch((error) => log(`scene to ${post.seat.civ} failed:`, error.message));
+  if (marches) await bot.api.sendPhoto(chatId, new InputFile(marches, "marches.png")).catch((error) => log(`marches to ${post.seat.civ} failed:`, error.message));
+  if (painted) await bot.api.sendPhoto(chatId, new InputFile(painted, "map.png")).catch((error) => log(`map to ${post.seat.civ} failed:`, error.message));
 }
 
 /** /map: the realm's last painted map, the one that came with the latest letter; before any letter has had one, a map is painted now. Never our own drawing */
@@ -297,8 +327,7 @@ async function playRound() {
   // Two rulers dismissing at the same moment must start one round, not two: the round sets the phase before its first await
   if (state.phase === "passing") return;
   const seated = state.seats.filter((seat) => seat.chatId || seat.kind === "agent");
-  type Painting = Promise<Buffer | null>;
-  const letters: { seat: Seat; annal?: Annal; letter: string; caption?: string; scene: Painting; marches: Painting; painted: Painting; urgent: boolean }[] = [];
+  const letters: Post[] = [];
   const chapters: { chapter: string; record?: { undelivered?: boolean }; pictures: { picture: Picture & { note?: string }; png: Buffer | null }[] }[] = [];
   let delivered = false;
   try {
@@ -325,7 +354,7 @@ async function playRound() {
           : traced.then((png) => { if (!age) log(`${seat.civ}: no age summary came with the letter; plain map painted`); return png && age ? campaignMap(seat.civ, age, png) : paintedMap(seat.civ); }).then((png) => { if (png) keepMap(seat.civ, png); else log(`the painted map for ${seat.civ} failed: no map goes with the letter`); return png; }).catch((error) => { log("campaign map failed:", error.message); return null; });
         // The host's own drawing goes with the letter only when asked for (MARCH_MAP=on): Olle, 2026-11-03, "turn off the bare map, so we only get the generated one"
         const marches = process.env.MARCH_MAP === "on" ? traced : Promise.resolve(null);
-        letters.push({ seat, annal, letter, caption: image?.caption, scene, marches, painted, urgent: !!round.stoppedEarly && !/has won/.test(round.stoppedEarly) });
+        letters.push({ seat, annal, letter, caption: image?.caption, scene, marches, painted });
       },
       notice: tell,
       chronicle: async (chapter, images, round, seen) => {
@@ -372,22 +401,7 @@ async function playRound() {
     // Time keeps passing until they are delivered: a word sent meanwhile goes to the clerk, not to an advisor who has read a letter the ruler has not
     state.phase = "passing";
     persist();
-    for (const post of letters) {
-      const bot = botOf(post.seat)!;
-      const chatId = post.seat.chatId!;
-      // An emergency letter goes the moment it is written; its picture follows. A regular letter waits for its paintings
-      const send = async () => {
-        await bot.api.sendMessage(chatId, post.letter).catch((error) => log(`letter to ${post.seat.civ} failed:`, error.message));
-        if (post.annal) { post.annal.undelivered = undefined; }
-        post.seat.floor = undefined; persist(); // a letter opens the court with the advisor speaking
-      };
-      if (post.urgent) await send();
-      const [scene, marches, painted] = await Promise.all([post.scene, post.marches, post.painted]);
-      if (!post.urgent) await send();
-      if (scene) await bot.api.sendPhoto(chatId, new InputFile(scene, "scene.png"), { caption: post.caption }).catch((error) => log(`scene to ${post.seat.civ} failed:`, error.message));
-      if (marches) await bot.api.sendPhoto(chatId, new InputFile(marches, "marches.png")).catch((error) => log(`marches to ${post.seat.civ} failed:`, error.message));
-      if (painted) await bot.api.sendPhoto(chatId, new InputFile(painted, "map.png")).catch((error) => log(`map to ${post.seat.civ} failed:`, error.message));
-    }
+    for (const post of letters) await deliverLetter(post);
     for (const post of chapters) {
       await broadcastHerald(post.chapter);
       if (post.record) { post.record.undelivered = undefined; persist(); }
@@ -728,13 +742,17 @@ function setUpAdvisor(bot: Bot, index: number) {
     if (seat().chatId && seat().character) {
       const chatId = seat().chatId!;
       const civ = seat().civ;
-      void (async () => {
+      const rising = seat();
+      // The next letter to this seat waits for this picture (closingPictures)
+      const closing = (async () => {
         const game = await host.state();
         const drawn: Picture = asked ? { ...asked, for: civ } : dated({ turn: game.turn, for: civ, ...(await describeDecision(seat())) }, game.year);
         const decided: Picture = { ...drawn, caption: headed(drawn.caption) };
         // A court reopened and dismissed again has a newer decision, and its own picture: this one is overtaken
-        paint(decided, async (png) => { if (court === courtsRisen) await bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }); else forgetPicture(decided); });
+        await paint(decided, async (png) => { if (court === courtsRisen) await bot.api.sendPhoto(chatId, new InputFile(png, "decision.png"), { caption: decided.caption }); else forgetPicture(decided); });
       })().catch((error) => log("decision picture failed:", error.message));
+      closingPictures.set(rising, closing);
+      void closing.then(() => { if (closingPictures.get(rising) === closing) closingPictures.delete(rising); });
     }
     seat().ready = true;
     seat().floor = undefined; // a court that rises returns the floor to the advisor
